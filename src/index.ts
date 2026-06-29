@@ -10,6 +10,7 @@ import * as secretsCmd from './commands/secrets.js'
 import { deploy } from './commands/deploy.js'
 import { manifest } from './commands/manifest.js'
 import * as govern from './commands/govern.js'
+import * as observe from './commands/observe.js'
 
 function onError(e: unknown): never {
   if (e instanceof ApiError) die(`${e.message} (HTTP ${e.status})`)
@@ -73,6 +74,13 @@ const ap = program.command('approvals').description('Governance approvals (HITL)
 ap.command('list').option('--status <s>', 'pending|granted|denied|consumed').option('--json').action(guard((o) => govern.approvalsList(o)))
 ap.command('approve <id>').option('--always', 'also set the policy to allow').action(guard((id, o) => govern.approvalsApprove(id, o)))
 ap.command('deny <id>').action(guard((id) => govern.approvalsDeny(id)))
+
+// ---- observe (local credential audit) ----
+const ob = program.command('observe').description('Local credential-audit hook')
+ob.command('install').description('Install the PostToolUse hook into this project').action(guard(() => observe.observeInstall()))
+ob.command('uninstall').action(guard(() => observe.observeUninstall()))
+ob.command('report').description('Render the local credential audit').option('--json').action(guard((o) => observe.observeReport(o)))
+ob.command('sync').description('Upload findings into the project timeline').action(guard(() => observe.observeSync()))
 
 // ---- policy ----
 const pol = program.command('policy').description('Governance policy')

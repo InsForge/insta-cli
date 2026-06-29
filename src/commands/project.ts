@@ -1,6 +1,15 @@
 import { ApiClient, requireProject } from '../api.js'
 import { writeProject } from '../config.js'
 import { info, die, printJson, handleApproval } from '../util.js'
+import { installObserve } from '../observe/install.js'
+
+// Best-effort: wire the credential-audit hook into the project (no-op if assets aren't built).
+function tryInstallObserve(): void {
+  try {
+    const r = installObserve({ cwd: process.cwd() })
+    if (r.claude || r.codex) info('  installed observe hook (credential audit) → ./.insta/observe')
+  } catch { /* assets missing (dev/unbuilt) — skip silently */ }
+}
 
 async function resolveOrg(api: ApiClient, given?: string): Promise<string> {
   if (given) return given
@@ -17,6 +26,7 @@ export async function projectCreate(name: string, opts: { org?: string }): Promi
   info(`created project ${out.project.id} (${name})`)
   info(`  resources: ${out.resources.map((r: any) => r.kind).join(', ')}`)
   info(`  linked ./.insta/project.json (branch ${out.defaultBranch.name})`)
+  tryInstallObserve()
 }
 
 export async function projectList(opts: { org?: string; json?: boolean }): Promise<void> {
@@ -33,6 +43,7 @@ export async function projectLink(id: string): Promise<void> {
   const { project } = await api.request('GET', `/projects/${id}`)
   await writeProject({ projectId: project.id, orgId: project.org_id, branch: 'main' })
   info(`linked project ${project.id} (${project.name})`)
+  tryInstallObserve()
 }
 
 export async function projectDelete(opts: { project?: string }): Promise<void> {
