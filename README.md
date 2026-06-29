@@ -39,6 +39,8 @@ insta status                         # 登录态 + 已 link 的 project/branch
 | `insta secrets list [--branch]` | 仅列出 secret 名 |
 | `insta deploy --image <url> [--branch --group --port]` | 部署镜像 |
 | `insta manifest [--json]` | agent 可读的环境清单 |
+| `insta metrics <db\|compute> [group] [--branch --from --to --step --json]` | 资源指标（compute=Fly；db 受限） |
+| `insta logs <db\|compute> [group] [--branch --limit --region --instance --json]` | 运行时日志（compute=Fly；db 受限） |
 | `insta events [--branch --limit --json]` | 审计 + agent 事件时间线 |
 | `insta approvals list [--status] [--json]` | 治理审批列表 |
 | `insta approvals approve <id> [--always]` / `deny <id>` | 批准 / 拒绝（admin） |
@@ -65,5 +67,5 @@ cd ../platform && DATABASE_URL='postgres://postgres:insta@localhost:55432/insta_
 INSTA_API_URL=http://localhost:8899 insta login --email you@x.com --password ...
 ```
 
-> v1 覆盖平台已实现的能力。`metrics` / `logs`（observability）与 `usage`（billing）待平台 #4/#5
-> 完成后补充；OAuth 浏览器登录、`compute add-group/scale/set-domain`、镜像构建后续加入。
+> `metrics` / `logs` 已支持（compute 实时；db 受 provider 限制）。`usage`（billing）待平台 #5 完成后补充；
+> OAuth 浏览器登录、`compute add-group/scale/set-domain`、镜像构建后续加入。
