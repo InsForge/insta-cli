@@ -12,7 +12,7 @@ import { manifest } from './commands/manifest.js'
 import * as govern from './commands/govern.js'
 import * as observe from './commands/observe.js'
 import * as obs from './commands/metrics.js'
-import { billing } from './commands/billing.js'
+import { billing, billingUpgrade, billingPortal } from './commands/billing.js'
 
 function onError(e: unknown): never {
   if (e instanceof ApiError) die(`${e.message} (HTTP ${e.status})`)
@@ -78,9 +78,15 @@ program.command('logs <component> [group]').description('Runtime logs (component
 program.command('usage').description('Resource usage aggregated by meter (with cost)')
   .option('--from <unix>').option('--to <unix>').option('--json')
   .action(guard((o) => obs.usage(o)))
-program.command('billing').description('Current billing cycle summary (tier / credit / used / overage)')
-  .option('--json')
+const bill = program.command('billing').description('Current billing cycle summary (tier / credit / used / overage)')
+  .option('--org <id>', 'target org (default: linked project\'s org)').option('--json')
   .action(guard((o) => billing(o)))
+bill.command('upgrade <tier>').description('Subscribe the org to a paid tier (pro|enterprise) via Stripe Checkout')
+  .option('--org <id>').option('--no-open', 'print the URL instead of opening a browser').option('--json')
+  .action(guard((tier, o) => billingUpgrade(tier, o)))
+bill.command('portal').description('Open the Stripe Customer Portal (change plan / card / cancel)')
+  .option('--org <id>').option('--no-open', 'print the URL instead of opening a browser').option('--json')
+  .action(guard((o) => billingPortal(o)))
 
 // ---- events (audit timeline) ----
 program.command('events').description('Show the audit + agent-event timeline').option('--branch <b>').option('--limit <n>').option('--json').action(guard((o) => govern.events(o)))

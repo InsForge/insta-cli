@@ -43,7 +43,9 @@ insta status                         # 登录态 + 已 link 的 project/branch
 | `insta logs <db\|compute> [group] [--branch --limit --region --instance --json]` | 运行时日志（compute=Fly；db 受限） |
 | `insta events [--branch --limit --json]` | 审计 + agent 事件时间线 |
 | `insta usage [--from --to --json]` | 按 meter 聚合的资源用量（含 costUsd） |
-| `insta billing [--json]` | 当前计费周期摘要（tier / 额度 / 已用 / overage / 状态） |
+| `insta billing [--org --json]` | 当前计费周期摘要（tier / 额度 / 已用 / overage / 状态） |
+| `insta billing upgrade <pro\|enterprise> [--org --no-open --json]` | Stripe Checkout 订阅付费档，返回并打开支付链接 |
+| `insta billing portal [--org --no-open --json]` | 打开 Stripe Customer Portal（改套餐 / 卡 / 取消） |
 | `insta approvals list [--status] [--json]` | 治理审批列表 |
 | `insta approvals approve <id> [--always]` / `deny <id>` | 批准 / 拒绝（admin） |
 | `insta policy get [--json]` / `policy set <action> <decision>` | 治理策略 |
