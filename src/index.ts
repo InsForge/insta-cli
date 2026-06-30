@@ -74,6 +74,9 @@ program.command('metrics <component> [group]').description('Resource metrics (co
 program.command('logs <component> [group]').description('Runtime logs (component: db|compute)')
   .option('--branch <b>').option('--limit <n>').option('--region <r>').option('--instance <i>').option('--json')
   .action(guard((component, group, o) => obs.logs(component, group, o)))
+program.command('usage').description('Resource usage aggregated by meter')
+  .option('--from <unix>').option('--to <unix>').option('--json')
+  .action(guard((o) => obs.usage(o)))
 
 // ---- events (audit timeline) ----
 program.command('events').description('Show the audit + agent-event timeline').option('--branch <b>').option('--limit <n>').option('--json').action(guard((o) => govern.events(o)))
