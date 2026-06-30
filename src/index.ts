@@ -11,6 +11,7 @@ import { deploy } from './commands/deploy.js'
 import { manifest } from './commands/manifest.js'
 import * as govern from './commands/govern.js'
 import * as observe from './commands/observe.js'
+import * as obs from './commands/metrics.js'
 
 function onError(e: unknown): never {
   if (e instanceof ApiError) die(`${e.message} (HTTP ${e.status})`)
@@ -65,6 +66,14 @@ program.command('deploy').description('Deploy a container image to a branch comp
 
 // ---- manifest ----
 program.command('manifest').description('Print an agent-legible view of the project environments').option('--json').action(guard((o) => manifest(o)))
+
+// ---- observability ----
+program.command('metrics <component> [group]').description('Resource metrics (component: db|compute)')
+  .option('--branch <b>').option('--from <unix>').option('--to <unix>').option('--step <s>').option('--json')
+  .action(guard((component, group, o) => obs.metrics(component, group, o)))
+program.command('logs <component> [group]').description('Runtime logs (component: db|compute)')
+  .option('--branch <b>').option('--limit <n>').option('--region <r>').option('--instance <i>').option('--json')
+  .action(guard((component, group, o) => obs.logs(component, group, o)))
 
 // ---- events (audit timeline) ----
 program.command('events').description('Show the audit + agent-event timeline').option('--branch <b>').option('--limit <n>').option('--json').action(guard((o) => govern.events(o)))
