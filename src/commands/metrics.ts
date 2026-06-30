@@ -30,10 +30,14 @@ export async function usage(opts: { from?: string; to?: string; json?: boolean }
   if (opts.json) return printJson(res)
   info(`usage ${new Date(res.from * 1000).toISOString().slice(0, 10)} → ${new Date(res.to * 1000).toISOString().slice(0, 10)}`)
   if (!res.usage?.length) return info('(no usage recorded)')
+  let total = 0
   for (const u of res.usage) {
     const dims = u.dimensions && Object.keys(u.dimensions).length ? ` ${JSON.stringify(u.dimensions)}` : ''
-    info(`${u.meter}${dims}: ${u.quantity} ${u.unit}`)
+    const cost = u.costUsd != null ? `  ($${Number(u.costUsd).toFixed(4)})` : ''
+    total += Number(u.costUsd ?? 0)
+    info(`${u.meter}${dims}: ${u.quantity} ${u.unit}${cost}`)
   }
+  info(`total: $${total.toFixed(4)}`)
 }
 
 // insta logs <db|compute> [group]

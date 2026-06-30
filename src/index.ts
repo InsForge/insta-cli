@@ -12,6 +12,7 @@ import { manifest } from './commands/manifest.js'
 import * as govern from './commands/govern.js'
 import * as observe from './commands/observe.js'
 import * as obs from './commands/metrics.js'
+import { billing } from './commands/billing.js'
 
 function onError(e: unknown): never {
   if (e instanceof ApiError) die(`${e.message} (HTTP ${e.status})`)
@@ -74,9 +75,12 @@ program.command('metrics <component> [group]').description('Resource metrics (co
 program.command('logs <component> [group]').description('Runtime logs (component: db|compute)')
   .option('--branch <b>').option('--limit <n>').option('--region <r>').option('--instance <i>').option('--json')
   .action(guard((component, group, o) => obs.logs(component, group, o)))
-program.command('usage').description('Resource usage aggregated by meter')
+program.command('usage').description('Resource usage aggregated by meter (with cost)')
   .option('--from <unix>').option('--to <unix>').option('--json')
   .action(guard((o) => obs.usage(o)))
+program.command('billing').description('Current billing cycle summary (tier / credit / used / overage)')
+  .option('--json')
+  .action(guard((o) => billing(o)))
 
 // ---- events (audit timeline) ----
 program.command('events').description('Show the audit + agent-event timeline').option('--branch <b>').option('--limit <n>').option('--json').action(guard((o) => govern.events(o)))

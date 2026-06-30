@@ -42,7 +42,8 @@ insta status                         # 登录态 + 已 link 的 project/branch
 | `insta metrics <db\|compute> [group] [--branch --from --to --step --json]` | 资源指标（compute=Fly；db 受限） |
 | `insta logs <db\|compute> [group] [--branch --limit --region --instance --json]` | 运行时日志（compute=Fly；db 受限） |
 | `insta events [--branch --limit --json]` | 审计 + agent 事件时间线 |
-| `insta usage [--from --to --json]` | 按 meter 聚合的资源用量 |
+| `insta usage [--from --to --json]` | 按 meter 聚合的资源用量（含 costUsd） |
+| `insta billing [--json]` | 当前计费周期摘要（tier / 额度 / 已用 / overage / 状态） |
 | `insta approvals list [--status] [--json]` | 治理审批列表 |
 | `insta approvals approve <id> [--always]` / `deny <id>` | 批准 / 拒绝（admin） |
 | `insta policy get [--json]` / `policy set <action> <decision>` | 治理策略 |
