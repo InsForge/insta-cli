@@ -27,9 +27,10 @@ const program = new Command()
 program.name('insta').description('InstaCloud CLI — manage projects, branches, secrets, deploys').version('0.0.0')
 
 // ---- auth ----
-program.command('login').description('Log in with email + password')
+program.command('login').description('Log in with email + password, or --oauth <github|google> (browser)')
   .option('--email <email>', 'account email')
   .option('--password <password>', 'account password (else $INSTA_PASSWORD or prompt)')
+  .option('--oauth <provider>', 'browser OAuth login: github | google')
   .option('--api-url <url>', 'control-plane API base URL')
   .action(guard((o) => auth.login(o)))
 program.command('logout').description('Log out and clear local tokens').action(guard(() => auth.logout()))

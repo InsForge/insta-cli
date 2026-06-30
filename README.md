@@ -29,6 +29,7 @@ insta status                         # 登录态 + 已 link 的 project/branch
 | 命令 | 说明 |
 |------|------|
 | `insta login [--email --password --api-url]` | 登录（email/password；token 自动 refresh） |
+| `insta login --oauth <github\|google>` | 浏览器 OAuth 登录（启本地回环端口，浏览器授权后自动带回 token） |
 | `insta logout` / `insta status [--json]` | 登出 / 查看状态 |
 | `insta org list [--json]` / `org create <name>` | 组织 |
 | `insta project create <name> [--org]` | provision 新 project 并 link |
@@ -71,5 +72,15 @@ cd ../platform && DATABASE_URL='postgres://postgres:insta@localhost:55432/insta_
 INSTA_API_URL=http://localhost:8899 insta login --email you@x.com --password ...
 ```
 
-> `metrics` / `logs` / `usage` 已支持（usage 为采集层聚合，计费方案 A/B 未定）。OAuth 浏览器登录、
-> `compute add-group/scale/set-domain`、镜像构建后续加入。
+## OAuth 浏览器登录
+
+```bash
+insta login --oauth github          # 或 google
+# CLI 起本地回环端口 → 打开浏览器到 /auth/cli/authorize → Better Auth 走 provider 授权 →
+# 平台读会话 cookie 换出 bearer token → 带回回环端口 → CLI 存为登录态
+```
+
+> 平台侧需配置该 provider 的 OAuth 应用（`GITHUB_OAUTH_CLIENT_ID/SECRET` 或 `GOOGLE_*`），
+> 且应用的回调 URL 必须是 **`{INSTA_API_BASE_URL}/api/auth/callback/<provider>`**（不是回环地址）。
+
+> `metrics` / `logs` / `usage` 已支持（usage 为采集层聚合）。`compute add-group/scale/set-domain`、镜像构建后续加入。
