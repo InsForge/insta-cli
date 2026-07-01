@@ -3,3 +3,8 @@ dist/
 *.log
 coverage/
 .DS_Store
+.env
+.env.*
+.insta/
+.claude/
+.codex/

@@ -9,9 +9,23 @@ InstaCloud CLI (`insta`) — a thin client of the [platform](../platform) contro
 
 ```bash
 npm install
-npm run build         # -> dist/index.js（bin: insta）
+npm run build         # -> dist/index.js（bin: insta；纯 JS，运行需 node）
 node dist/index.js --help
 ```
+
+### 原生二进制（Bun，运行时无需 node）
+
+用 Bun 把 CLI 编译成各平台**独立可执行文件**（内嵌运行时，像 Railway CLI 那样）——npm 包仍发布 JS
+（`dist/index.js`），这些二进制是另一条下载渠道（GitHub releases / curl 安装器）。需要 [Bun](https://bun.sh)：
+
+```bash
+npm run compile            # 只编译当前平台 -> dist/bin/insta
+npm run build:binaries     # 交叉编译全平台 -> dist/bin/insta-<os>-<arch>(.exe) + SHA256SUMS
+#   版本号（baked 进 `insta --version`）默认取 package.json，也可传参：bash scripts/build-binaries.sh 1.2.3
+```
+
+产物形如 `insta-darwin-arm64` / `insta-linux-x64` / `insta-windows-x64.exe`（`file` 显示 Mach-O/ELF/PE 原生可执行）。
+`dist/` 已 gitignore；二进制不入库，交给 CI 发到 releases。
 
 ## Quickstart
 
@@ -29,6 +43,7 @@ insta status                         # 登录态 + 已 link 的 project/branch
 | 命令 | 说明 |
 |------|------|
 | `insta login [--email --password --api-url]` | 登录（email/password；token 自动 refresh） |
+| `insta login --oauth <github\|google>` | 浏览器 OAuth 登录（启本地回环端口，浏览器授权后自动带回 token） |
 | `insta logout` / `insta status [--json]` | 登出 / 查看状态 |
 | `insta org list [--json]` / `org create <name>` | 组织 |
 | `insta project create <name> [--org]` | provision 新 project 并 link |
@@ -42,6 +57,10 @@ insta status                         # 登录态 + 已 link 的 project/branch
 | `insta metrics <db\|compute> [group] [--branch --from --to --step --json]` | 资源指标（compute=Fly；db 受限） |
 | `insta logs <db\|compute> [group] [--branch --limit --region --instance --json]` | 运行时日志（compute=Fly；db 受限） |
 | `insta events [--branch --limit --json]` | 审计 + agent 事件时间线 |
+| `insta usage [--from --to --json]` | 按 meter 聚合的资源用量（含 costUsd） |
+| `insta billing [--org --json]` | 当前计费周期摘要（tier / 额度 / 已用 / overage / 状态） |
+| `insta billing upgrade <pro\|enterprise> [--org --no-open --json]` | Stripe Checkout 订阅付费档，返回并打开支付链接 |
+| `insta billing portal [--org --no-open --json]` | 打开 Stripe Customer Portal（改套餐 / 卡 / 取消） |
 | `insta approvals list [--status] [--json]` | 治理审批列表 |
 | `insta approvals approve <id> [--always]` / `deny <id>` | 批准 / 拒绝（admin） |
 | `insta policy get [--json]` / `policy set <action> <decision>` | 治理策略 |
@@ -67,5 +86,15 @@ cd ../platform && DATABASE_URL='postgres://postgres:insta@localhost:55432/insta_
 INSTA_API_URL=http://localhost:8899 insta login --email you@x.com --password ...
 ```
 
-> `metrics` / `logs` 已支持（compute 实时；db 受 provider 限制）。`usage`（billing）待平台 #5 完成后补充；
-> OAuth 浏览器登录、`compute add-group/scale/set-domain`、镜像构建后续加入。
+## OAuth 浏览器登录
+
+```bash
+insta login --oauth github          # 或 google
+# CLI 起本地回环端口 → 打开浏览器到 /auth/cli/authorize → Better Auth 走 provider 授权 →
+# 平台读会话 cookie 换出 bearer token → 带回回环端口 → CLI 存为登录态
+```
+
+> 平台侧需配置该 provider 的 OAuth 应用（`GITHUB_OAUTH_CLIENT_ID/SECRET` 或 `GOOGLE_*`），
+> 且应用的回调 URL 必须是 **`{INSTA_API_BASE_URL}/api/auth/callback/<provider>`**（不是回环地址）。
+
+> `metrics` / `logs` / `usage` 已支持（usage 为采集层聚合）。`compute add-group/scale/set-domain`、镜像构建后续加入。

@@ -12,6 +12,7 @@ import { manifest } from './commands/manifest.js'
 import * as govern from './commands/govern.js'
 import * as observe from './commands/observe.js'
 import * as obs from './commands/metrics.js'
+import { billing, billingUpgrade, billingPortal } from './commands/billing.js'
 
 function onError(e: unknown): never {
   if (e instanceof ApiError) die(`${e.message} (HTTP ${e.status})`)
@@ -23,12 +24,16 @@ const guard = (fn: (...a: any[]) => Promise<unknown>) => (...a: any[]): Promise<
   fn(...a).then(() => undefined).catch(onError)
 
 const program = new Command()
-program.name('insta').description('InstaCloud CLI — manage projects, branches, secrets, deploys').version('0.0.0')
+// Baked in at compile time for the standalone binary (bun build --define); falls back to 0.0.0 for
+// the plain node/npm build.
+const VERSION = process.env.INSTA_CLI_VERSION ?? '0.0.0'
+program.name('insta').description('InstaCloud CLI — manage projects, branches, secrets, deploys').version(VERSION)
 
 // ---- auth ----
-program.command('login').description('Log in with email + password')
+program.command('login').description('Log in with email + password, or --oauth <github|google> (browser)')
   .option('--email <email>', 'account email')
   .option('--password <password>', 'account password (else $INSTA_PASSWORD or prompt)')
+  .option('--oauth <provider>', 'browser OAuth login: github | google')
   .option('--api-url <url>', 'control-plane API base URL')
   .action(guard((o) => auth.login(o)))
 program.command('logout').description('Log out and clear local tokens').action(guard(() => auth.logout()))
@@ -74,6 +79,18 @@ program.command('metrics <component> [group]').description('Resource metrics (co
 program.command('logs <component> [group]').description('Runtime logs (component: db|compute)')
   .option('--branch <b>').option('--limit <n>').option('--region <r>').option('--instance <i>').option('--json')
   .action(guard((component, group, o) => obs.logs(component, group, o)))
+program.command('usage').description('Resource usage aggregated by meter (with cost)')
+  .option('--from <unix>').option('--to <unix>').option('--json')
+  .action(guard((o) => obs.usage(o)))
+const bill = program.command('billing').description('Current billing cycle summary (tier / credit / used / overage)')
+  .option('--org <id>', 'target org (default: linked project\'s org)').option('--json')
+  .action(guard((o) => billing(o)))
+bill.command('upgrade <tier>').description('Subscribe the org to a paid tier (pro|enterprise) via Stripe Checkout')
+  .option('--org <id>').option('--no-open', 'print the URL instead of opening a browser').option('--json')
+  .action(guard((tier, o) => billingUpgrade(tier, o)))
+bill.command('portal').description('Open the Stripe Customer Portal (change plan / card / cancel)')
+  .option('--org <id>').option('--no-open', 'print the URL instead of opening a browser').option('--json')
+  .action(guard((o) => billingPortal(o)))
 
 // ---- events (audit timeline) ----
 program.command('events').description('Show the audit + agent-event timeline').option('--branch <b>').option('--limit <n>').option('--json').action(guard((o) => govern.events(o)))

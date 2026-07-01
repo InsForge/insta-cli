@@ -22,6 +22,24 @@ export async function metrics(component: string, group: string | undefined, opts
   }
 }
 
+// insta usage — aggregated usage by meter over a window
+export async function usage(opts: { from?: string; to?: string; json?: boolean }): Promise<void> {
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const res = await api.request('GET', `/projects/${p.projectId}/usage${qs({ from: opts.from, to: opts.to })}`)
+  if (opts.json) return printJson(res)
+  info(`usage ${new Date(res.from * 1000).toISOString().slice(0, 10)} → ${new Date(res.to * 1000).toISOString().slice(0, 10)}`)
+  if (!res.usage?.length) return info('(no usage recorded)')
+  let total = 0
+  for (const u of res.usage) {
+    const dims = u.dimensions && Object.keys(u.dimensions).length ? ` ${JSON.stringify(u.dimensions)}` : ''
+    const cost = u.costUsd != null ? `  ($${Number(u.costUsd).toFixed(4)})` : ''
+    total += Number(u.costUsd ?? 0)
+    info(`${u.meter}${dims}: ${u.quantity} ${u.unit}${cost}`)
+  }
+  info(`total: $${total.toFixed(4)}`)
+}
+
 // insta logs <db|compute> [group]
 export async function logs(component: string, group: string | undefined, opts: { branch?: string; limit?: string; region?: string; instance?: string; json?: boolean }): Promise<void> {
   const api = await ApiClient.load()
