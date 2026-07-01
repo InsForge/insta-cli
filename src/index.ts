@@ -24,7 +24,10 @@ const guard = (fn: (...a: any[]) => Promise<unknown>) => (...a: any[]): Promise<
   fn(...a).then(() => undefined).catch(onError)
 
 const program = new Command()
-program.name('insta').description('InstaCloud CLI — manage projects, branches, secrets, deploys').version('0.0.0')
+// Baked in at compile time for the standalone binary (bun build --define); falls back to 0.0.0 for
+// the plain node/npm build.
+const VERSION = process.env.INSTA_CLI_VERSION ?? '0.0.0'
+program.name('insta').description('InstaCloud CLI — manage projects, branches, secrets, deploys').version(VERSION)
 
 // ---- auth ----
 program.command('login').description('Log in with email + password, or --oauth <github|google> (browser)')

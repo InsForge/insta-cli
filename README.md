@@ -9,9 +9,23 @@ InstaCloud CLI (`insta`) — a thin client of the [platform](../platform) contro
 
 ```bash
 npm install
-npm run build         # -> dist/index.js（bin: insta）
+npm run build         # -> dist/index.js（bin: insta；纯 JS，运行需 node）
 node dist/index.js --help
 ```
+
+### 原生二进制（Bun，运行时无需 node）
+
+用 Bun 把 CLI 编译成各平台**独立可执行文件**（内嵌运行时，像 Railway CLI 那样）——npm 包仍发布 JS
+（`dist/index.js`），这些二进制是另一条下载渠道（GitHub releases / curl 安装器）。需要 [Bun](https://bun.sh)：
+
+```bash
+npm run compile            # 只编译当前平台 -> dist/bin/insta
+npm run build:binaries     # 交叉编译全平台 -> dist/bin/insta-<os>-<arch>(.exe) + SHA256SUMS
+#   版本号（baked 进 `insta --version`）默认取 package.json，也可传参：bash scripts/build-binaries.sh 1.2.3
+```
+
+产物形如 `insta-darwin-arm64` / `insta-linux-x64` / `insta-windows-x64.exe`（`file` 显示 Mach-O/ELF/PE 原生可执行）。
+`dist/` 已 gitignore；二进制不入库，交给 CI 发到 releases。
 
 ## Quickstart
 
