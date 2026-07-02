@@ -32,9 +32,11 @@ npm run build:binaries     # 交叉编译全平台 -> dist/bin/insta-<os>-<arch>
 ```bash
 # 指向控制面（默认 http://localhost:8080，可用 $INSTA_API_URL 或 --api-url 覆盖）
 insta login --email you@example.com --password ****** --api-url http://localhost:8080
-insta project create my-app          # provision DB+storage+compute，并 link 当前目录
+insta project create my-app          # 新建空 project 并 link 当前目录（默认不含 service）
+insta services add postgres db       # 按需添加 service（postgres/storage/compute）
+insta services add compute api       # compute 用于部署镜像
 insta secrets                        # 把当前 branch 的凭证写入 ./.env（secret seam）
-insta deploy --image <registry/img>  # 部署容器镜像到当前 branch 的 compute
+insta deploy --image <registry/img>  # 部署容器镜像到当前 branch 的 compute service
 insta status                         # 登录态 + 已 link 的 project/branch
 ```
 
@@ -45,10 +47,14 @@ insta status                         # 登录态 + 已 link 的 project/branch
 | `insta login [--email --password --api-url]` | 登录（email/password；token 自动 refresh） |
 | `insta login --oauth <github\|google>` | 浏览器 OAuth 登录（启本地回环端口，浏览器授权后自动带回 token） |
 | `insta logout` / `insta status [--json]` | 登出 / 查看状态 |
-| `insta org list [--json]` / `org create <name>` | 组织 |
-| `insta project create <name> [--org]` | provision 新 project 并 link |
+| `insta org list [--json]` / `org create <name>` | 组织（每个用户仅可拥有一个 free org） |
+| `insta project create <name> [--org]` | 新建空 project 并 link（默认不含任何 service） |
 | `insta project list [--org] [--json]` / `link <id>` / `delete` | 项目管理 |
-| `insta branch create <name> [--from]` | 新建分支环境（克隆 DB/storage/compute） |
+| `insta services add <postgres\|storage\|compute> <name>` | 按需 provision 一个 service（postgres/compute 分配默认访问域名） |
+| `insta services list [--json]` / `services remove <type> <name>` | 列出 / 删除 service |
+| `insta services scale compute <name> <number> [region]` | 设置 compute 机器数（付费档；free 拒绝） |
+| `insta services upgrade <compute\|postgres> <name> <spec>` | 升级 spec（付费档；只升不降） |
+| `insta branch create <name> [--from]` | 新建分支环境（物化 project 当前的 services；每 project 上限 10 个 branch） |
 | `insta branch list [--json]` / `switch <name>` / `delete <name>` | 分支管理 |
 | `insta secrets [--branch -o --print --json]` | secret seam：凭证写入 `.env` |
 | `insta secrets list [--branch]` | 仅列出 secret 名 |
@@ -63,9 +69,9 @@ insta status                         # 登录态 + 已 link 的 project/branch
 | `insta billing portal [--org --no-open --json]` | 打开 Stripe Customer Portal（改套餐 / 卡 / 取消） |
 | `insta approvals list [--status] [--json]` | 治理审批列表 |
 | `insta approvals approve <id> [--always]` / `deny <id>` | 批准 / 拒绝（admin） |
-| `insta policy get [--json]` / `policy set <action> <decision>` | 治理策略 |
+| `insta policy get [--json]` / `policy set <action> <decision>` | 治理策略（action 含 `service.add/remove/scale/upgrade`） |
 
-被 governance gate 的操作（`secrets.read`/`deploy`/`project.delete`/`branch.delete`）命中审批时，
+被 governance gate 的操作（`secrets.read`/`deploy`/`project.delete`/`branch.delete`/`service.add`/`service.remove`/`service.scale`/`service.upgrade`）命中审批时，
 CLI 会提示 `approval required — run: insta approvals approve <id>`。
 
 ## 配置位置
@@ -97,4 +103,4 @@ insta login --oauth github          # 或 google
 > 平台侧需配置该 provider 的 OAuth 应用（`GITHUB_OAUTH_CLIENT_ID/SECRET` 或 `GOOGLE_*`），
 > 且应用的回调 URL 必须是 **`{INSTA_API_BASE_URL}/api/auth/callback/<provider>`**（不是回环地址）。
 
-> `metrics` / `logs` / `usage` 已支持（usage 为采集层聚合）。`compute add-group/scale/set-domain`、镜像构建后续加入。
+> `metrics` / `logs` / `usage` 已支持（usage 为采集层聚合）。多 compute service（`services add compute`）、`services scale/upgrade` 已实现；镜像构建后续加入。多 postgres/storage service（每 project >1 个）暂受 credential-seam 限制，为后续工作。
