@@ -1,0 +1,92 @@
+name: release
+
+# Build native `insta` binaries with Bun and publish them to a GitHub Release.
+# Trigger by pushing a tag (v*), or manually via workflow_dispatch with a version.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, without the leading v (e.g. 0.1.0)'
+        required: true
+
+permissions:
+  contents: write # create releases + upload assets
+
+jobs:
+  build:
+    runs-on: ubuntu-latest # Bun cross-compiles every target from one runner
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: bun-darwin-arm64, name: insta-darwin-arm64 }
+          - { target: bun-darwin-x64, name: insta-darwin-x64 }
+          - { target: bun-linux-arm64, name: insta-linux-arm64 }
+          - { target: bun-linux-x64, name: insta-linux-x64 }
+          - { target: bun-windows-x64, name: insta-windows-x64.exe }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Resolve version
+        id: v
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build ${{ matrix.name }}
+        run: |
+          bun install --frozen-lockfile
+          bun build ./src/index.ts --compile --minify \
+            --target=${{ matrix.target }} \
+            --define "process.env.INSTA_CLI_VERSION=\"${{ steps.v.outputs.version }}\"" \
+            --outfile "${{ matrix.name }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-bin
+          merge-multiple: true # flatten all per-target artifacts into one dir
+      - name: Checksums
+        run: |
+          cd dist-bin
+          sha256sum insta-* > SHA256SUMS
+          ls -lh
+          cat SHA256SUMS
+      - name: Resolve tag
+        id: t
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "tag=v${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.t.outputs.tag }}"
+          # Create the release if it doesn't exist (dispatch also creates the tag), else just upload.
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "insta $TAG" \
+              --generate-notes
+          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            dist-bin/insta-* dist-bin/SHA256SUMS install.sh
