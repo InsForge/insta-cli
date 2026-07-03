@@ -1,117 +1,118 @@
 # insta-cli
 
 InstaCloud CLI (`insta`) — a thin client of the [platform](../platform) control-plane API.
-管理 project / branch / secrets / deploy / governance，面向开发者与 agent。
+Manages project / branch / secrets / deploy / governance — built for developers and agents.
 
-技术栈：Node 20 + TypeScript（ESM）+ commander。所有命令都是平台 API 的封装。
+Tech stack: Node 20 + TypeScript (ESM) + commander. Every command is a wrapper around the platform API.
 
-## 安装
+## Installation
 
-**一键装（原生二进制，无需 node）** — macOS / Linux / WSL：
+**One-line install (native binary, no node required)** — macOS / Linux / WSL:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh
-#   装到 ~/.insta/bin/insta（可 INSTA_INSTALL_DIR 覆盖）；校验 SHA256SUMS。
-#   固定版本：curl -fsSL .../install.sh | INSTA_VERSION=v0.1.0 sh
-# Windows：从 releases 页下载 insta-windows-x64.exe。
+#   Installs to ~/.insta/bin/insta (override with INSTA_INSTALL_DIR); verifies SHA256SUMS.
+#   Pin a version: curl -fsSL .../install.sh | INSTA_VERSION=v0.1.0 sh
+# Windows: download insta-windows-x64.exe from the releases page.
 ```
 
-**从源码构建（需 node）：**
+**Build from source (requires node):**
 
 ```bash
 npm install
-npm run build         # -> dist/index.js（bin: insta；纯 JS，运行需 node）
+npm run build         # -> dist/index.js (bin: insta; pure JS, requires node to run)
 node dist/index.js --help
 ```
 
-### 自己出二进制（Bun 交叉编译）
+### Build your own binaries (Bun cross-compilation)
 
-`install.sh` 装的二进制由 CI（tag `v*` → `.github/workflows/release.yml`）用 Bun 交叉编译并发到 GitHub
-releases。本地也可出：需 [Bun](https://bun.sh)。npm 包仍发布 JS（`dist/index.js`）——二进制是另一条渠道。
+The binaries that `install.sh` installs are cross-compiled with Bun by CI (tag `v*` → `.github/workflows/release.yml`)
+and published to GitHub releases. You can also build them locally: requires [Bun](https://bun.sh). The npm package still
+ships JS (`dist/index.js`) — binaries are a separate distribution channel.
 
 ```bash
-npm run compile            # 只编译当前平台 -> dist/bin/insta
-npm run build:binaries     # 交叉编译全平台 -> dist/bin/insta-<os>-<arch>(.exe) + SHA256SUMS
-#   版本号（baked 进 `insta --version`）默认取 package.json，也可传参：bash scripts/build-binaries.sh 1.2.3
+npm run compile            # compile for the current platform only -> dist/bin/insta
+npm run build:binaries     # cross-compile all platforms -> dist/bin/insta-<os>-<arch>(.exe) + SHA256SUMS
+#   The version (baked into `insta --version`) defaults to package.json, or pass it: bash scripts/build-binaries.sh 1.2.3
 ```
 
-产物形如 `insta-darwin-arm64` / `insta-linux-x64` / `insta-windows-x64.exe`（`file` 显示 Mach-O/ELF/PE 原生可执行）。
-`dist/` 已 gitignore；二进制不入库，交给 CI 发到 releases。
+Artifacts look like `insta-darwin-arm64` / `insta-linux-x64` / `insta-windows-x64.exe` (`file` reports native Mach-O/ELF/PE executables).
+`dist/` is gitignored; binaries are not committed — CI publishes them to releases.
 
 ## Quickstart
 
 ```bash
-# 指向控制面（默认 http://localhost:8080，可用 $INSTA_API_URL 或 --api-url 覆盖）
+# Point at the control plane (defaults to http://localhost:8080; override with $INSTA_API_URL or --api-url)
 insta login --email you@example.com --password ****** --api-url http://localhost:8080
-insta project create my-app          # 新建空 project 并 link 当前目录（默认不含 service）
-insta services add postgres db       # 按需添加 service（postgres/storage/compute）
-insta services add compute api       # compute 用于部署镜像
-insta secrets                        # 把当前 branch 的凭证写入 ./.env（secret seam）
-insta deploy --image <registry/img>  # 部署容器镜像到当前 branch 的 compute service
-insta status                         # 登录态 + 已 link 的 project/branch
+insta project create my-app          # create an empty project and link the current directory (no services by default)
+insta services add postgres db       # add services on demand (postgres/storage/compute)
+insta services add compute api       # compute is used to deploy images
+insta secrets                        # write the current branch's credentials to ./.env (secret seam)
+insta deploy --image <registry/img>  # deploy a container image to the current branch's compute service
+insta status                         # login state + linked project/branch
 ```
 
-## 命令
+## Commands
 
-| 命令 | 说明 |
+| Command | Description |
 |------|------|
-| `insta login [--email --password --api-url]` | 登录（email/password；token 自动 refresh） |
-| `insta login --oauth <github\|google>` | 浏览器 OAuth 登录（启本地回环端口，浏览器授权后自动带回 token） |
-| `insta logout` / `insta status [--json]` | 登出 / 查看状态 |
-| `insta org list [--json]` / `org create <name>` | 组织（每个用户仅可拥有一个 free org） |
-| `insta project create <name> [--org]` | 新建空 project 并 link（默认不含任何 service） |
-| `insta project list [--org] [--json]` / `link <id>` / `delete` | 项目管理 |
-| `insta services add <postgres\|storage\|compute> <name>` | 按需 provision 一个 service（postgres/compute 分配默认访问域名） |
-| `insta services list [--json]` / `services remove <type> <name>` | 列出 / 删除 service |
-| `insta services scale compute <name> <number> [region]` | 设置 compute 机器数（付费档；free 拒绝） |
-| `insta services upgrade <compute\|postgres> <name> <spec>` | 升级 spec（付费档；只升不降） |
-| `insta branch create <name> [--from]` | 新建分支环境（物化 project 当前的 services；每 project 上限 10 个 branch） |
-| `insta branch list [--json]` / `switch <name>` / `delete <name>` | 分支管理 |
-| `insta secrets [--branch -o --print --json]` | secret seam：凭证写入 `.env` |
-| `insta secrets list [--branch]` | 仅列出 secret 名 |
-| `insta deploy --image <url> [--branch --group --port]` | 部署镜像 |
-| `insta manifest [--json]` | agent 可读的环境清单 |
-| `insta metrics <db\|compute> [group] [--branch --from --to --step --json]` | 资源指标（compute=Fly；db 受限） |
-| `insta logs <db\|compute> [group] [--branch --limit --region --instance --json]` | 运行时日志（compute=Fly；db 受限） |
-| `insta events [--branch --limit --json]` | 审计 + agent 事件时间线 |
-| `insta usage [--from --to --json]` | 按 meter 聚合的资源用量（含 costUsd） |
-| `insta billing [--org --json]` | 当前计费周期摘要（tier / 额度 / 已用 / overage / 状态） |
-| `insta billing upgrade <pro\|enterprise> [--org --no-open --json]` | Stripe Checkout 订阅付费档，返回并打开支付链接 |
-| `insta billing portal [--org --no-open --json]` | 打开 Stripe Customer Portal（改套餐 / 卡 / 取消） |
-| `insta approvals list [--status] [--json]` | 治理审批列表 |
-| `insta approvals approve <id> [--always]` / `deny <id>` | 批准 / 拒绝（admin） |
-| `insta policy get [--json]` / `policy set <action> <decision>` | 治理策略（action 含 `service.add/remove/scale/upgrade`） |
+| `insta login [--email --password --api-url]` | Log in (email/password; tokens auto-refresh) |
+| `insta login --oauth <github\|google>` | Browser OAuth login (starts a local loopback port; the token is carried back automatically after browser authorization) |
+| `insta logout` / `insta status [--json]` | Log out / show status |
+| `insta org list [--json]` / `org create <name>` | Organizations (each user may own only one free org) |
+| `insta project create <name> [--org]` | Create an empty project and link it (no services by default) |
+| `insta project list [--org] [--json]` / `link <id>` / `delete` | Project management |
+| `insta services add <postgres\|storage\|compute> <name>` | Provision a service on demand (postgres/compute get a default access domain) |
+| `insta services list [--json]` / `services remove <type> <name>` | List / remove services |
+| `insta services scale compute <name> <number> [region]` | Set the compute machine count (paid tiers; rejected on free) |
+| `insta services upgrade <compute\|postgres> <name> <spec>` | Upgrade the spec (paid tiers; upgrade only, no downgrade) |
+| `insta branch create <name> [--from]` | Create a branch environment (materializes the project's current services; up to 10 branches per project) |
+| `insta branch list [--json]` / `switch <name>` / `delete <name>` | Branch management |
+| `insta secrets [--branch -o --print --json]` | Secret seam: write credentials to `.env` |
+| `insta secrets list [--branch]` | List secret names only |
+| `insta deploy --image <url> [--branch --group --port]` | Deploy an image |
+| `insta manifest [--json]` | Agent-readable environment manifest |
+| `insta metrics <db\|compute> [group] [--branch --from --to --step --json]` | Resource metrics (compute=Fly; db limited) |
+| `insta logs <db\|compute> [group] [--branch --limit --region --instance --json]` | Runtime logs (compute=Fly; db limited) |
+| `insta events [--branch --limit --json]` | Audit + agent event timeline |
+| `insta usage [--from --to --json]` | Resource usage aggregated by meter (includes costUsd) |
+| `insta billing [--org --json]` | Current billing-cycle summary (tier / quota / used / overage / status) |
+| `insta billing upgrade <pro\|enterprise> [--org --no-open --json]` | Subscribe to a paid tier via Stripe Checkout; returns and opens the payment link |
+| `insta billing portal [--org --no-open --json]` | Open the Stripe Customer Portal (change plan / card / cancel) |
+| `insta approvals list [--status] [--json]` | Governance approval list |
+| `insta approvals approve <id> [--always]` / `deny <id>` | Approve / deny (admin) |
+| `insta policy get [--json]` / `policy set <action> <decision>` | Governance policy (actions include `service.add/remove/scale/upgrade`) |
 
-被 governance gate 的操作（`secrets.read`/`deploy`/`project.delete`/`branch.delete`/`service.add`/`service.remove`/`service.scale`/`service.upgrade`）命中审批时，
-CLI 会提示 `approval required — run: insta approvals approve <id>`。
+When a governance-gated operation (`secrets.read`/`deploy`/`project.delete`/`branch.delete`/`service.add`/`service.remove`/`service.scale`/`service.upgrade`) hits an approval,
+the CLI prompts `approval required — run: insta approvals approve <id>`.
 
-## 配置位置
+## Configuration locations
 
-- 全局：`~/.insta/config.json`（apiUrl + access/refresh token + user）
-- 项目：`./.insta/project.json`（projectId / orgId / 当前 branch）
+- Global: `~/.insta/config.json` (apiUrl + access/refresh token + user)
+- Project: `./.insta/project.json` (projectId / orgId / current branch)
 
-## 本地端到端跑通
+## Local end-to-end run
 
-平台提供 `dev:fake` 模式（fake provider adapters，无需 Neon/Fly/Tigris 凭证）：
+The platform provides a `dev:fake` mode (fake provider adapters, no Neon/Fly/Tigris credentials required):
 
 ```bash
-# 1) 起 Postgres + 平台 dev 服务（见 ../platform）
+# 1) Start Postgres + the platform dev server (see ../platform)
 docker run -d --name pg -e POSTGRES_PASSWORD=insta -e POSTGRES_DB=insta_dev -p 55432:5432 postgres:16-alpine
 cd ../platform && DATABASE_URL='postgres://postgres:insta@localhost:55432/insta_dev' PORT=8899 npm run dev:fake
 
-# 2) 用 CLI 跑全流程（注册走 /auth/signup + /auth/verify-email，dev 模式验证码打印在服务端日志）
+# 2) Run the full flow with the CLI (signup goes through /auth/signup + /auth/verify-email; in dev mode the verification code is printed in the server logs)
 INSTA_API_URL=http://localhost:8899 insta login --email you@x.com --password ...
 ```
 
-## OAuth 浏览器登录
+## OAuth browser login
 
 ```bash
-insta login --oauth github          # 或 google
-# CLI 起本地回环端口 → 打开浏览器到 /auth/cli/authorize → Better Auth 走 provider 授权 →
-# 平台读会话 cookie 换出 bearer token → 带回回环端口 → CLI 存为登录态
+insta login --oauth github          # or google
+# CLI starts a local loopback port → opens the browser to /auth/cli/authorize → Better Auth runs provider authorization →
+# the platform reads the session cookie to exchange for a bearer token → carries it back to the loopback port → CLI stores it as login state
 ```
 
-> 平台侧需配置该 provider 的 OAuth 应用（`GITHUB_OAUTH_CLIENT_ID/SECRET` 或 `GOOGLE_*`），
-> 且应用的回调 URL 必须是 **`{INSTA_API_BASE_URL}/api/auth/callback/<provider>`**（不是回环地址）。
+> The platform must have an OAuth app configured for that provider (`GITHUB_OAUTH_CLIENT_ID/SECRET` or `GOOGLE_*`),
+> and the app's callback URL must be **`{INSTA_API_BASE_URL}/api/auth/callback/<provider>`** (not the loopback address).
 
-> `metrics` / `logs` / `usage` 已支持（usage 为采集层聚合）。多 compute service（`services add compute`）、`services scale/upgrade` 已实现；镜像构建后续加入。多 postgres/storage service（每 project >1 个）暂受 credential-seam 限制，为后续工作。
+> `metrics` / `logs` / `usage` are supported (usage is aggregated at the collection layer). Multiple compute services (`services add compute`) and `services scale/upgrade` are implemented; image building will come later. Multiple postgres/storage services (>1 per project) are currently constrained by the credential seam and remain future work.

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs'
 import { Command } from 'commander'
 import { ApiError } from './api.js'
 import { die } from './util.js'
@@ -9,6 +10,7 @@ import * as branch from './commands/branch.js'
 import * as services from './commands/services.js'
 import * as secretsCmd from './commands/secrets.js'
 import { deploy } from './commands/deploy.js'
+import * as computeCmd from './commands/compute.js'
 import { manifest } from './commands/manifest.js'
 import * as govern from './commands/govern.js'
 import * as observe from './commands/observe.js'
@@ -25,10 +27,15 @@ const guard = (fn: (...a: any[]) => Promise<unknown>) => (...a: any[]): Promise<
   fn(...a).then(() => undefined).catch(onError)
 
 const program = new Command()
-// Baked in at compile time for the standalone binary (bun build --define); falls back to 0.0.0 for
-// the plain node/npm build.
-const VERSION = process.env.INSTA_CLI_VERSION ?? '0.0.0'
-program.name('insta').description('InstaCloud CLI — manage projects, branches, secrets, deploys').version(VERSION)
+// Version resolution: INSTA_CLI_VERSION (baked into the standalone binary via bun build --define) →
+// the installed package.json (npm/node — ../package.json sits beside dist/) → 0.0.0.
+function resolveVersion(): string {
+  if (process.env.INSTA_CLI_VERSION) return process.env.INSTA_CLI_VERSION
+  try {
+    return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version as string
+  } catch { return '0.0.0' }
+}
+program.name('insta').description('InstaCloud CLI — manage projects, branches, secrets, deploys').version(resolveVersion())
 
 // ---- auth ----
 program.command('login').description('Log in with email + password, or --oauth <github|google> (browser)')
@@ -78,9 +85,18 @@ const sec = program.command('secrets').description('Fetch the credential bundle 
 sec.command('list').description('List secret names only').option('--branch <branch>').action(guard((o) => secretsCmd.secretsList(o)))
 
 // ---- deploy ----
-program.command('deploy').description('Deploy a container image to a branch compute group')
-  .option('--image <url>', 'container image to deploy').option('--branch <b>').option('--group <g>').option('--port <p>')
-  .action(guard((o) => deploy(o)))
+program.command('deploy [dir]').description('Deploy a source directory (built remotely on Fly) or a prebuilt --image to a branch compute group')
+  .option('--image <url>', 'prebuilt container image to deploy (instead of a source dir)').option('--branch <b>').option('--group <g>').option('--port <p>')
+  .action(guard((dir, o) => deploy(dir, o)))
+
+// ---- compute custom domains (bring your own domain → Fly cert + routing) ----
+const compute = program.command('compute').description('Compute custom domains (bring your own domain)')
+compute.command('set-domain <host>').description('Attach a custom domain to a branch compute service (gated: deploy)')
+  .option('--branch <b>').option('--group <g>').option('--json').action(guard((host, o) => computeCmd.setDomain(host, o)))
+compute.command('check-domain <host>').description("Show a custom domain's cert status + required DNS records")
+  .option('--branch <b>').option('--group <g>').option('--json').action(guard((host, o) => computeCmd.checkDomain(host, o)))
+compute.command('remove-domain <host>').description('Detach a custom domain (gated: deploy)')
+  .option('--branch <b>').option('--group <g>').action(guard((host, o) => computeCmd.removeDomain(host, o)))
 
 // ---- manifest ----
 program.command('manifest').description('Print an agent-legible view of the project environments').option('--json').action(guard((o) => manifest(o)))
@@ -92,8 +108,8 @@ program.command('metrics <target> [group]').description('Service metrics (target
 program.command('logs <target> [group]').description('Service runtime logs (target: db|compute)')
   .option('--branch <b>').option('--limit <n>').option('--region <r>').option('--instance <i>').option('--json')
   .action(guard((target, group, o) => obs.logs(target, group, o)))
-program.command('usage').description('Resource usage aggregated by meter (with cost)')
-  .option('--from <unix>').option('--to <unix>').option('--json')
+program.command('usage').description('Usage for the current billing cycle by billing dimension (org by default; --proj for one project)')
+  .option('--from <unix>').option('--to <unix>').option('--proj [id]', 'show one project (the linked one, or a given id) instead of the whole org').option('--json')
   .action(guard((o) => obs.usage(o)))
 const bill = program.command('billing').description('Current billing cycle summary (tier / credit / used / overage)')
   .option('--org <id>', 'target org (default: linked project\'s org)').option('--json')
