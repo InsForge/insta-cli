@@ -2,6 +2,7 @@ import { ApiClient, requireProject } from '../api.js'
 import { writeProject } from '../config.js'
 import { info, die, printJson, handleApproval } from '../util.js'
 import { installObserve } from '../observe/install.js'
+import { installSkills } from '../ensure-skills.js'
 
 // Best-effort: wire the credential-audit hook into the project (no-op if assets aren't built).
 function tryInstallObserve(): void {
@@ -27,6 +28,7 @@ export async function projectCreate(name: string, opts: { org?: string }): Promi
   info(`  resources: ${out.resources.map((r: any) => r.kind).join(', ')}`)
   info(`  linked ./.insta/project.json (branch ${out.defaultBranch.name})`)
   tryInstallObserve()
+  await installSkills({ cwd: process.cwd() })
 }
 
 export async function projectList(opts: { org?: string; json?: boolean }): Promise<void> {
@@ -44,6 +46,7 @@ export async function projectLink(id: string): Promise<void> {
   await writeProject({ projectId: project.id, orgId: project.org_id, branch: 'main' })
   info(`linked project ${project.id} (${project.name})`)
   tryInstallObserve()
+  await installSkills({ cwd: process.cwd() })
 }
 
 export async function projectDelete(opts: { project?: string }): Promise<void> {
