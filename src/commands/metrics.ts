@@ -22,22 +22,24 @@ export async function metrics(component: string, group: string | undefined, opts
   }
 }
 
-// insta usage — aggregated usage by meter over a window
+// Customer-facing name for each internal billing dimension (the platform stores RAM as `ram`).
+const DIMENSION_LABEL: Record<string, string> = { ram: 'memory' }
+
+// insta usage — usage across the 5 billing dimensions (cpu/memory/volume/egress/storage) we charge
+// on, over a window. Shows the billed dimensions, not the raw provider (fly/neon) meters.
 export async function usage(opts: { from?: string; to?: string; json?: boolean }): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
   const res = await api.request('GET', `/projects/${p.projectId}/usage${qs({ from: opts.from, to: opts.to })}`)
   if (opts.json) return printJson(res)
   info(`usage ${new Date(res.from * 1000).toISOString().slice(0, 10)} → ${new Date(res.to * 1000).toISOString().slice(0, 10)}`)
-  if (!res.usage?.length) return info('(no usage recorded)')
-  let total = 0
-  for (const u of res.usage) {
-    const dims = u.dimensions && Object.keys(u.dimensions).length ? ` ${JSON.stringify(u.dimensions)}` : ''
-    const cost = u.costUsd != null ? `  ($${Number(u.costUsd).toFixed(4)})` : ''
-    total += Number(u.costUsd ?? 0)
-    info(`${u.meter}${dims}: ${u.quantity} ${u.unit}${cost}`)
+  if (!res.dimensions?.length) return info('(no usage recorded)')
+  for (const d of res.dimensions) {
+    const label = DIMENSION_LABEL[d.dimension] ?? d.dimension
+    const cost = d.costUsd != null ? `  ($${Number(d.costUsd).toFixed(4)})` : ''
+    info(`${label}: ${d.quantity} ${d.unit}${cost}`)
   }
-  info(`total: $${total.toFixed(4)}`)
+  info(`total: $${Number(res.totalCostUsd ?? 0).toFixed(4)}`)
 }
 
 // insta logs <db|compute> [group]
