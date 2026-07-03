@@ -25,24 +25,51 @@ export async function metrics(component: string, group: string | undefined, opts
 // Customer-facing name for each internal billing dimension (the platform stores RAM as `ram`).
 const DIMENSION_LABEL: Record<string, string> = { ram: 'memory' }
 
-// insta usage — usage across the 5 billing dimensions (cpu/memory/volume/egress/storage) we charge
-// on, over a window. Shows the billed dimensions, not the raw provider (fly/neon) meters.
-export async function usage(opts: { from?: string; to?: string; json?: boolean }): Promise<void> {
-  const api = await ApiClient.load()
-  const p = await requireProject()
-  const res = await api.request('GET', `/projects/${p.projectId}/usage${qs({ from: opts.from, to: opts.to })}`)
-  if (opts.json) return printJson(res)
-  // Window defaults to the current billing cycle. `to` is the exclusive next-cycle start, so show
-  // the inclusive last day (to − 1 day) — e.g. an org created on the 5th reads "…-05 → …next-04".
+type Dim = { dimension: string; quantity: number; unit: string; costUsd?: number }
+
+// Window line. Defaults to the current billing cycle; `to` is the exclusive next-cycle start, so
+// show the inclusive last day (to − 1 day) — e.g. an org created on the 5th reads "…-05 → …next-04".
+function cycleLine(res: { from: number; to: number }): string {
   const day = (sec: number) => new Date(sec * 1000).toISOString().slice(0, 10)
-  info(`billing cycle ${day(res.from)} → ${day(res.to - 86400)}`)
-  if (!res.dimensions?.length) return info('(no usage recorded)')
-  for (const d of res.dimensions) {
+  return `billing cycle ${day(res.from)} → ${day(res.to - 86400)}`
+}
+
+function printDimensions(dims: Dim[]): void {
+  for (const d of dims) {
     const label = DIMENSION_LABEL[d.dimension] ?? d.dimension
     const cost = d.costUsd != null ? `  ($${Number(d.costUsd).toFixed(4)})` : ''
     info(`${label}: ${d.quantity} ${d.unit}${cost}`)
   }
-  info(`total: $${Number(res.totalCostUsd ?? 0).toFixed(4)}`)
+}
+
+// insta usage — usage across the 5 billing dimensions (cpu/memory/volume/egress/storage) for the
+// current billing cycle. Shows the whole ORG by default (with a per-project breakdown); pass --proj
+// [id] for a single project (the linked one, or a given id). Billed dimensions, not raw fly/neon meters.
+export async function usage(opts: { from?: string; to?: string; json?: boolean; proj?: string | boolean }): Promise<void> {
+  const api = await ApiClient.load()
+  const p = await requireProject()
+
+  if (opts.proj !== undefined && opts.proj !== false) {
+    const projectId = typeof opts.proj === 'string' ? opts.proj : p.projectId
+    const res = await api.request('GET', `/projects/${projectId}/usage${qs({ from: opts.from, to: opts.to })}`)
+    if (opts.json) return printJson(res)
+    info(cycleLine(res))
+    if (!res.dimensions?.length) return info('(no usage recorded)')
+    printDimensions(res.dimensions)
+    return info(`total: $${Number(res.totalCostUsd ?? 0).toFixed(4)}`)
+  }
+
+  // Default: the whole org (the linked project's org), with a per-project cost breakdown.
+  const res = await api.request('GET', `/orgs/${p.orgId}/usage${qs({ from: opts.from, to: opts.to })}`)
+  if (opts.json) return printJson(res)
+  info(cycleLine(res))
+  if (!res.org?.dimensions?.length) return info('(no usage recorded)')
+  printDimensions(res.org.dimensions)
+  info(`total: $${Number(res.org.totalCostUsd ?? 0).toFixed(4)}`)
+  if (res.projects?.length) {
+    info('by project:')
+    for (const pr of res.projects) info(`  ${pr.name}: $${Number(pr.totalCostUsd ?? 0).toFixed(4)}`)
+  }
 }
 
 // insta logs <db|compute> [group]
