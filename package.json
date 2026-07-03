@@ -1,18 +1,25 @@
 {
-  "name": "insta-cli",
-  "version": "0.0.1",
-  "private": true,
+  "name": "insta",
+  "version": "0.0.2",
   "type": "module",
   "description": "InstaCloud CLI — a thin client of the platform control-plane API.",
+  "keywords": ["insta", "insforge", "cli", "backend", "baas", "platform"],
+  "license": "MIT",
+  "homepage": "https://github.com/InsForge/insta-cli#readme",
+  "repository": { "type": "git", "url": "git+https://github.com/InsForge/insta-cli.git" },
+  "bugs": { "url": "https://github.com/InsForge/insta-cli/issues" },
   "bin": { "insta": "dist/index.js" },
-  "files": ["dist"],
+  "files": ["dist/**/*.js"],
+  "engines": { "node": ">=18" },
+  "publishConfig": { "access": "public" },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "compile": "bun build ./src/index.ts --compile --minify --outfile dist/bin/insta",
-    "build:binaries": "bash scripts/build-binaries.sh"
+    "build:binaries": "bash scripts/build-binaries.sh",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "commander": "^12.1.0"

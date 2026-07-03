@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs'
 import { Command } from 'commander'
 import { ApiError } from './api.js'
 import { die } from './util.js'
@@ -26,10 +27,15 @@ const guard = (fn: (...a: any[]) => Promise<unknown>) => (...a: any[]): Promise<
   fn(...a).then(() => undefined).catch(onError)
 
 const program = new Command()
-// Baked in at compile time for the standalone binary (bun build --define); falls back to 0.0.0 for
-// the plain node/npm build.
-const VERSION = process.env.INSTA_CLI_VERSION ?? '0.0.0'
-program.name('insta').description('InstaCloud CLI — manage projects, branches, secrets, deploys').version(VERSION)
+// Version resolution: INSTA_CLI_VERSION (baked into the standalone binary via bun build --define) →
+// the installed package.json (npm/node — ../package.json sits beside dist/) → 0.0.0.
+function resolveVersion(): string {
+  if (process.env.INSTA_CLI_VERSION) return process.env.INSTA_CLI_VERSION
+  try {
+    return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version as string
+  } catch { return '0.0.0' }
+}
+program.name('insta').description('InstaCloud CLI — manage projects, branches, secrets, deploys').version(resolveVersion())
 
 // ---- auth ----
 program.command('login').description('Log in with email + password, or --oauth <github|google> (browser)')
