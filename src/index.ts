@@ -27,6 +27,14 @@ const guard = (fn: (...a: any[]) => Promise<unknown>) => (...a: any[]): Promise<
   fn(...a).then(() => undefined).catch(onError)
 
 const program = new Command()
+// Positional options: some command groups (e.g. `secrets`, `billing`) declare a flag (like
+// --branch or --org) both on the group itself (for its own default action) and on a subcommand
+// of that group. Without this, commander lets the group's own option greedily match the flag
+// no matter where it appears, so e.g. `secrets set NAME val --branch b` silently drops --branch
+// into the (unused) group-level options instead of the subcommand's. Positional parsing makes a
+// group's own options only match before the subcommand name, so occurrences after it are matched
+// against the subcommand's own (identically-named) option instead.
+program.enablePositionalOptions()
 // Version resolution: INSTA_CLI_VERSION (baked into the standalone binary via bun build --define) →
 // the installed package.json (npm/node — ../package.json sits beside dist/) → 0.0.0.
 function resolveVersion(): string {
@@ -83,6 +91,10 @@ const sec = program.command('secrets').description('Fetch the credential bundle 
   .option('--branch <branch>').option('-o, --output <file>', 'output file (default .env)').option('--print', 'print instead of writing').option('--json')
   .action(guard((o) => secretsCmd.secrets(o)))
 sec.command('list').description('List secret names only').option('--branch <branch>').action(guard((o) => secretsCmd.secretsList(o)))
+sec.command('set <name> [value]').description('Set a user secret (project-wide; value from stdin if omitted)')
+  .option('--branch <branch>', 'scope to one branch').action(guard((n, v, o) => secretsCmd.secretsSet(n, v, o)))
+sec.command('unset <name>').description('Remove a user secret')
+  .option('--branch <branch>', 'scope to one branch').action(guard((n, o) => secretsCmd.secretsUnset(n, o)))
 
 // ---- deploy ----
 program.command('deploy [dir]').description('Deploy a source directory (built remotely on Fly) or a prebuilt --image to a branch compute group')
@@ -140,6 +152,6 @@ ob.command('sync').description('Upload findings into the project timeline').acti
 // ---- policy ----
 const pol = program.command('policy').description('Governance policy')
 pol.command('get').option('--json').action(guard((o) => govern.policyGet(o)))
-pol.command('set <action> <decision>').description('action: secrets.read|deploy|project.delete|branch.delete|service.add|service.remove|service.scale|service.upgrade; decision: allow|deny|approve').action(guard((a, d) => govern.policySet(a, d)))
+pol.command('set <action> <decision>').description('action: secrets.read|secrets.write|deploy|project.delete|branch.delete|service.add|service.remove|service.scale|service.upgrade; decision: allow|deny|approve').action(guard((a, d) => govern.policySet(a, d)))
 
 program.parseAsync(process.argv)
