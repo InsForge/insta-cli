@@ -78,9 +78,9 @@ const sec = program.command('secrets').description('Fetch the credential bundle 
 sec.command('list').description('List secret names only').option('--branch <branch>').action(guard((o) => secretsCmd.secretsList(o)))
 
 // ---- deploy ----
-program.command('deploy').description('Deploy a container image to a branch compute group')
-  .option('--image <url>', 'container image to deploy').option('--branch <b>').option('--group <g>').option('--port <p>')
-  .action(guard((o) => deploy(o)))
+program.command('deploy [dir]').description('Deploy a source directory (built remotely on Fly) or a prebuilt --image to a branch compute group')
+  .option('--image <url>', 'prebuilt container image to deploy (instead of a source dir)').option('--branch <b>').option('--group <g>').option('--port <p>')
+  .action(guard((dir, o) => deploy(dir, o)))
 
 // ---- manifest ----
 program.command('manifest').description('Print an agent-legible view of the project environments').option('--json').action(guard((o) => manifest(o)))
