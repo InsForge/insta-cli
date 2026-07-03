@@ -32,7 +32,10 @@ export async function usage(opts: { from?: string; to?: string; json?: boolean }
   const p = await requireProject()
   const res = await api.request('GET', `/projects/${p.projectId}/usage${qs({ from: opts.from, to: opts.to })}`)
   if (opts.json) return printJson(res)
-  info(`usage ${new Date(res.from * 1000).toISOString().slice(0, 10)} → ${new Date(res.to * 1000).toISOString().slice(0, 10)}`)
+  // Window defaults to the current billing cycle. `to` is the exclusive next-cycle start, so show
+  // the inclusive last day (to − 1 day) — e.g. an org created on the 5th reads "…-05 → …next-04".
+  const day = (sec: number) => new Date(sec * 1000).toISOString().slice(0, 10)
+  info(`billing cycle ${day(res.from)} → ${day(res.to - 86400)}`)
   if (!res.dimensions?.length) return info('(no usage recorded)')
   for (const d of res.dimensions) {
     const label = DIMENSION_LABEL[d.dimension] ?? d.dimension
