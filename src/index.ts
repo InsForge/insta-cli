@@ -6,6 +6,7 @@ import * as auth from './commands/auth.js'
 import * as org from './commands/org.js'
 import * as project from './commands/project.js'
 import * as branch from './commands/branch.js'
+import * as services from './commands/services.js'
 import * as secretsCmd from './commands/secrets.js'
 import { deploy } from './commands/deploy.js'
 import { manifest } from './commands/manifest.js'
@@ -58,6 +59,18 @@ br.command('list').option('--json').action(guard((o) => branch.branchList(o)))
 br.command('switch <name>').action(guard((name) => branch.branchSwitch(name)))
 br.command('delete <name>').action(guard((name) => branch.branchDelete(name)))
 
+// ---- services (opt-in postgres/storage/compute) ----
+const svc = program.command('services').alias('svc').description('Manage project services (postgres|storage|compute)')
+svc.command('add <type> <name>').description('Provision a service on demand (assigns a default domain for postgres/compute)')
+  .action(guard((type, name) => services.servicesAdd(type, name)))
+svc.command('list').option('--json').action(guard((o) => services.servicesList(o)))
+svc.command('remove <type> <name>').description('Remove a service and destroy its resources')
+  .action(guard((type, name) => services.servicesRemove(type, name)))
+svc.command('scale <type> <name> <number> [region]').description('Set a compute service machine count (paid plans only)')
+  .option('--json').action(guard((type, name, number, region, o) => services.servicesScale(type, name, number, region, o)))
+svc.command('upgrade <type> <name> <spec>').description('Change a compute/postgres service spec (paid plans only)')
+  .option('--json').action(guard((type, name, spec, o) => services.servicesUpgrade(type, name, spec, o)))
+
 // ---- secrets (seam) ----
 const sec = program.command('secrets').description('Fetch the credential bundle (secret seam) into .env')
   .option('--branch <branch>').option('-o, --output <file>', 'output file (default .env)').option('--print', 'print instead of writing').option('--json')
@@ -73,12 +86,12 @@ program.command('deploy').description('Deploy a container image to a branch comp
 program.command('manifest').description('Print an agent-legible view of the project environments').option('--json').action(guard((o) => manifest(o)))
 
 // ---- observability ----
-program.command('metrics <component> [group]').description('Resource metrics (component: db|compute)')
+program.command('metrics <target> [group]').description('Service metrics (target: db|compute)')
   .option('--branch <b>').option('--from <unix>').option('--to <unix>').option('--step <s>').option('--json')
-  .action(guard((component, group, o) => obs.metrics(component, group, o)))
-program.command('logs <component> [group]').description('Runtime logs (component: db|compute)')
+  .action(guard((target, group, o) => obs.metrics(target, group, o)))
+program.command('logs <target> [group]').description('Service runtime logs (target: db|compute)')
   .option('--branch <b>').option('--limit <n>').option('--region <r>').option('--instance <i>').option('--json')
-  .action(guard((component, group, o) => obs.logs(component, group, o)))
+  .action(guard((target, group, o) => obs.logs(target, group, o)))
 program.command('usage').description('Resource usage aggregated by meter (with cost)')
   .option('--from <unix>').option('--to <unix>').option('--json')
   .action(guard((o) => obs.usage(o)))
@@ -111,6 +124,6 @@ ob.command('sync').description('Upload findings into the project timeline').acti
 // ---- policy ----
 const pol = program.command('policy').description('Governance policy')
 pol.command('get').option('--json').action(guard((o) => govern.policyGet(o)))
-pol.command('set <action> <decision>').description('action: secrets.read|deploy|project.delete|branch.delete; decision: allow|deny|approve').action(guard((a, d) => govern.policySet(a, d)))
+pol.command('set <action> <decision>').description('action: secrets.read|deploy|project.delete|branch.delete|service.add|service.remove|service.scale|service.upgrade; decision: allow|deny|approve').action(guard((a, d) => govern.policySet(a, d)))
 
 program.parseAsync(process.argv)

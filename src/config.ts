@@ -17,7 +17,7 @@ export type GlobalConfig = {
 
 export type ProjectConfig = { projectId: string; orgId: string; branch: string }
 
-const DEFAULT_API = process.env.INSTA_API_URL ?? 'http://localhost:8080'
+const DEFAULT_API = process.env.INSTA_API_URL ?? 'https://beta-api.insta.insforge.dev'
 
 export async function readGlobal(): Promise<GlobalConfig> {
   try {
