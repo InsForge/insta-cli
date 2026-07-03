@@ -9,6 +9,7 @@ import * as branch from './commands/branch.js'
 import * as services from './commands/services.js'
 import * as secretsCmd from './commands/secrets.js'
 import { deploy } from './commands/deploy.js'
+import * as computeCmd from './commands/compute.js'
 import { manifest } from './commands/manifest.js'
 import * as govern from './commands/govern.js'
 import * as observe from './commands/observe.js'
@@ -81,6 +82,15 @@ sec.command('list').description('List secret names only').option('--branch <bran
 program.command('deploy [dir]').description('Deploy a source directory (built remotely on Fly) or a prebuilt --image to a branch compute group')
   .option('--image <url>', 'prebuilt container image to deploy (instead of a source dir)').option('--branch <b>').option('--group <g>').option('--port <p>')
   .action(guard((dir, o) => deploy(dir, o)))
+
+// ---- compute custom domains (bring your own domain → Fly cert + routing) ----
+const compute = program.command('compute').description('Compute custom domains (bring your own domain)')
+compute.command('set-domain <host>').description('Attach a custom domain to a branch compute service (gated: deploy)')
+  .option('--branch <b>').option('--group <g>').option('--json').action(guard((host, o) => computeCmd.setDomain(host, o)))
+compute.command('check-domain <host>').description("Show a custom domain's cert status + required DNS records")
+  .option('--branch <b>').option('--group <g>').option('--json').action(guard((host, o) => computeCmd.checkDomain(host, o)))
+compute.command('remove-domain <host>').description('Detach a custom domain (gated: deploy)')
+  .option('--branch <b>').option('--group <g>').action(guard((host, o) => computeCmd.removeDomain(host, o)))
 
 // ---- manifest ----
 program.command('manifest').description('Print an agent-legible view of the project environments').option('--json').action(guard((o) => manifest(o)))
