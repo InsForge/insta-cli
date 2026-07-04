@@ -15,9 +15,16 @@ const SKILL_DIRS = ['.claude/skills/', '.agents/skills/', '.github/skills/']
 
 export type Runner = (cmd: string, args: string[], inherit?: boolean) => Promise<{ ok: boolean }>
 
+// `skills` prints a full-screen ASCII banner at the top of every `add`, so our 4 invocations
+// would stack 4 banners. It skips the banner when it detects an agent driving it rather than a
+// human — AI_AGENT is its first-checked signal (any non-empty value ⇒ agent mode). Setting it is
+// honest here (this IS programmatic, not an interactive prompt) and, because we already pin the
+// agents/skills/-y, has no effect on the install beyond quieting the banner. Preserve a caller's
+// existing AI_AGENT (e.g. running inside another agent) rather than clobbering it.
 const defaultRunner: Runner = (cmd, args, inherit = false) =>
   new Promise((resolve) => {
-    const p = spawn(cmd, args, { stdio: inherit ? 'inherit' : 'ignore' })
+    const env = { ...process.env, AI_AGENT: process.env.AI_AGENT || 'insta' }
+    const p = spawn(cmd, args, { stdio: inherit ? 'inherit' : 'ignore', env })
     p.on('error', () => resolve({ ok: false })) // e.g. npx not on PATH
     p.on('close', (code) => resolve({ ok: code === 0 }))
   })
