@@ -16,6 +16,7 @@ import * as govern from './commands/govern.js'
 import * as observe from './commands/observe.js'
 import * as obs from './commands/metrics.js'
 import { billing, billingUpgrade, billingPortal } from './commands/billing.js'
+import * as selfUpdate from './commands/upgrade.js'
 
 function onError(e: unknown): never {
   if (e instanceof ApiError) die(`${e.message} (HTTP ${e.status})`)
@@ -154,4 +155,12 @@ const pol = program.command('policy').description('Governance policy')
 pol.command('get').option('--json').action(guard((o) => govern.policyGet(o)))
 pol.command('set <action> <decision>').description('action: secrets.read|secrets.write|deploy|project.delete|branch.delete|service.add|service.remove|service.scale|service.upgrade; decision: allow|deny|approve').action(guard((a, d) => govern.policySet(a, d)))
 
+// ---- self-update ----
+program.command('upgrade').description('Update the insta CLI to the latest release (binary or npm install)')
+  .action(guard(() => selfUpdate.upgrade()))
+program.command('autoupdate [mode]').description('Show or set auto-update: on | off (default: on while pre-1.0)')
+  .action(guard((mode) => selfUpdate.autoupdate(mode)))
+program.command('__update-check', { hidden: true }).action(guard(() => selfUpdate.backgroundCheck()))
+
+selfUpdate.maybeUpdate(resolveVersion(), process.argv)
 program.parseAsync(process.argv)
