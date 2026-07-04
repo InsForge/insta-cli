@@ -13,6 +13,7 @@ export type GlobalConfig = {
   accessToken?: string
   refreshToken?: string
   user?: { id: string; email: string | null; name: string | null }
+  autoUpdate?: boolean // self-update on new releases (default true while pre-1.0)
 }
 
 export type ProjectConfig = { projectId: string; orgId: string; branch: string }
