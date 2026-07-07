@@ -4,7 +4,19 @@ import { ApiClient, requireProject } from '../api.js'
 import { info, die, handleApproval } from '../util.js'
 import { flyctlBuildAndPush, ensureFlyctl } from '../flyctl-build.js'
 
-type DeployOpts = { image?: string; branch?: string; group?: string; port?: string }
+type DeployOpts = { image?: string; branch?: string; group?: string; port?: string; websocket?: boolean }
+
+// Map CLI options to the platform deploy request body. Pure, so it's unit-tested. --websocket is only
+// sent when set (plain deploys unchanged).
+export function deployRequestBody(image: string, branch: string, opts: DeployOpts): Record<string, unknown> {
+  return {
+    image,
+    branch,
+    group: opts.group,
+    port: opts.port ? Number(opts.port) : undefined,
+    websocket: opts.websocket ? true : undefined,
+  }
+}
 
 // Deploy either a prebuilt image (`--image`) or a source directory (positional `<dir>`, built
 // remotely on Fly and pushed with a short-lived platform-minted token). Exactly one mode.
@@ -17,12 +29,7 @@ export async function deploy(dir: string | undefined, opts: DeployOpts): Promise
   const branch = opts.branch ?? p.branch
 
   const image = dir ? await buildFromSource(api, p.projectId, dir, branch, opts) : opts.image!
-  const res = await api.rawRequest('POST', `/projects/${p.projectId}/deploy`, {
-    image,
-    branch,
-    group: opts.group,
-    port: opts.port ? Number(opts.port) : undefined,
-  })
+  const res = await api.rawRequest('POST', `/projects/${p.projectId}/deploy`, deployRequestBody(image, branch, opts))
   if (handleApproval(res)) return
   info(`deployed ${image} -> ${res.body.url} (branch ${res.body.branch}, group ${res.body.group})`)
 }
