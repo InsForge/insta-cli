@@ -100,6 +100,7 @@ sec.command('unset <name>').description('Remove a user secret')
 // ---- deploy ----
 program.command('deploy [dir]').description('Deploy a source directory (built remotely on Fly) or a prebuilt --image to a branch compute group')
   .option('--image <url>', 'prebuilt container image to deploy (instead of a source dir)').option('--branch <b>').option('--group <g>').option('--port <p>')
+  .option('--websocket', 'run a WebSocket app (larger guest + connection-based concurrency)')
   .action(guard((dir, o) => deploy(dir, o)))
 
 // ---- compute custom domains (bring your own domain → Fly cert + routing) ----
