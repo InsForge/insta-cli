@@ -29,17 +29,23 @@ type Dim = { dimension: string; quantity: number; unit: string; costUsd?: number
 
 // Window line. Defaults to the current billing cycle; `to` is the exclusive next-cycle start, so
 // show the inclusive last day (to − 1 day) — e.g. an org created on the 5th reads "…-05 → …next-04".
-function cycleLine(res: { from: number; to: number }): string {
+export function cycleLine(res: { from: number; to: number }): string {
   const day = (sec: number) => new Date(sec * 1000).toISOString().slice(0, 10)
   return `billing cycle ${day(res.from)} → ${day(res.to - 86400)}`
 }
 
-function printDimensions(dims: Dim[]): void {
-  for (const d of dims) {
+// Pure: format the per-dimension lines (label: qty unit (cost)). Shared by `insta usage` and
+// `insta billing` so both render dimensions identically.
+export function dimensionLines(dims: Dim[]): string[] {
+  return dims.map((d) => {
     const label = DIMENSION_LABEL[d.dimension] ?? d.dimension
     const cost = d.costUsd != null ? `  ($${Number(d.costUsd).toFixed(4)})` : ''
-    info(`${label}: ${d.quantity} ${d.unit}${cost}`)
-  }
+    return `${label}: ${d.quantity} ${d.unit}${cost}`
+  })
+}
+
+function printDimensions(dims: Dim[]): void {
+  for (const l of dimensionLines(dims)) info(l)
 }
 
 // insta usage — usage across the 5 billing dimensions (cpu/memory/volume/egress/storage) for the
