@@ -125,7 +125,7 @@ program.command('logs <target> [group]').description('Service runtime logs (targ
 program.command('usage').description('Usage for the current billing cycle by billing dimension (org by default; --proj for one project)')
   .option('--from <unix>').option('--to <unix>').option('--proj [id]', 'show one project (the linked one, or a given id) instead of the whole org').option('--json')
   .action(guard((o) => obs.usage(o)))
-const bill = program.command('billing').description('Current billing cycle summary (tier / credit / used / overage)')
+const bill = program.command('billing').description('Current billing cycle overview (tier / used / included / overage / credits / forecast + per-dimension & per-project breakdown)')
   .option('--org <id>', 'target org (default: linked project\'s org)').option('--json')
   .action(guard((o) => billing(o)))
 bill.command('upgrade <tier>').description('Subscribe the org to a paid tier (pro|enterprise) via Stripe Checkout')

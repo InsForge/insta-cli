@@ -1,5 +1,6 @@
 import { ApiClient, requireProject } from '../api.js'
 import { die, info, openUrl, printJson } from '../util.js'
+import { cycleLine, dimensionLines } from './metrics.js'
 
 type OrgOpt = { org?: string }
 
@@ -9,19 +10,49 @@ async function resolveOrgId(opts: OrgOpt): Promise<string> {
   return (await requireProject()).orgId
 }
 
-// insta billing — current cycle summary for the org.
+export type BillingOverview = {
+  window: { from: number; to: number }
+  tier: string; billingStatus: string; subscriptionStatus: string | null
+  totals: { usedUsd: number; includedUsd: number; overageUsd: number; creditsUsd: number; forecastUsd: number }
+  byDimension: Array<{ dimension: string; quantity: number; unit: string; costUsd?: number }>
+  byProject: Array<{ name: string; totalCostUsd: number }>
+}
+
+// Format the billing overview into printable lines (pure, so it's unit-testable).
+export function billingLines(s: BillingOverview): string[] {
+  const t = s.totals
+  const lines = [
+    `tier:      ${s.tier}`,
+    `status:    ${s.billingStatus}`,
+    cycleLine(s.window),
+    `included:  $${Number(t.includedUsd).toFixed(2)}`,
+    `used:      $${Number(t.usedUsd).toFixed(4)}`,
+    `overage:   $${Number(t.overageUsd).toFixed(4)}`,
+    `credits:   $${Number(t.creditsUsd).toFixed(2)}`,
+    `forecast:  $${Number(t.forecastUsd).toFixed(4)}  (predicted full cycle)`,
+  ]
+  if (s.subscriptionStatus) lines.push(`subscription: ${s.subscriptionStatus}`)
+  if (s.billingStatus === 'suspended') {
+    lines.push('⚠  org suspended — billing limit reached; resumes next cycle (or `insta billing upgrade pro`)')
+  }
+  if (s.byDimension?.length) {
+    lines.push('by dimension:')
+    for (const l of dimensionLines(s.byDimension)) lines.push(`  ${l}`)
+  }
+  if (s.byProject?.length) {
+    lines.push('by project:')
+    for (const pr of s.byProject) lines.push(`  ${pr.name}: $${Number(pr.totalCostUsd ?? 0).toFixed(4)}`)
+  }
+  return lines
+}
+
+// insta billing — current cycle overview for the org (totals, credits, forecast, breakdowns).
 export async function billing(opts: OrgOpt & { json?: boolean }): Promise<void> {
   const api = await ApiClient.load()
   const orgId = await resolveOrgId(opts)
-  const s = await api.request('GET', `/orgs/${orgId}/billing`)
+  const s = await api.request<BillingOverview>('GET', `/orgs/${orgId}/billing/overview`)
   if (opts.json) return printJson(s)
-  info(`tier:     ${s.tier}`)
-  info(`status:   ${s.status}`)
-  info(`cycle:    ${String(s.cycleStart).slice(0, 10)} → ${String(s.cycleEnd).slice(0, 10)}`)
-  info(`included: $${Number(s.includedUsd).toFixed(2)}`)
-  info(`used:     $${Number(s.usedUsd).toFixed(4)}`)
-  info(`overage:  $${Number(s.overageUsd).toFixed(4)}`)
-  if (s.status === 'suspended') info('⚠  org suspended — billing limit reached; resumes next cycle (or `insta billing upgrade pro`)')
+  for (const l of billingLines(s)) info(l)
 }
 
 // insta billing upgrade <tier> — start a Stripe Checkout to subscribe the org to a paid tier.
