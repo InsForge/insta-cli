@@ -18,14 +18,17 @@ export type GlobalConfig = {
 
 export type ProjectConfig = { projectId: string; orgId: string; branch: string }
 
-const DEFAULT_API = process.env.INSTA_API_URL ?? 'https://beta-api.insta.insforge.dev'
+const DEFAULT_API = 'https://beta-api.insta.insforge.dev'
 
 export async function readGlobal(): Promise<GlobalConfig> {
+  // INSTA_API_URL overrides the persisted apiUrl, not just the default — otherwise the
+  // env var is silently ignored as soon as any login has written a config file.
+  const envApi = process.env.INSTA_API_URL
   try {
     const parsed = JSON.parse(await readFile(GLOBAL_FILE, 'utf8')) as GlobalConfig
-    return { ...parsed, apiUrl: parsed.apiUrl ?? DEFAULT_API }
+    return { ...parsed, apiUrl: envApi ?? parsed.apiUrl ?? DEFAULT_API }
   } catch {
-    return { apiUrl: DEFAULT_API }
+    return { apiUrl: envApi ?? DEFAULT_API }
   }
 }
 
