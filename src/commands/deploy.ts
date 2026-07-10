@@ -4,7 +4,19 @@ import { ApiClient, requireProject } from '../api.js'
 import { info, die, handleApproval } from '../util.js'
 import { flyctlBuildAndPush, ensureFlyctl } from '../flyctl-build.js'
 
-type DeployOpts = { image?: string; branch?: string; group?: string; port?: string }
+type DeployOpts = { image?: string; branch?: string; group?: string; port?: string; websocket?: boolean }
+
+// Map CLI options to the platform deploy request body. Pure, so it's unit-tested. --websocket is only
+// sent when set (plain deploys unchanged).
+export function deployRequestBody(image: string, branch: string, opts: DeployOpts): Record<string, unknown> {
+  return {
+    image,
+    branch,
+    group: opts.group,
+    port: opts.port ? Number(opts.port) : undefined,
+    websocket: opts.websocket ? true : undefined,
+  }
+}
 
 // A port mismatch is the #1 deploy mistake: the app boots "successfully" but the proxy routes to
 // the wrong internal port and every request is refused. For source deploys the Dockerfile states
@@ -38,13 +50,9 @@ export async function deploy(dir: string | undefined, opts: DeployOpts): Promise
     }
   }
 
-  const image = dir ? await buildFromSource(api, p.projectId, dir, branch, { ...opts, port: port?.toString() }) : opts.image!
-  const res = await api.rawRequest('POST', `/projects/${p.projectId}/deploy`, {
-    image,
-    branch,
-    group: opts.group,
-    port,
-  })
+  const effOpts = { ...opts, port: port?.toString() }
+  const image = dir ? await buildFromSource(api, p.projectId, dir, branch, effOpts) : opts.image!
+  const res = await api.rawRequest('POST', `/projects/${p.projectId}/deploy`, deployRequestBody(image, branch, effOpts))
   if (handleApproval(res)) return
   info(`deployed ${image} -> ${res.body.url} (branch ${res.body.branch}, group ${res.body.group})`)
 }

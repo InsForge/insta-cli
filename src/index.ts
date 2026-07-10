@@ -100,6 +100,7 @@ sec.command('unset <name>').description('Remove a user secret')
 // ---- deploy ----
 program.command('deploy [dir]').description('Deploy a source directory (built remotely on Fly) or a prebuilt --image to a branch compute group')
   .option('--image <url>', 'prebuilt container image to deploy (instead of a source dir)').option('--branch <b>').option('--group <g>').option('--port <p>')
+  .option('--websocket', 'run a WebSocket app (larger guest + connection-based concurrency)')
   .action(guard((dir, o) => deploy(dir, o)))
 
 // ---- compute custom domains (bring your own domain → Fly cert + routing) ----
@@ -124,7 +125,7 @@ program.command('logs <target> [group]').description('Service runtime logs (targ
 program.command('usage').description('Usage for the current billing cycle by billing dimension (org by default; --proj for one project)')
   .option('--from <unix>').option('--to <unix>').option('--proj [id]', 'show one project (the linked one, or a given id) instead of the whole org').option('--json')
   .action(guard((o) => obs.usage(o)))
-const bill = program.command('billing').description('Current billing cycle summary (tier / credit / used / overage)')
+const bill = program.command('billing').description('Current billing cycle overview (tier / used / included / overage / credits / forecast + per-dimension & per-project breakdown)')
   .option('--org <id>', 'target org (default: linked project\'s org)').option('--json')
   .action(guard((o) => billing(o)))
 bill.command('upgrade <tier>').description('Subscribe the org to a paid tier (pro|enterprise) via Stripe Checkout')
