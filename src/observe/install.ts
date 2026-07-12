@@ -56,8 +56,11 @@ function materialize(cwd: string, assetDir: string): void {
 }
 
 function claudeEntry(): Group {
-  return { matcher: '*', hooks: [{ type: 'command', command: 'node',
-    args: ['${CLAUDE_PROJECT_DIR}/.insta/observe/hook.js'], timeout: 15, _insta: MARKER }] }
+  // Claude Code executes `command` as ONE shell string with $CLAUDE_PROJECT_DIR in the env —
+  // there is no `args` field in its hooks schema, so a ${…} template in args reaches node
+  // verbatim and throws MODULE_NOT_FOUND after every tool call.
+  return { matcher: '*', hooks: [{ type: 'command',
+    command: 'node "$CLAUDE_PROJECT_DIR/.insta/observe/hook.js"', timeout: 15, _insta: MARKER }] }
 }
 function codexEntry(cwd: string): Group {
   const abs = join(cwd, '.insta', 'observe', 'hook.js') // Codex doesn't expand ${CLAUDE_PROJECT_DIR}; use an absolute path
