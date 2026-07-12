@@ -90,3 +90,33 @@ jobs:
           fi
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
             dist-bin/insta-* dist-bin/SHA256SUMS install.sh
+
+  # npm half of the release: publishes `insta` to the registry with a GRANULAR AUTOMATION token
+  # (repo secret NPM_TOKEN — bypasses the interactive 2FA/OTP that blocks CI). Gated on the
+  # binaries building, tag pushes only. --provenance attests the build (public repo + OIDC).
+  publish-npm:
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm --provenance attestation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Require NPM_TOKEN
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::NPM_TOKEN repo secret is not set — create a GRANULAR automation token at npmjs.com (Access Tokens → Generate → Granular, packages: insta, permissions: read/write) and add it under Settings → Secrets → Actions."
+            exit 1
+          fi
+      - run: npm ci
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
