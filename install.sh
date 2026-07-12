@@ -32,6 +32,28 @@ INSTALL_DIR="${INSTA_INSTALL_DIR:-$HOME/.insta/bin}"
 
 command -v curl >/dev/null 2>&1 || { echo "error: curl is required" >&2; exit 1; }
 
+# ---- already current? (skip the download; Railway-style existing-install awareness) ----
+resolve_latest() {
+  curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
+    | sed -n 's/.*"tag_name": *"\(v[^"]*\)".*/\1/p' | head -1
+}
+if [ -x "$INSTALL_DIR/$BIN" ] && [ -z "${INSTA_VERSION:-}" ]; then
+  current="v$("$INSTALL_DIR/$BIN" --version 2>/dev/null | tail -1)"
+  latest="$(resolve_latest || true)"
+  if [ -n "$latest" ] && [ "$current" = "$latest" ]; then
+    echo "✓ insta $latest already installed at $INSTALL_DIR/$BIN — up to date"
+    SKIP_DOWNLOAD=1
+  fi
+fi
+# other insta on PATH shadowing ours? (shells use the first hit)
+first_hit="$(command -v insta 2>/dev/null || true)"
+if [ -n "$first_hit" ] && [ "$first_hit" != "$INSTALL_DIR/$BIN" ]; then
+  echo "! another insta is first on your PATH: $first_hit"
+  case "$first_hit" in
+    */node_modules/*|*npm*|*/.nvm/*) echo "!   (npm-installed — update it with: npm update -g insta, or remove it to use the binary)" ;;
+  esac
+fi
+
 # ---- detect platform ----
 os="$(uname -s)"; arch="$(uname -m)"
 case "$os" in
@@ -46,6 +68,9 @@ case "$arch" in
 esac
 asset="insta-${os}-${arch}"
 
+if [ "${SKIP_DOWNLOAD:-0}" = "1" ]; then
+  :
+else
 # ---- resolve release URL ----
 version="${INSTA_VERSION:-latest}"
 if [ "$version" = "latest" ]; then
@@ -82,6 +107,7 @@ chmod +x "$tmp/$BIN"
 mv "$tmp/$BIN" "$INSTALL_DIR/$BIN"
 echo "✓ installed to $INSTALL_DIR/$BIN"
 "$INSTALL_DIR/$BIN" --version 2>/dev/null || true
+fi
 
 # ---- agent setup (--agents) ----
 if [ "$AGENTS" = "1" ]; then
@@ -103,3 +129,11 @@ case ":${PATH}:" in
     echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
     ;;
 esac
+
+
+# ---- next steps (the 3-command wow: real infra, then a full isolated clone of it) ----
+echo
+echo "Get started:"
+echo "  insta login --oauth github        # cloud — or run insta-oss locally and skip this"
+echo "  insta project create demo && insta deploy . --port 3000"
+echo "  insta branch create preview       # clones db + storage + app into an isolated env"
