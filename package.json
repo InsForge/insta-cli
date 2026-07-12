@@ -1,17 +1,37 @@
 {
   "name": "insta",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "type": "module",
   "description": "InstaCloud CLI — a thin client of the platform control-plane API.",
-  "keywords": ["insta", "insforge", "cli", "backend", "baas", "platform"],
+  "keywords": [
+    "insta",
+    "insforge",
+    "cli",
+    "backend",
+    "baas",
+    "platform"
+  ],
   "license": "Apache-2.0",
   "homepage": "https://github.com/InsForge/insta-cli#readme",
-  "repository": { "type": "git", "url": "git+https://github.com/InsForge/insta-cli.git" },
-  "bugs": { "url": "https://github.com/InsForge/insta-cli/issues" },
-  "bin": { "insta": "dist/index.js" },
-  "files": ["dist/**/*.js"],
-  "engines": { "node": ">=18" },
-  "publishConfig": { "access": "public" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/InsForge/insta-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/InsForge/insta-cli/issues"
+  },
+  "bin": {
+    "insta": "dist/index.js"
+  },
+  "files": [
+    "dist/**/*.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
