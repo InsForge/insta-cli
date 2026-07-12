@@ -1,6 +1,6 @@
 // CLI config: global (~/.insta/config.json: api url + tokens) and per-project (./.insta/project.json).
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 
 const GLOBAL_DIR = join(homedir(), '.insta')
@@ -37,15 +37,35 @@ export async function writeGlobal(c: GlobalConfig): Promise<void> {
   await writeFile(GLOBAL_FILE, JSON.stringify(c, null, 2))
 }
 
+/** Git-style ancestor lookup: the nearest directory at-or-above `cwd` containing
+ *  .insta/project.json — so "link once" works from any subdirectory of the project. */
+export async function findProjectRoot(cwd = process.cwd()): Promise<string | null> {
+  let dir = resolve(cwd)
+  for (;;) {
+    try {
+      await readFile(join(dir, PROJECT_DIR, PROJECT_FILE), 'utf8')
+      return dir
+    } catch { /* keep climbing */ }
+    const parent = dirname(dir)
+    if (parent === dir) return null // filesystem root
+    dir = parent
+  }
+}
+
 export async function readProject(cwd = process.cwd()): Promise<ProjectConfig | null> {
+  const root = await findProjectRoot(cwd)
+  if (!root) return null
   try {
-    return JSON.parse(await readFile(join(cwd, PROJECT_DIR, PROJECT_FILE), 'utf8')) as ProjectConfig
+    return JSON.parse(await readFile(join(root, PROJECT_DIR, PROJECT_FILE), 'utf8')) as ProjectConfig
   } catch {
     return null
   }
 }
 
+/** Writes to the existing project root when inside a linked project (branch switches from a
+ *  subdirectory must not mint a nested link); a fresh `link` in an unlinked tree writes to cwd. */
 export async function writeProject(c: ProjectConfig, cwd = process.cwd()): Promise<void> {
-  await mkdir(join(cwd, PROJECT_DIR), { recursive: true })
-  await writeFile(join(cwd, PROJECT_DIR, PROJECT_FILE), JSON.stringify(c, null, 2))
+  const target = (await findProjectRoot(cwd)) ?? cwd
+  await mkdir(join(target, PROJECT_DIR), { recursive: true })
+  await writeFile(join(target, PROJECT_DIR, PROJECT_FILE), JSON.stringify(c, null, 2))
 }
