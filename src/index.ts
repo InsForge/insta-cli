@@ -4,6 +4,7 @@ import { Command } from 'commander'
 import { ApiError } from './api.js'
 import { die } from './util.js'
 import * as auth from './commands/auth.js'
+import * as setup from './commands/setup.js'
 import * as org from './commands/org.js'
 import * as project from './commands/project.js'
 import * as branch from './commands/branch.js'
@@ -55,6 +56,12 @@ program.command('login').description('Log in with email + password, or --oauth <
   .action(guard((o) => auth.login(o)))
 program.command('logout').description('Log out and clear local tokens').action(guard(() => auth.logout()))
 program.command('status').description('Show login + linked project').option('--json').action(guard((o) => auth.status(o)))
+
+// ---- agent setup (the `curl … | sh --agents` target) ----
+const setupCmd = program.command('setup').description('Set up this machine for InstaCloud agent workflows')
+setupCmd.command('agent').description('Install the insta skill user-globally for all coding agents')
+  .option('-y, --yes', 'non-interactive')
+  .action(guard((o) => setup.setupAgent(o)))
 
 // ---- org ----
 const orgCmd = program.command('org').description('Manage organizations')

@@ -4,10 +4,27 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh
 #
+# Agent one-liner (installs the CLI AND sets up coding-agent skills, non-interactive):
+#   curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/agents.sh | sh
+#   (equivalent to piping this script with:  sh -s -- --agents -y)
+#
+# Flags:
+#   --agents   after installing, run `insta setup agent` (skills for Claude Code/Codex/Cursor/…)
+#   -y         non-interactive
+#
 # Options (env):
 #   INSTA_VERSION      release tag to install (e.g. v0.1.0); default: latest
 #   INSTA_INSTALL_DIR  install directory; default: $HOME/.insta/bin
 set -eu
+
+AGENTS=0
+YES=0
+for arg in "$@"; do
+  case "$arg" in
+    --agents) AGENTS=1 ;;
+    -y|--yes) YES=1 ;;
+  esac
+done
 
 REPO="InsForge/insta-cli"
 BIN="insta"
@@ -65,6 +82,17 @@ chmod +x "$tmp/$BIN"
 mv "$tmp/$BIN" "$INSTALL_DIR/$BIN"
 echo "✓ installed to $INSTALL_DIR/$BIN"
 "$INSTALL_DIR/$BIN" --version 2>/dev/null || true
+
+# ---- agent setup (--agents) ----
+if [ "$AGENTS" = "1" ]; then
+  echo
+  echo "setting up coding-agent skills …"
+  if [ "$YES" = "1" ]; then
+    "$INSTALL_DIR/$BIN" setup agent -y || echo "warn: agent setup failed — run: insta setup agent"
+  else
+    "$INSTALL_DIR/$BIN" setup agent || echo "warn: agent setup failed — run: insta setup agent"
+  fi
+fi
 
 # ---- PATH hint ----
 case ":${PATH}:" in
