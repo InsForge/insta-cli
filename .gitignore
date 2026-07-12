@@ -8,3 +8,10 @@ coverage/
 .insta/
 .claude/
 .codex/
+
+# repo-owned agent skills are tracked (installed/third-party skills stay ignored)
+!.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/developing-insta-cli/
