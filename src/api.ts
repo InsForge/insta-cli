@@ -1,7 +1,8 @@
 // Thin API client over the platform control-plane. Handles bearer auth + one-shot refresh on 401.
 // 2xx (including 202 approval_required) returns the parsed body; >=400 throws ApiError.
-import { readGlobal, writeGlobal, readProject, type GlobalConfig, type ProjectConfig } from './config.js'
-import { die } from './util.js'
+import { readGlobal, writeGlobal, readProject, writeProject, type GlobalConfig, type ProjectConfig } from './config.js'
+import { autoResolveProject, promptChoice, type ProjectItem } from './resolve-project.js'
+import { die, info } from './util.js'
 
 export class ApiError extends Error {
   constructor(public status: number, msg: string) { super(msg); this.name = 'ApiError' }
@@ -89,6 +90,27 @@ export async function linkedProject(): Promise<ProjectConfig | null> { return re
 // Resolve the linked project or exit with guidance.
 export async function requireProject(): Promise<ProjectConfig> {
   const p = await readProject()
-  if (!p) die('no linked project — run `insta project create <name>` or `insta project link <id>`')
-  return p
+  if (p) return p
+  // One command, just works: unlinked ≠ error. Resolve the project (auto when there's one,
+  // one-keystroke picker when several) and persist the choice so this happens once per dir.
+  const api = await ApiClient.load()
+  try {
+    const orgs = (await api.request<{ orgs: Array<{ id: string }> }>('GET', '/orgs')).orgs
+    const orgId = orgs[0]?.id ?? 'local'
+    return await autoResolveProject(orgId, {
+      listProjects: async () =>
+        (await api.request<{ projects: ProjectItem[] }>('GET', `/orgs/${orgId}/projects`)).projects,
+      promptChoice,
+      save: async (c) => {
+        await writeProject(c)
+        info(`auto-linked project ${c.projectId} → ./.insta/project.json`)
+      },
+      tty: !!process.stdin.isTTY && !!process.stderr.isTTY,
+    })
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) {
+      die('not logged in — run `insta login --oauth github` (cloud) or point INSTA_API_URL at your insta-oss daemon')
+    }
+    die(e instanceof Error ? e.message : String(e))
+  }
 }
