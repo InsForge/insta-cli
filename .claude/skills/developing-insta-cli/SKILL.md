@@ -31,11 +31,14 @@ npx tsx src/index.ts --help   # run the CLI from source
 1. **Bump**: PR changing `package.json` version (main is protected — never commit the bump directly). Merge it via the flow above.
 2. **Tag**: `git checkout main && git pull && git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. **Binaries (automatic)**: the `release` workflow builds 5 platform binaries + SHA256SUMS and publishes a GitHub Release. `install.sh`, `agents.sh`, and `insta upgrade` serve users from it immediately.
-4. **npm (MANUAL — do not assume CI does it)**: from a clean checkout at the tag, repo root:
+4. **npm (automatic on tag IF the `NPM_TOKEN` repo secret is set)**: the `publish-npm` job in
+   `release.yml` publishes with a granular automation token (`--provenance`). If that job fails
+   with "secret is not set", or for an out-of-band publish, the manual fallback — from a clean
+   checkout at the tag, repo root:
    ```bash
    npm publish --otp=<2FA code>   # prepublishOnly builds dist/; EOTP error = missing/expired code
    ```
-   Needs an npm account with publish rights on `insta` (2FA enforced). Verify with `npm view insta version`.
+   Verify either path with `npm view insta version`.
 5. Users on the binary channel update via `insta upgrade`; npm users via `npx insta@latest` / `npm update -g insta`.
 
 ## Gotchas
@@ -46,7 +49,7 @@ npx tsx src/index.ts --help   # run the CLI from source
 | John-bot ignored the request | Batched links — resend ONE link per message |
 | `npm error code EOTP` | Publish needs `--otp=<fresh 2FA code>` |
 | `npm publish` ENOENT package.json | Ran outside the repo root |
-| `npx insta@latest` behind the GH release | npm half not published — step 4 |
+| `npx insta@latest` behind the GH release | `publish-npm` job failed/skipped (NPM_TOKEN?) — see step 4 |
 | CLI hits the wrong server in tests | Persisted `~/.insta/config.json` apiUrl; set `INSTA_API_URL` (≥0.0.7) or move the config aside |
 
 ## Keep this skill true
