@@ -53,6 +53,15 @@ export async function findProjectRoot(cwd = process.cwd()): Promise<string | nul
 }
 
 export async function readProject(cwd = process.cwd()): Promise<ProjectConfig | null> {
+  // Linkless targeting (CI / one-offs / agents): INSTA_PROJECT_ID resolves the project with no
+  // link file, and beats one when both exist — an explicit parameter outranks ambient state.
+  if (process.env.INSTA_PROJECT_ID) {
+    return {
+      projectId: process.env.INSTA_PROJECT_ID,
+      orgId: process.env.INSTA_ORG_ID ?? '',
+      branch: process.env.INSTA_BRANCH ?? 'main',
+    }
+  }
   const root = await findProjectRoot(cwd)
   if (!root) return null
   try {
