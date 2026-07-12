@@ -5,6 +5,7 @@ import { ApiError } from './api.js'
 import { die } from './util.js'
 import * as auth from './commands/auth.js'
 import * as setup from './commands/setup.js'
+import * as runCmd from './commands/run.js'
 import * as org from './commands/org.js'
 import * as project from './commands/project.js'
 import * as branch from './commands/branch.js'
@@ -56,6 +57,12 @@ program.command('login').description('Log in with email + password, or --oauth <
   .action(guard((o) => auth.login(o)))
 program.command('logout').description('Log out and clear local tokens').action(guard(() => auth.logout()))
 program.command('status').description('Show login + linked project').option('--json').action(guard((o) => auth.status(o)))
+
+// ---- run (per-request secret injection — nothing written to disk) ----
+program.command('run <cmd> [args...]').description('Run a command with the branch credential bundle injected into its environment (no .env written)')
+  .option('--branch <b>', 'branch bundle to inject (default: linked branch)')
+  .passThroughOptions().allowUnknownOption()
+  .action(guard((cmd, args, o) => runCmd.run([cmd, ...(args ?? [])], o)))
 
 // ---- agent setup (the `curl … | sh --agents` target) ----
 const setupCmd = program.command('setup').description('Set up this machine for InstaCloud agent workflows')
