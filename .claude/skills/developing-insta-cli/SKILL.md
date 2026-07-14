@@ -52,6 +52,13 @@ npx tsx src/index.ts --help   # run the CLI from source
 | `npx insta@latest` behind the GH release | `publish-npm` job failed (OIDC trust/config?) — see step 4 |
 | CLI hits the wrong server in tests | Persisted `~/.insta/config.json` apiUrl; set `INSTA_API_URL` (≥0.0.7) or move the config aside |
 
+## agents.instacloud.com
+
+The onboarding domain is a CloudFront distribution edge-caching `agents.sh` from this repo's
+main branch (origin `raw.githubusercontent.com`, path rewrite → `/agents.sh`). After editing
+`agents.sh`, the edge can serve the old copy for up to ~24h — invalidate it:
+`aws cloudfront create-invalidation --distribution-id <the agents distro> --paths '/*'`.
+
 ## Keep this skill true
 
 Before you finish work in this repo: if anything you did or discovered changed the flows above —

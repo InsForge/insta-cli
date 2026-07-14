@@ -2,7 +2,10 @@
 #
 # InstaCloud agent setup installer — the one-liner for coding agents:
 #
-#     curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/agents.sh | sh
+#     curl -fsSL agents.instacloud.com | sh
+#
+# (agents.instacloud.com is a CloudFront edge cache of this file — same bytes, rate-limit-proof.
+#  The raw fallback also works: curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/agents.sh | sh)
 #
 # Thin shim (the Railway agents.sh pattern): exactly equivalent to
 #
