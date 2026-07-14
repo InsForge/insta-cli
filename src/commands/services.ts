@@ -1,6 +1,6 @@
 // `insta services` — manage a project's opt-in services (postgres | storage | compute).
 import { ApiClient, requireProject } from '../api.js'
-import { info, printJson, handleApproval } from '../util.js'
+import { info, printJson, handleApproval, renderNextActions } from '../util.js'
 
 export const SERVICE_TYPES = ['postgres', 'storage', 'compute'] as const
 export type ServiceType = (typeof SERVICE_TYPES)[number]
@@ -49,6 +49,7 @@ export async function servicesAdd(type: string, name: string): Promise<void> {
   if (handleApproval(res)) return
   const svc = res.body.service
   info(`added ${type} service ${name} (${svc.id})${svc.domain ? ` — ${svc.domain}` : ''}`)
+  renderNextActions(res.body.nextActions)
 }
 
 export async function servicesList(opts: { json?: boolean }): Promise<void> {

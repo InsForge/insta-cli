@@ -56,7 +56,7 @@ export class ApiClient {
   }
 
   private async fetch(method: string, path: string, body: unknown, auth: boolean): Promise<RawResult> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Insta-Hints': '1' }
     if (auth && this.cfg.accessToken) headers.Authorization = `Bearer ${this.cfg.accessToken}`
     const res = await fetch(this.apiUrl + path, {
       method,

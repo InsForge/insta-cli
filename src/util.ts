@@ -37,6 +37,34 @@ export function handleApproval(res: { status: number; body: any }): boolean {
   return false
 }
 
+export type NextAction = { op: string; reason: string; args?: Record<string, unknown>; gated?: boolean }
+
+// Neutral op → an `insta` command string. Unknown ops fall back to reason-only (no crash).
+const OP_COMMAND: Record<string, (a: Record<string, unknown>) => string> = {
+  'service.add': (a) => `insta services add ${a.type ?? '<type>'} ${a.name ?? '<name>'}`,
+  deploy: (a) => `insta deploy${a.branch ? ` --branch ${a.branch}` : ''}`,
+  'secrets.set': (a) => `insta secrets set ${a.name ?? '<NAME>'} ${a.value ?? '<value>'}`,
+  metrics: () => 'insta metrics',
+  logs: () => 'insta logs',
+  'approvals.approve': (a) => `insta approvals approve ${a.approvalId ?? '<id>'}`,
+}
+
+// Pure — builds the printable lines (unit-tested). Empty input → [].
+export function nextActionsLines(actions: NextAction[] | undefined): string[] {
+  if (!actions || actions.length === 0) return []
+  const lines = ['Next:']
+  for (const a of actions) {
+    const cmd = OP_COMMAND[a.op]?.(a.args ?? {})
+    const gated = a.gated ? '  [needs approval]' : ''
+    lines.push(cmd ? `  • ${a.reason}  →  ${cmd}${gated}` : `  • ${a.reason}${gated}`)
+  }
+  return lines
+}
+
+export function renderNextActions(actions: NextAction[] | undefined): void {
+  for (const line of nextActionsLines(actions)) info(line)
+}
+
 // Serialize a credential bundle to .env text. All values are double-quoted (connection strings
 // contain special chars); backslashes and quotes are escaped so dotenv parsers read them back exactly.
 export function serializeEnv(bundle: Record<string, string>): string {
