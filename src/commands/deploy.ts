@@ -1,7 +1,7 @@
 import { resolve, join } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { ApiClient, requireProject } from '../api.js'
-import { info, die, handleApproval } from '../util.js'
+import { info, die, handleApproval, renderNextActions } from '../util.js'
 import { flyctlBuildAndPush, ensureFlyctl } from '../flyctl-build.js'
 
 type DeployOpts = { image?: string; branch?: string; group?: string; port?: string; websocket?: boolean }
@@ -55,6 +55,7 @@ export async function deploy(dir: string | undefined, opts: DeployOpts): Promise
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/deploy`, deployRequestBody(image, branch, effOpts))
   if (handleApproval(res)) return
   info(`deployed ${image} -> ${res.body.url} (branch ${res.body.branch}, group ${res.body.group})`)
+  renderNextActions(res.body.nextActions)
 }
 
 // Source mode: mint a scoped Fly deploy token from the platform, then build+push <dir> (needs a

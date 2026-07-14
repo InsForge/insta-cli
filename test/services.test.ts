@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { assertType, parseCount, resolveServiceId, SERVICE_TYPES } from '../src/commands/services.js'
+import { assertType, parseCount, resolveServiceId, resolveComputeServiceId, SERVICE_TYPES } from '../src/commands/services.js'
 
 describe('assertType', () => {
   it('accepts valid service types', () => {
@@ -41,5 +41,25 @@ describe('resolveServiceId', () => {
   it('throws when not found', () => {
     expect(() => resolveServiceId(services, 'compute', 'nope')).toThrow(/service not found/)
     expect(() => resolveServiceId(services, 'storage', 'db')).toThrow(/service not found/)
+  })
+})
+
+describe('resolveComputeServiceId', () => {
+  const one = [{ id: 'a', type: 'postgres', name: 'db' }, { id: 'b', type: 'compute', name: 'api' }]
+  const two = [...one, { id: 'c', type: 'compute', name: 'worker' }]
+  it('returns the sole compute service when name is omitted', () => {
+    expect(resolveComputeServiceId(one)).toBe('b')
+  })
+  it('resolves by name', () => {
+    expect(resolveComputeServiceId(two, 'worker')).toBe('c')
+  })
+  it('errors when the named compute service is missing', () => {
+    expect(() => resolveComputeServiceId(two, 'nope')).toThrow(/compute service not found/)
+  })
+  it('errors on ambiguity when name omitted', () => {
+    expect(() => resolveComputeServiceId(two)).toThrow(/multiple compute services/)
+  })
+  it('errors when there is no compute service', () => {
+    expect(() => resolveComputeServiceId([{ id: 'a', type: 'postgres', name: 'db' }])).toThrow(/no compute service/)
   })
 })
