@@ -1,5 +1,6 @@
 import { ApiClient, requireProject } from '../api.js'
 import { info, printJson, handleApproval } from '../util.js'
+import { resolveComputeServiceId } from './services.js'
 
 type Opts = { branch?: string; group?: string; json?: boolean }
 
@@ -40,4 +41,33 @@ function printDomain(r: any, json?: boolean): void {
     for (const d of r.dns) info(`    ${String(d.type).padEnd(5)} ${d.name}  →  ${d.value}${d.note ? `   # ${d.note}` : ''}`)
   }
   if (!r.configured) info('  once DNS propagates, Fly issues the cert — re-check with `insta compute check-domain`')
+}
+
+// ---- lifecycle (start/stop/suspend/status) ----
+
+type LifeOpts = { json?: boolean }
+
+async function lifecycle(verb: 'start' | 'stop' | 'suspend', serviceName: string | undefined, opts: LifeOpts): Promise<void> {
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services`)
+  const id = resolveComputeServiceId(services, serviceName)
+  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/${verb}`)
+  if (handleApproval(res)) return
+  if (opts.json) return printJson(res.body)
+  info(`compute ${res.body.service?.name ?? id}: ${verb} → desired=${res.body.service?.desired_state} (live: ${res.body.state})`)
+}
+
+export const computeStart = (service: string | undefined, opts: LifeOpts) => lifecycle('start', service, opts)
+export const computeStop = (service: string | undefined, opts: LifeOpts) => lifecycle('stop', service, opts)
+export const computeSuspend = (service: string | undefined, opts: LifeOpts) => lifecycle('suspend', service, opts)
+
+export async function computeStatus(serviceName: string | undefined, opts: LifeOpts): Promise<void> {
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services`)
+  const id = resolveComputeServiceId(services, serviceName)
+  const r = await api.request('GET', `/projects/${p.projectId}/services/${id}/state`)
+  if (opts.json) return printJson(r)
+  info(`compute ${serviceName ?? id}: desired=${r.desiredState}  live=${r.state}`)
 }

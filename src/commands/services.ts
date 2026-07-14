@@ -26,6 +26,19 @@ export function resolveServiceId(services: Array<{ id: string; type: string; nam
   return svc.id
 }
 
+// Resolve a compute service id: by name, or the sole compute service when name is omitted.
+export function resolveComputeServiceId(services: Array<{ id: string; type: string; name: string }>, name?: string): string {
+  const compute = services.filter((s) => s.type === 'compute')
+  if (name) {
+    const svc = compute.find((s) => s.name === name)
+    if (!svc) throw new Error(`compute service not found: ${name}`)
+    return svc.id
+  }
+  if (compute.length === 0) throw new Error('no compute service in this project (add one with `insta services add compute <name>`)')
+  if (compute.length > 1) throw new Error(`multiple compute services — specify one: ${compute.map((s) => s.name).join(', ')}`)
+  return compute[0]!.id
+}
+
 // ---- commands ----
 
 export async function servicesAdd(type: string, name: string): Promise<void> {

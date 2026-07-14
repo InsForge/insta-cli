@@ -103,14 +103,22 @@ program.command('deploy [dir]').description('Deploy a source directory (built re
   .option('--websocket', 'run a WebSocket app (larger guest + connection-based concurrency)')
   .action(guard((dir, o) => deploy(dir, o)))
 
-// ---- compute custom domains (bring your own domain → Fly cert + routing) ----
-const compute = program.command('compute').description('Compute custom domains (bring your own domain)')
+// ---- compute (lifecycle control + custom domains) ----
+const compute = program.command('compute').description('Control compute lifecycle (start/stop/suspend/status) + custom domains')
 compute.command('set-domain <host>').description('Attach a custom domain to a branch compute service (gated: deploy)')
   .option('--branch <b>').option('--group <g>').option('--json').action(guard((host, o) => computeCmd.setDomain(host, o)))
 compute.command('check-domain <host>').description("Show a custom domain's cert status + required DNS records")
   .option('--branch <b>').option('--group <g>').option('--json').action(guard((host, o) => computeCmd.checkDomain(host, o)))
 compute.command('remove-domain <host>').description('Detach a custom domain (gated: deploy)')
   .option('--branch <b>').option('--group <g>').action(guard((host, o) => computeCmd.removeDomain(host, o)))
+compute.command('start [service]').description('Bring a compute service online (persistent — re-enables auto-wake)')
+  .option('--json').action(guard((service, o) => computeCmd.computeStart(service, o)))
+compute.command('stop [service]').description('Take a compute service offline; traffic will NOT wake it until `start`')
+  .option('--json').action(guard((service, o) => computeCmd.computeStop(service, o)))
+compute.command('suspend [service]').description('Suspend a compute service (RAM snapshot); stays down until `start`')
+  .option('--json').action(guard((service, o) => computeCmd.computeSuspend(service, o)))
+compute.command('status [service]').description("Show a compute service's desired vs. live state")
+  .option('--json').action(guard((service, o) => computeCmd.computeStatus(service, o)))
 
 // ---- manifest ----
 program.command('manifest').description('Print an agent-legible view of the project environments').option('--json').action(guard((o) => manifest(o)))
