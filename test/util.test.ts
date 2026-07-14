@@ -45,4 +45,12 @@ describe('nextActionsLines', () => {
     expect(nextActionsLines(undefined)).toEqual([])
     expect(nextActionsLines([])).toEqual([])
   })
+
+  it('renders metrics/logs hints with the compute target (runnable command)', () => {
+    const metricsLines = nextActionsLines([{ op: 'metrics', reason: 'Check metrics.', args: { projectId: 'pr_1' } }])
+    expect(metricsLines.join('\n')).toContain('insta metrics compute')
+
+    const logsLines = nextActionsLines([{ op: 'logs', reason: 'Check logs.', args: { projectId: 'pr_1' } }])
+    expect(logsLines.join('\n')).toContain('insta logs compute')
+  })
 })

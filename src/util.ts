@@ -44,8 +44,8 @@ const OP_COMMAND: Record<string, (a: Record<string, unknown>) => string> = {
   'service.add': (a) => `insta services add ${a.type ?? '<type>'} ${a.name ?? '<name>'}`,
   deploy: (a) => `insta deploy${a.branch ? ` --branch ${a.branch}` : ''}`,
   'secrets.set': (a) => `insta secrets set ${a.name ?? '<NAME>'} ${a.value ?? '<value>'}`,
-  metrics: () => 'insta metrics',
-  logs: () => 'insta logs',
+  metrics: (a) => `insta metrics ${a.target ?? 'compute'}`,
+  logs: (a) => `insta logs ${a.target ?? 'compute'}`,
   'approvals.approve': (a) => `insta approvals approve ${a.approvalId ?? '<id>'}`,
 }
 
