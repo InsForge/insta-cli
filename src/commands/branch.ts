@@ -1,12 +1,13 @@
 import { ApiClient, requireProject } from '../api.js'
 import { writeProject } from '../config.js'
-import { info, die, printJson, handleApproval } from '../util.js'
+import { info, die, printJson, handleApproval, renderNextActions } from '../util.js'
 
 export async function branchCreate(name: string, opts: { from?: string }): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
   const out = await api.request('POST', `/projects/${p.projectId}/branches`, { name, from: opts.from ?? p.branch })
   info(`created branch ${out.branch.name} (${out.branch.id})`)
+  renderNextActions(out.nextActions)
 }
 
 export async function branchList(opts: { json?: boolean }): Promise<void> {

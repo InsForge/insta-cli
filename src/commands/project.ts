@@ -1,6 +1,6 @@
 import { ApiClient, requireProject } from '../api.js'
 import { writeProject } from '../config.js'
-import { info, die, printJson, handleApproval } from '../util.js'
+import { info, die, printJson, handleApproval, renderNextActions } from '../util.js'
 import { installObserve } from '../observe/install.js'
 import { installSkills } from '../ensure-skills.js'
 
@@ -27,6 +27,7 @@ export async function projectCreate(name: string, opts: { org?: string }): Promi
   info(`created project ${out.project.id} (${name})`)
   info(`  resources: ${out.resources.map((r: any) => r.kind).join(', ')}`)
   info(`  linked ./.insta/project.json (branch ${out.defaultBranch.name})`)
+  renderNextActions(out.nextActions)
   tryInstallObserve()
   await installSkills({ cwd: process.cwd() })
 }
