@@ -82,8 +82,11 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-echo "Installing $BIN ($asset, $version)…"
-curl -fsSL "$base/$asset" -o "$tmp/$BIN" || { echo "error: download failed ($base/$asset)" >&2; exit 1; }
+echo "Installing $BIN ($asset, $version) — downloading ~60MB…"
+# --progress-bar (not -s): the binary is ~60MB, so a silent download looks frozen. Show progress
+# to a TTY; stay quiet when piped without one. Keep the tiny SHA256SUMS fetch silent.
+if [ -t 2 ]; then dl="curl -fL --progress-bar"; else dl="curl -fsSL"; fi
+$dl "$base/$asset" -o "$tmp/$BIN" || { echo "error: download failed ($base/$asset)" >&2; exit 1; }
 curl -fsSL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS" || { echo "error: could not fetch SHA256SUMS" >&2; exit 1; }
 
 # ---- verify checksum ----
