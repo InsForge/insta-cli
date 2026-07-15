@@ -18,7 +18,10 @@ export type GlobalConfig = {
 
 export type ProjectConfig = { projectId: string; orgId: string; branch: string }
 
-const DEFAULT_API = 'https://beta-api.insta.insforge.dev'
+// The cloud API default. Uses the instacloud.com brand domain (matches the agents.instacloud.com
+// onboarding), NOT the legacy beta-api.insta.insforge.dev host — same backend, branded domain.
+// Only affects fresh installs: a persisted apiUrl (from a prior login) or INSTA_API_URL wins below.
+const DEFAULT_API = 'https://api.instacloud.com'
 
 export async function readGlobal(): Promise<GlobalConfig> {
   // INSTA_API_URL overrides the persisted apiUrl, not just the default — otherwise the
