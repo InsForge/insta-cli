@@ -56,9 +56,13 @@ export async function installSkills(deps: Deps): Promise<void> {
   const run = deps.run ?? defaultRunner
   const print = deps.print ?? ((s: string) => process.stdout.write(s + '\n'))
   try {
-    print('  installing related agent skills (insta, neon-postgres, tigris, better-auth) via `npx skills add` …')
+    print('  installing related agent skills (insta, neon-postgres, tigris, better-auth) …')
     for (const s of SKILLS) {
-      const r = await run('npx', s.args, true) // streamed so the user sees download progress
+      // Don't stream: the `skills` tool's clack UI (clone spinner, banners) is noise. Run it
+      // silent (stdio 'ignore') and let the per-skill ✓/failed line below be the clean output —
+      // it appears as each skill finishes, so there's still live progress. (Also avoids the
+      // child inheriting a piped stdin.)
+      const r = await run('npx', s.args)
       print(r.ok ? `  ${s.label} ✓` : `  ${s.label} failed — add manually: npx ${s.args.join(' ')}`)
     }
     const added = ensureGitignore(deps.cwd, SKILL_DIRS)
