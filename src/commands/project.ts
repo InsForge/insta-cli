@@ -1,14 +1,26 @@
-import { createInterface } from 'node:readline/promises'
+import { homedir } from 'node:os'
 import { ApiClient, requireProject } from '../api.js'
 import { writeProject } from '../config.js'
 import { info, die, printJson, handleApproval, renderNextActions } from '../util.js'
 import { installObserve } from '../observe/install.js'
 import { installSkills } from '../ensure-skills.js'
 
-// Interactive name prompt (stderr, so piped stdout stays clean). Enter accepts the default.
-async function promptName(question: string, def: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stderr })
-  try { return (await rl.question(`${question} [${def}]: `)).trim() } finally { rl.close() }
+// Generic directory names that make a useless project name ("projects", "~", "tmp", …). When the
+// cwd basename is one of these we auto-generate a friendly name instead of using it.
+const GENERIC_DIRS = new Set([
+  'projects', 'project', 'home', 'tmp', 'temp', 'desktop', 'documents', 'downloads',
+  'src', 'source', 'code', 'dev', 'work', 'workspace', 'repos', 'repo', 'git',
+  'app', 'apps', 'users', 'user', 'bin', 'new', 'test', 'tests',
+])
+const ADJ = ['swift', 'brave', 'calm', 'bright', 'bold', 'quiet', 'warm', 'keen', 'wise',
+  'lucky', 'sunny', 'cosmic', 'gentle', 'rapid', 'vivid', 'amber', 'crisp', 'noble']
+const NOUN = ['otter', 'falcon', 'maple', 'river', 'harbor', 'meadow', 'comet', 'cedar', 'lark',
+  'delta', 'summit', 'ember', 'willow', 'pixel', 'forge', 'harbor', 'atlas', 'quartz']
+
+/** A friendly auto-generated name like `swift-meadow-482` (Vercel/Render style). */
+export function generateProjectName(rand: () => number = Math.random): string {
+  const pick = (a: string[]) => a[Math.floor(rand() * a.length)]
+  return `${pick(ADJ)}-${pick(NOUN)}-${100 + Math.floor(rand() * 900)}`
 }
 
 // Best-effort: wire the credential-audit hook into the project (no-op if assets aren't built).
@@ -31,23 +43,26 @@ export function slugifyName(raw: string): string {
   return raw.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)
 }
 
-/** Name resolution so the recommended one-liner (`insta project create`, no arg) is paste-and-run:
- *  explicit arg wins; else prompt with the cwd basename as default (TTY); else use the basename. */
+/** Name resolution so `insta project create` (no arg) NEVER blocks on a prompt — the whole point
+ *  of a paste-and-run one-liner. Explicit arg wins; else use the cwd basename when it's a real
+ *  project-dir name; else auto-generate a friendly name (e.g. in ~/projects, where the basename
+ *  "projects" is useless). You can always pass a name or rename later. */
 export async function resolveProjectName(
   nameArg: string | undefined,
   cwd = process.cwd(),
-  prompt?: (question: string, def: string) => Promise<string>,
+  generate: () => string = generateProjectName,
 ): Promise<string> {
-  const fromDir = slugifyName(cwd.split('/').filter(Boolean).pop() ?? 'app') || 'app'
   if (nameArg) return slugifyName(nameArg)
-  if (prompt && process.stdin.isTTY) return slugifyName((await prompt('project name', fromDir)) || fromDir) || fromDir
-  return fromDir
+  const base = slugifyName(cwd.split('/').filter(Boolean).pop() ?? '')
+  const home = slugifyName(homedir().split('/').filter(Boolean).pop() ?? '')
+  if (base && base !== home && !GENERIC_DIRS.has(base)) return base
+  return generate()
 }
 
 export async function projectCreate(name: string | undefined, opts: { org?: string }): Promise<void> {
   const api = await ApiClient.load()
   const orgId = await resolveOrg(api, opts.org)
-  const resolved = await resolveProjectName(name, process.cwd(), promptName)
+  const resolved = await resolveProjectName(name, process.cwd())
   const out = await api.request('POST', `/orgs/${orgId}/projects`, { name: resolved })
   await writeProject({ projectId: out.project.id, orgId, branch: out.defaultBranch.name })
   info(`created project ${out.project.id} (${resolved})`)
