@@ -48,10 +48,17 @@ fi
 # other insta on PATH shadowing ours? (shells use the first hit)
 first_hit="$(command -v insta 2>/dev/null || true)"
 if [ -n "$first_hit" ] && [ "$first_hit" != "$INSTALL_DIR/$BIN" ]; then
-  echo "! another insta is first on your PATH: $first_hit"
-  case "$first_hit" in
-    */node_modules/*|*npm*|*/.nvm/*) echo "!   (npm-installed — update it with: npm update -g insta, or remove it to use the binary)" ;;
-  esac
+  # Not a conflict if the first hit is just the symlink WE created into an on-PATH dir
+  # (see the linking step below) — it resolves straight back to our binary. Warn only for a
+  # genuinely different insta (e.g. an npm-installed one) that would actually shadow ours.
+  if [ -L "$first_hit" ] && [ "$(readlink "$first_hit" 2>/dev/null)" = "$INSTALL_DIR/$BIN" ]; then
+    : # our own symlink → the binary; nothing to warn about
+  else
+    echo "! another insta is first on your PATH: $first_hit"
+    case "$first_hit" in
+      */node_modules/*|*npm*|*/.nvm/*) echo "!   (npm-installed — update it with: npm update -g insta, or remove it to use the binary)" ;;
+    esac
+  fi
 fi
 
 # ---- detect platform ----
@@ -168,7 +175,10 @@ fi
 
 # ---- next steps (the 3-command wow: real infra, then a full isolated clone of it) ----
 echo
-echo "Get started:"
-echo "  insta login --oauth github        # cloud — or run insta-oss locally and skip this"
-echo "  insta project create demo && insta deploy . --port 3000"
-echo "  insta branch create preview       # clones db + storage + app into an isolated env"
+echo "Next steps:"
+echo "  insta login --oauth github     # connect to the cloud (or run insta-oss locally to skip)"
+echo "  insta project create demo      # postgres + storage + compute, provisioned in one shot"
+echo "  insta deploy . --port 3000     # ship your app and get a live URL"
+echo "  insta branch create preview    # clone db + storage + app into an isolated env"
+echo
+echo "Your coding agents now know InstaCloud — you can just ask them to do the above."
