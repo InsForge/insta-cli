@@ -139,7 +139,7 @@ fi
 # ---- agent setup (--agents) ----
 if [ "$AGENTS" = "1" ]; then
   echo
-  echo "setting up coding-agent skills …"
+  # `insta setup agent` prints its own "setting up coding-agent skills …" line + clean summary.
   if [ "$YES" = "1" ]; then
     "$INSTALL_DIR/$BIN" setup agent -y || echo "warn: agent setup failed — run: insta setup agent"
   else
