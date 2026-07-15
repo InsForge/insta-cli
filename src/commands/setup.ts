@@ -73,12 +73,15 @@ export function summarizeInstall(output: string): string {
 
 export type Runner = (cmd: string, args: string[]) => Promise<{ ok: boolean; output?: string }>
 
-// Capture stdout+stderr silently (don't stream) so we can print our own clean summary. We keep
-// the child's stdin inherited in case the tool ever needs a TTY, but with -y it shouldn't.
+// Capture stdout+stderr silently (don't stream) so we can print our own clean summary.
+// stdin is 'ignore', NOT 'inherit': under the canonical `curl … | sh` install, stdin is the
+// piped install script itself — a child that inherits it (npx/skills reads for keypresses even
+// with -y) consumes the rest of the script, so the shell never runs the trailing "Get started"
+// guidance. Ignoring stdin keeps the installer's own output intact. (-y means no prompt anyway.)
 const defaultRunner: Runner = (cmd, args) =>
   new Promise((resolve) => {
     const env = { ...process.env, AI_AGENT: process.env.AI_AGENT || 'insta', FORCE_COLOR: '0' }
-    const p = spawn(cmd, args, { stdio: ['inherit', 'pipe', 'pipe'], env })
+    const p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], env })
     let output = ''
     const grab = (chunk: Buffer) => { output += chunk.toString() }
     p.stdout?.on('data', grab)
@@ -95,7 +98,7 @@ export async function setupAgent(opts: { yes?: boolean }, run: Runner = defaultR
   if (!opts.yes && !process.stdout.isTTY) {
     info('non-interactive shell — assuming -y')
   }
-  info('setting up coding-agent skills … (~20s)')
+  info('setting up coding-agent skills …')
   const res = await run('npx', SETUP_ARGS)
   if (!res.ok) {
     info('  skill install failed — install manually with:')
