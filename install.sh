@@ -119,6 +119,23 @@ echo "✓ installed to $INSTALL_DIR/$BIN"
 "$INSTALL_DIR/$BIN" --version 2>/dev/null || true
 fi
 
+# ---- make `insta` immediately runnable in THIS shell ----
+# The recommended one-liner is `curl … | sh && insta …`, so the binary must be callable in the
+# current shell right away — a piped script can't edit the parent's PATH. If a directory that's
+# already on PATH is writable (macOS /usr/local/bin, or ~/.local/bin), symlink there so `insta`
+# just works with no profile reload. (This is why installing only to ~/.insta/bin fails.)
+if [ "${SKIP_DOWNLOAD:-0}" != "1" ] || [ ! -e "$INSTALL_DIR/$BIN" ]; then :; fi
+ON_PATH=0
+case ":${PATH}:" in *":$INSTALL_DIR:"*) ON_PATH=1 ;; esac
+LINKED=""
+if [ "$ON_PATH" != "1" ]; then
+  for d in /usr/local/bin "$HOME/.local/bin"; do
+    case ":${PATH}:" in *":$d:"*) ;; *) continue ;; esac   # must already be on PATH
+    [ -d "$d" ] && [ -w "$d" ] || continue                  # …and writable (no sudo)
+    ln -sf "$INSTALL_DIR/$BIN" "$d/$BIN" && LINKED="$d/$BIN" && break
+  done
+fi
+
 # ---- agent setup (--agents) ----
 if [ "$AGENTS" = "1" ]; then
   echo
@@ -130,15 +147,23 @@ if [ "$AGENTS" = "1" ]; then
   fi
 fi
 
-# ---- PATH hint ----
-case ":${PATH}:" in
-  *":$INSTALL_DIR:"*) ;;
-  *)
-    echo
-    echo "Add $BIN to your PATH by adding this to your shell profile (~/.zshrc, ~/.bashrc):"
-    echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
-    ;;
-esac
+# ---- PATH: confirm reachable, or tell the user exactly how (incl. THIS shell) ----
+if [ "$ON_PATH" = "1" ]; then
+  : # already on PATH
+elif [ -n "$LINKED" ]; then
+  echo "✓ linked → $LINKED (on your PATH)"
+  command -v hash >/dev/null 2>&1 && hash -r 2>/dev/null || true  # drop any cached 'not found'
+else
+  # No writable PATH dir — persist for new shells, and make THIS shell work now.
+  for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+    [ -e "$rc" ] || continue
+    grep -q "$INSTALL_DIR" "$rc" 2>/dev/null || printf '\nexport PATH="%s:$PATH"\n' "$INSTALL_DIR" >> "$rc"
+  done
+  echo
+  echo "Added $BIN to your PATH for new shells. For THIS shell, run:"
+  echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
+  echo "(the recommended \`… | sh && insta …\` one-liner needs \`insta\` on PATH — the line above enables it here)"
+fi
 
 
 # ---- next steps (the 3-command wow: real infra, then a full isolated clone of it) ----
