@@ -19,6 +19,23 @@ npx tsx src/index.ts --help   # run the CLI from source
 - `project create|link` has side effects in cwd (`.insta/`, observe hook, agent skills) — exercise them only in scratch dirs.
 - End-to-end without the cloud: run the insta-oss daemon and point the CLI at it with `INSTA_API_URL` (env wins over persisted config since v0.0.7).
 
+## Architecture (`src/`)
+
+| Path | Responsibility |
+|------|----------------|
+| `index.ts` | commander program — registers every command |
+| `api.ts` | typed platform-API client (auth headers, token refresh, error mapping) |
+| `config.ts` | global `~/.insta/config.json` (apiUrl + tokens + user) · project `./.insta/project.json` (projectId / orgId / current branch) |
+| `commands/` | one file per command group: `auth` `org` `project` `services` `branch` `secrets` `deploy` `compute` `upgrade` `metrics` (+`logs`) `billing` `govern` (policy/approvals) `manifest` `observe` |
+| `observe/` | local `insta observe` hook — `scanner.ts` (AWS/GitHub/Stripe/LLM/DB cred detection), `hook.ts`, `install.ts`, `report.ts` (→ platform event ingest) |
+| `flyctl-build.ts` | source-directory deploy build glue (Fly build context) |
+| `ensure-skills.ts` | installs/refreshes the agent skills into the user's project |
+| `util.ts` | shared helpers |
+
+- **Command/flag changes must be mirrored in `skills/insta/cli-reference.md`** (the superproject
+  `skills/` submodule) — that reference doc is how agents learn the CLI surface, so a new or
+  renamed command/flag is only half-done until it's updated there, in the same change set.
+
 ## Getting a PR merged (main is protected — this exact flow, no other works)
 
 1. Branch from `origin/main`: `feat/*` or `fix/*`. PRs target `main`. **Squash merge.**
