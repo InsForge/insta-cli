@@ -61,10 +61,15 @@ jobs:
         with:
           path: dist-bin
           merge-multiple: true # flatten all per-target artifacts into one dir
-      - name: Checksums
+      - name: Checksums + compress
         run: |
           cd dist-bin
+          # Checksum the RAW binaries first — install.sh verifies the DECOMPRESSED artifact
+          # (what actually runs), so SHA256SUMS lists raw-binary hashes.
           sha256sum insta-* > SHA256SUMS
+          # gzip the unix binaries (~60MB → ~20MB download). Leave the Windows .exe raw
+          # (manual download). install.sh fetches <asset>.gz and gunzips.
+          for f in insta-darwin-* insta-linux-*; do gzip -f "$f"; done
           ls -lh
           cat SHA256SUMS
       - name: Resolve tag
