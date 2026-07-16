@@ -95,12 +95,15 @@ br.command('merge <source>').description('Merge a branch service set into anothe
 const svc = program.command('services').alias('svc').description('Manage project services (postgres|storage|compute)')
 svc.command('add <type> <name>').description('Provision a service on demand (assigns a default domain for postgres/compute)')
   .option('--branch <branch>', 'target branch (default: current)')
+  .option('--public', 'storage only: serve the bucket with anonymous public-read (default private)')
   .action(guard((type, name, o) => services.servicesAdd(type, name, o)))
 svc.command('list').option('--json').option('--branch <branch>', 'branch (default: current)')
   .action(guard((o) => services.servicesList(o)))
 svc.command('remove <type> <name>').description('Remove a service and destroy its resources')
   .option('--branch <branch>', 'branch (default: current)')
   .action(guard((type, name, o) => services.servicesRemove(type, name, o)))
+svc.command('set-access <type> <name> <access>').description('Set a storage service bucket access mode (access: public|private)')
+  .option('--json').action(guard((type, name, access, o) => services.servicesSetAccess(type, name, access, o)))
 svc.command('scale <type> <name> <number> [region]').description('Set a compute service machine count (paid plans only)')
   .option('--json').action(guard((type, name, number, region, o) => services.servicesScale(type, name, number, region, o)))
 svc.command('upgrade <type> <name> <spec>').description('Change a compute/postgres service spec (paid plans only)')
@@ -181,7 +184,7 @@ ob.command('sync').description('Upload findings into the project timeline').acti
 // ---- policy ----
 const pol = program.command('policy').description('Governance policy')
 pol.command('get').option('--json').action(guard((o) => govern.policyGet(o)))
-pol.command('set <action> <decision>').description('action: secrets.read|secrets.write|deploy|project.delete|branch.delete|service.add|service.remove|service.scale|service.upgrade; decision: allow|deny|approve').action(guard((a, d) => govern.policySet(a, d)))
+pol.command('set <action> <decision>').description('action: secrets.read|secrets.write|deploy|project.delete|branch.delete|service.add|service.remove|service.scale|service.upgrade|service.setAccess; decision: allow|deny|approve').action(guard((a, d) => govern.policySet(a, d)))
 
 // ---- self-update ----
 program.command('upgrade').description('Update the insta CLI to the latest release (binary or npm install)')

@@ -45,15 +45,17 @@ export function resolveComputeServiceId(services: Array<{ id: string; type: stri
 
 // ---- commands ----
 
-export async function servicesAdd(type: string, name: string, opts: { branch?: string } = {}): Promise<void> {
+export async function servicesAdd(type: string, name: string, opts: { branch?: string; public?: boolean } = {}): Promise<void> {
   assertType(type)
+  if (opts.public && type !== 'storage') throw new Error('--public is only valid for storage services')
   const api = await ApiClient.load()
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
-  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services`, { type, name, ...(branch ? { branch } : {}) })
+  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services`, { type, name, ...(branch ? { branch } : {}), public: !!opts.public })
   if (handleApproval(res)) return
   const svc = res.body.service
-  info(`added ${type} service ${name} on ${branch ?? 'default'} (${svc.id})${svc.domain ? ` — ${svc.domain}` : ''}`)
+  const access = svc.type === 'storage' ? `  [${svc.public ? 'public' : 'private'}]` : ''
+  info(`added ${type} service ${name} on ${branch ?? 'default'} (${svc.id})${access}${svc.domain ? ` — ${svc.domain}` : ''}`)
   renderNextActions(res.body.nextActions)
 }
 
@@ -65,7 +67,7 @@ export async function servicesList(opts: { json?: boolean; branch?: string }): P
   if (opts.json) return printJson(services)
   if (!services.length) return info(`(no services on ${branch ?? 'default'} — add one with \`insta services add <postgres|storage|compute> <name>\`)`)
   for (const s of services) {
-    const extra = s.type === 'compute' ? `  x${s.machine_count}` : ''
+    const extra = s.type === 'compute' ? `  x${s.machine_count}` : s.type === 'storage' ? `  ${s.public ? 'public' : 'private'}` : ''
     info(`${s.type}/${s.name}  [${s.status}]${extra}${s.domain ? `  ${s.domain}` : ''}  ${s.id}`)
   }
 }
@@ -80,6 +82,27 @@ export async function servicesRemove(type: string, name: string, opts: { branch?
   const res = await api.rawRequest('DELETE', `/projects/${p.projectId}/services/${id}`)
   if (handleApproval(res)) return
   info(`removed ${type} service ${name} from ${branch ?? 'default'}`)
+}
+
+// Validate a bucket access-mode argument.
+export function parseAccess(raw: string): boolean {
+  if (raw === 'public') return true
+  if (raw === 'private') return false
+  throw new Error(`access must be public|private, got: ${raw}`)
+}
+
+// insta services set-access storage <name> <public|private>
+export async function servicesSetAccess(type: string, name: string, access: string, _opts: { json?: boolean }): Promise<void> {
+  assertType(type, ['storage'])
+  const isPublic = parseAccess(access)
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(p.branch)}`)
+  const id = resolveServiceId(services, type, name)
+  const res = await api.rawRequest('PUT', `/projects/${p.projectId}/services/${id}/access`, { public: isPublic })
+  if (handleApproval(res)) return
+  if (_opts.json) return printJson(res.body.service)
+  info(`set storage ${name} access to ${access}`)
 }
 
 // insta services scale compute <name> <number> [region]

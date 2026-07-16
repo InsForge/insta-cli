@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { assertType, parseCount, resolveServiceId, resolveComputeServiceId, SERVICE_TYPES } from '../src/commands/services.js'
+import { assertType, parseCount, parseAccess, resolveServiceId, resolveComputeServiceId, SERVICE_TYPES } from '../src/commands/services.js'
 
 describe('assertType', () => {
   it('accepts valid service types', () => {
@@ -25,6 +25,18 @@ describe('parseCount', () => {
     expect(() => parseCount('-2')).toThrow(/positive integer/)
     expect(() => parseCount('2.5')).toThrow(/positive integer/)
     expect(() => parseCount('abc')).toThrow(/positive integer/)
+  })
+})
+
+describe('parseAccess', () => {
+  it('maps public/private to a boolean', () => {
+    expect(parseAccess('public')).toBe(true)
+    expect(parseAccess('private')).toBe(false)
+  })
+  it('rejects anything else', () => {
+    expect(() => parseAccess('open')).toThrow(/public\|private/)
+    expect(() => parseAccess('')).toThrow(/public\|private/)
+    expect(() => parseAccess('Public')).toThrow(/public\|private/)
   })
 })
 
