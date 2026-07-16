@@ -5,6 +5,10 @@ import { info, printJson, handleApproval, renderNextActions } from '../util.js'
 export const SERVICE_TYPES = ['postgres', 'storage', 'compute'] as const
 export type ServiceType = (typeof SERVICE_TYPES)[number]
 
+export function q(branch?: string): string {
+  return branch ? `?branch=${encodeURIComponent(branch)}` : ''
+}
+
 // ---- pure, unit-tested helpers (throw plain Errors; the CLI guard turns them into clean output) ----
 
 // Validate a service-type argument against the allowed set for a command.
@@ -41,40 +45,43 @@ export function resolveComputeServiceId(services: Array<{ id: string; type: stri
 
 // ---- commands ----
 
-export async function servicesAdd(type: string, name: string, opts: { public?: boolean } = {}): Promise<void> {
+export async function servicesAdd(type: string, name: string, opts: { branch?: string; public?: boolean } = {}): Promise<void> {
   assertType(type)
   if (opts.public && type !== 'storage') throw new Error('--public is only valid for storage services')
   const api = await ApiClient.load()
   const p = await requireProject()
-  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services`, { type, name, public: !!opts.public })
+  const branch = opts.branch ?? p.branch
+  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services`, { type, name, ...(branch ? { branch } : {}), public: !!opts.public })
   if (handleApproval(res)) return
   const svc = res.body.service
   const access = svc.type === 'storage' ? `  [${svc.public ? 'public' : 'private'}]` : ''
-  info(`added ${type} service ${name} (${svc.id})${access}${svc.domain ? ` — ${svc.domain}` : ''}`)
+  info(`added ${type} service ${name} on ${branch ?? 'default'} (${svc.id})${access}${svc.domain ? ` — ${svc.domain}` : ''}`)
   renderNextActions(res.body.nextActions)
 }
 
-export async function servicesList(opts: { json?: boolean }): Promise<void> {
+export async function servicesList(opts: { json?: boolean; branch?: string }): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
-  const { services } = await api.request('GET', `/projects/${p.projectId}/services`)
+  const branch = opts.branch ?? p.branch
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
   if (opts.json) return printJson(services)
-  if (!services.length) return info('(no services — add one with `insta services add <postgres|storage|compute> <name>`)')
+  if (!services.length) return info(`(no services on ${branch ?? 'default'} — add one with \`insta services add <postgres|storage|compute> <name>\`)`)
   for (const s of services) {
     const extra = s.type === 'compute' ? `  x${s.machine_count}` : s.type === 'storage' ? `  ${s.public ? 'public' : 'private'}` : ''
     info(`${s.type}/${s.name}  [${s.status}]${extra}${s.domain ? `  ${s.domain}` : ''}  ${s.id}`)
   }
 }
 
-export async function servicesRemove(type: string, name: string): Promise<void> {
+export async function servicesRemove(type: string, name: string, opts: { branch?: string } = {}): Promise<void> {
   assertType(type)
   const api = await ApiClient.load()
   const p = await requireProject()
-  const { services } = await api.request('GET', `/projects/${p.projectId}/services`)
+  const branch = opts.branch ?? p.branch
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
   const id = resolveServiceId(services, type, name)
   const res = await api.rawRequest('DELETE', `/projects/${p.projectId}/services/${id}`)
   if (handleApproval(res)) return
-  info(`removed ${type} service ${name}`)
+  info(`removed ${type} service ${name} from ${branch ?? 'default'}`)
 }
 
 // Validate a bucket access-mode argument.
@@ -90,7 +97,7 @@ export async function servicesSetAccess(type: string, name: string, access: stri
   const isPublic = parseAccess(access)
   const api = await ApiClient.load()
   const p = await requireProject()
-  const { services } = await api.request('GET', `/projects/${p.projectId}/services`)
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(p.branch)}`)
   const id = resolveServiceId(services, type, name)
   const res = await api.rawRequest('PUT', `/projects/${p.projectId}/services/${id}/access`, { public: isPublic })
   if (handleApproval(res)) return
@@ -99,12 +106,12 @@ export async function servicesSetAccess(type: string, name: string, access: stri
 }
 
 // insta services scale compute <name> <number> [region]
-export async function servicesScale(type: string, name: string, number: string, region: string | undefined, _opts: { json?: boolean }): Promise<void> {
+export async function servicesScale(type: string, name: string, number: string, region: string | undefined, _opts: { json?: boolean; branch?: string }): Promise<void> {
   assertType(type, ['compute'])
   const machineCount = parseCount(number)
   const api = await ApiClient.load()
   const p = await requireProject()
-  const { services } = await api.request('GET', `/projects/${p.projectId}/services`)
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(_opts.branch ?? p.branch)}`)
   const id = resolveServiceId(services, type, name)
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/scale`, { machineCount, region })
   if (handleApproval(res)) return
@@ -113,11 +120,11 @@ export async function servicesScale(type: string, name: string, number: string, 
 }
 
 // insta services upgrade <compute|postgres> <name> <new-spec>
-export async function servicesUpgrade(type: string, name: string, spec: string, _opts: { json?: boolean }): Promise<void> {
+export async function servicesUpgrade(type: string, name: string, spec: string, _opts: { json?: boolean; branch?: string }): Promise<void> {
   assertType(type, ['compute', 'postgres'])
   const api = await ApiClient.load()
   const p = await requireProject()
-  const { services } = await api.request('GET', `/projects/${p.projectId}/services`)
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(_opts.branch ?? p.branch)}`)
   const id = resolveServiceId(services, type, name)
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/upgrade`, { spec })
   if (handleApproval(res)) return
