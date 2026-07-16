@@ -88,6 +88,8 @@ br.command('create <name>').option('--from <branch>', 'parent branch (default: c
 br.command('list').option('--json').action(guard((o) => branch.branchList(o)))
 br.command('switch <name>').action(guard((name) => branch.branchSwitch(name)))
 br.command('delete <name>').action(guard((name) => branch.branchDelete(name)))
+br.command('merge <source>').description('Merge a branch service set into another (structural, no data)')
+  .option('--into <branch>', 'target branch (default: current)').action(guard((source, o) => branch.branchMerge(source, o)))
 
 // ---- services (opt-in postgres/storage/compute) ----
 const svc = program.command('services').alias('svc').description('Manage project services (postgres|storage|compute)')
