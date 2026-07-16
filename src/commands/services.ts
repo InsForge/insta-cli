@@ -5,6 +5,10 @@ import { info, printJson, handleApproval, renderNextActions } from '../util.js'
 export const SERVICE_TYPES = ['postgres', 'storage', 'compute'] as const
 export type ServiceType = (typeof SERVICE_TYPES)[number]
 
+function q(branch?: string): string {
+  return branch ? `?branch=${encodeURIComponent(branch)}` : ''
+}
+
 // ---- pure, unit-tested helpers (throw plain Errors; the CLI guard turns them into clean output) ----
 
 // Validate a service-type argument against the allowed set for a command.
@@ -41,38 +45,41 @@ export function resolveComputeServiceId(services: Array<{ id: string; type: stri
 
 // ---- commands ----
 
-export async function servicesAdd(type: string, name: string): Promise<void> {
+export async function servicesAdd(type: string, name: string, opts: { branch?: string } = {}): Promise<void> {
   assertType(type)
   const api = await ApiClient.load()
   const p = await requireProject()
-  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services`, { type, name })
+  const branch = opts.branch ?? p.branch
+  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services`, { type, name, ...(branch ? { branch } : {}) })
   if (handleApproval(res)) return
   const svc = res.body.service
-  info(`added ${type} service ${name} (${svc.id})${svc.domain ? ` — ${svc.domain}` : ''}`)
+  info(`added ${type} service ${name} on ${branch ?? 'default'} (${svc.id})${svc.domain ? ` — ${svc.domain}` : ''}`)
   renderNextActions(res.body.nextActions)
 }
 
-export async function servicesList(opts: { json?: boolean }): Promise<void> {
+export async function servicesList(opts: { json?: boolean; branch?: string }): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
-  const { services } = await api.request('GET', `/projects/${p.projectId}/services`)
+  const branch = opts.branch ?? p.branch
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
   if (opts.json) return printJson(services)
-  if (!services.length) return info('(no services — add one with `insta services add <postgres|storage|compute> <name>`)')
+  if (!services.length) return info(`(no services on ${branch ?? 'default'} — add one with \`insta services add <postgres|storage|compute> <name>\`)`)
   for (const s of services) {
     const extra = s.type === 'compute' ? `  x${s.machine_count}` : ''
     info(`${s.type}/${s.name}  [${s.status}]${extra}${s.domain ? `  ${s.domain}` : ''}  ${s.id}`)
   }
 }
 
-export async function servicesRemove(type: string, name: string): Promise<void> {
+export async function servicesRemove(type: string, name: string, opts: { branch?: string } = {}): Promise<void> {
   assertType(type)
   const api = await ApiClient.load()
   const p = await requireProject()
-  const { services } = await api.request('GET', `/projects/${p.projectId}/services`)
+  const branch = opts.branch ?? p.branch
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
   const id = resolveServiceId(services, type, name)
   const res = await api.rawRequest('DELETE', `/projects/${p.projectId}/services/${id}`)
   if (handleApproval(res)) return
-  info(`removed ${type} service ${name}`)
+  info(`removed ${type} service ${name} from ${branch ?? 'default'}`)
 }
 
 // insta services scale compute <name> <number> [region]
@@ -81,7 +88,7 @@ export async function servicesScale(type: string, name: string, number: string, 
   const machineCount = parseCount(number)
   const api = await ApiClient.load()
   const p = await requireProject()
-  const { services } = await api.request('GET', `/projects/${p.projectId}/services`)
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(p.branch)}`)
   const id = resolveServiceId(services, type, name)
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/scale`, { machineCount, region })
   if (handleApproval(res)) return
@@ -94,7 +101,7 @@ export async function servicesUpgrade(type: string, name: string, spec: string, 
   assertType(type, ['compute', 'postgres'])
   const api = await ApiClient.load()
   const p = await requireProject()
-  const { services } = await api.request('GET', `/projects/${p.projectId}/services`)
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(p.branch)}`)
   const id = resolveServiceId(services, type, name)
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/upgrade`, { spec })
   if (handleApproval(res)) return
