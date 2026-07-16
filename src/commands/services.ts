@@ -5,7 +5,7 @@ import { info, printJson, handleApproval, renderNextActions } from '../util.js'
 export const SERVICE_TYPES = ['postgres', 'storage', 'compute'] as const
 export type ServiceType = (typeof SERVICE_TYPES)[number]
 
-function q(branch?: string): string {
+export function q(branch?: string): string {
   return branch ? `?branch=${encodeURIComponent(branch)}` : ''
 }
 
@@ -106,12 +106,12 @@ export async function servicesSetAccess(type: string, name: string, access: stri
 }
 
 // insta services scale compute <name> <number> [region]
-export async function servicesScale(type: string, name: string, number: string, region: string | undefined, _opts: { json?: boolean }): Promise<void> {
+export async function servicesScale(type: string, name: string, number: string, region: string | undefined, _opts: { json?: boolean; branch?: string }): Promise<void> {
   assertType(type, ['compute'])
   const machineCount = parseCount(number)
   const api = await ApiClient.load()
   const p = await requireProject()
-  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(p.branch)}`)
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(_opts.branch ?? p.branch)}`)
   const id = resolveServiceId(services, type, name)
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/scale`, { machineCount, region })
   if (handleApproval(res)) return
@@ -120,11 +120,11 @@ export async function servicesScale(type: string, name: string, number: string, 
 }
 
 // insta services upgrade <compute|postgres> <name> <new-spec>
-export async function servicesUpgrade(type: string, name: string, spec: string, _opts: { json?: boolean }): Promise<void> {
+export async function servicesUpgrade(type: string, name: string, spec: string, _opts: { json?: boolean; branch?: string }): Promise<void> {
   assertType(type, ['compute', 'postgres'])
   const api = await ApiClient.load()
   const p = await requireProject()
-  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(p.branch)}`)
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(_opts.branch ?? p.branch)}`)
   const id = resolveServiceId(services, type, name)
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/upgrade`, { spec })
   if (handleApproval(res)) return

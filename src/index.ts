@@ -105,9 +105,9 @@ svc.command('remove <type> <name>').description('Remove a service and destroy it
 svc.command('set-access <type> <name> <access>').description('Set a storage service bucket access mode (access: public|private)')
   .option('--json').action(guard((type, name, access, o) => services.servicesSetAccess(type, name, access, o)))
 svc.command('scale <type> <name> <number> [region]').description('Set a compute service machine count (paid plans only)')
-  .option('--json').action(guard((type, name, number, region, o) => services.servicesScale(type, name, number, region, o)))
+  .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((type, name, number, region, o) => services.servicesScale(type, name, number, region, o)))
 svc.command('upgrade <type> <name> <spec>').description('Change a compute/postgres service spec (paid plans only)')
-  .option('--json').action(guard((type, name, spec, o) => services.servicesUpgrade(type, name, spec, o)))
+  .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((type, name, spec, o) => services.servicesUpgrade(type, name, spec, o)))
 
 // ---- secrets (seam) ----
 const sec = program.command('secrets').description('Fetch the credential bundle (secret seam) into .env')
@@ -134,13 +134,13 @@ compute.command('check-domain <host>').description("Show a custom domain's cert 
 compute.command('remove-domain <host>').description('Detach a custom domain (gated: deploy)')
   .option('--branch <b>').option('--group <g>').action(guard((host, o) => computeCmd.removeDomain(host, o)))
 compute.command('start [service]').description('Bring a compute service online (persistent — re-enables auto-wake)')
-  .option('--json').action(guard((service, o) => computeCmd.computeStart(service, o)))
+  .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeStart(service, o)))
 compute.command('stop [service]').description('Take a compute service offline; traffic will NOT wake it until `start`')
-  .option('--json').action(guard((service, o) => computeCmd.computeStop(service, o)))
+  .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeStop(service, o)))
 compute.command('suspend [service]').description('Suspend a compute service (RAM snapshot); stays down until `start`')
-  .option('--json').action(guard((service, o) => computeCmd.computeSuspend(service, o)))
+  .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeSuspend(service, o)))
 compute.command('status [service]').description("Show a compute service's desired vs. live state")
-  .option('--json').action(guard((service, o) => computeCmd.computeStatus(service, o)))
+  .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeStatus(service, o)))
 
 // ---- manifest ----
 program.command('manifest').description('Print an agent-legible view of the project environments').option('--json').action(guard((o) => manifest(o)))

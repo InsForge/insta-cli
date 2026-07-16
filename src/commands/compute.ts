@@ -1,6 +1,6 @@
 import { ApiClient, requireProject } from '../api.js'
 import { info, printJson, handleApproval } from '../util.js'
-import { resolveComputeServiceId } from './services.js'
+import { resolveComputeServiceId, q } from './services.js'
 
 type Opts = { branch?: string; group?: string; json?: boolean }
 
@@ -51,7 +51,7 @@ async function lifecycle(verb: 'start' | 'stop' | 'suspend', serviceName: string
   const api = await ApiClient.load()
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
-  const { services } = await api.request('GET', `/projects/${p.projectId}/services${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`)
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
   const id = resolveComputeServiceId(services, serviceName)
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/${verb}`)
   if (handleApproval(res)) return
@@ -67,7 +67,7 @@ export async function computeStatus(serviceName: string | undefined, opts: LifeO
   const api = await ApiClient.load()
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
-  const { services } = await api.request('GET', `/projects/${p.projectId}/services${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`)
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
   const id = resolveComputeServiceId(services, serviceName)
   const r = await api.request('GET', `/projects/${p.projectId}/services/${id}/state`)
   if (opts.json) return printJson(r)

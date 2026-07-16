@@ -43,12 +43,13 @@ export async function branchDelete(name: string): Promise<void> {
 export async function branchMerge(source: string, opts: { into?: string } = {}): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
-  const target = opts.into ?? p.branch ?? 'main'
+  const target = opts.into ?? p.branch
+  if (!target) throw new Error('no target branch — pass --into <branch> (or link a branch first)')
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/branches/${encodeURIComponent(target)}/merge`, { from: source })
   if (handleApproval(res)) return
-  const { created, skipped } = res.body as {
-    created: Array<{ type: string; name: string }>
-    skipped: Array<{ type: string; name: string; reason: string }>
+  const { created = [], skipped = [] } = (res.body ?? {}) as {
+    created?: Array<{ type: string; name: string }>
+    skipped?: Array<{ type: string; name: string; reason: string }>
   }
   info(`merged ${source} → ${target}: ${created.length} created, ${skipped.length} skipped`)
   for (const c of created) info(`  + ${c.type}/${c.name}`)
