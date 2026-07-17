@@ -117,16 +117,21 @@ svc.command('scale <type> <name> <number> [region]').description('Set a compute 
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((type, name, number, region, o) => services.servicesScale(type, name, number, region, o)))
 svc.command('upgrade <type> <name> <spec>').description('Change a compute/postgres service spec (paid plans only)')
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((type, name, spec, o) => services.servicesUpgrade(type, name, spec, o)))
+svc.command('secrets <type> <name>').description("List a service's secret names")
+  .option('--branch <b>').option('--json').action(guard((type, name, o) => services.servicesSecrets(type, name, o)))
 
 // ---- secrets (seam) ----
 const sec = program.command('secrets').description('Fetch the credential bundle (secret seam) into .env')
   .option('--branch <branch>').option('-o, --output <file>', 'output file (default .env)').option('--print', 'print instead of writing').option('--json')
   .action(guard((o) => secretsCmd.secrets(o)))
-sec.command('list').description('List secret names only').option('--branch <branch>').action(guard((o) => secretsCmd.secretsList(o)))
+sec.command('list').description('List secret names, grouped by service').option('--branch <branch>').option('--json').action(guard((o) => secretsCmd.secretsList(o)))
 sec.command('set <name> [value]').description('Set a user secret (project-wide; value from stdin if omitted)')
-  .option('--branch <branch>', 'scope to one branch').action(guard((n, v, o) => secretsCmd.secretsSet(n, v, o)))
+  .option('--branch <branch>', 'scope to one branch').option('--service <type/name>', 'bind to a branch service (implies current branch)')
+  .action(guard((n, v, o) => secretsCmd.secretsSet(n, v, o)))
 sec.command('unset <name>').description('Remove a user secret')
   .option('--branch <branch>', 'scope to one branch').action(guard((n, o) => secretsCmd.secretsUnset(n, o)))
+sec.command('tree').description('Show secrets as project → branch → service → secrets').option('--json')
+  .action(guard((o) => secretsCmd.secretsTree(o)))
 
 // ---- deploy ----
 program.command('deploy [dir]').description('Deploy a source directory (built remotely on Fly) or a prebuilt --image to a branch compute group')
