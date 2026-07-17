@@ -5,6 +5,7 @@ import { ApiError } from './api.js'
 import { die } from './util.js'
 import * as auth from './commands/auth.js'
 import * as setup from './commands/setup.js'
+import * as mcp from './commands/mcp.js'
 import * as runCmd from './commands/run.js'
 import * as org from './commands/org.js'
 import * as project from './commands/project.js'
@@ -68,7 +69,15 @@ program.command('run <cmd> [args...]').description('Run a command with the branc
 const setupCmd = program.command('setup').description('Set up this machine for InstaCloud agent workflows')
 setupCmd.command('agent').description('Install the insta skill user-globally for all coding agents')
   .option('-y, --yes', 'non-interactive')
+  .option('--mcp-token', 'register the MCP server with a minted insta_ API token instead of OAuth (headless machines / CI)')
   .action(guard((o) => setup.setupAgent(o)))
+
+// ---- MCP server integration ----
+const mcpCmd = program.command('mcp').description('insta-cloud remote MCP server integration')
+mcpCmd.command('install').description('Register the remote MCP server with coding agents (default: Claude Code + all detected)')
+  .option('--agent <slug>', 'one agent: claude-code, cursor, codex, opencode, copilot, factory-droid')
+  .option('--mcp-token', 'claude-code only: minted insta_ API token instead of OAuth (headless machines / CI)')
+  .action(guard((o) => mcp.mcpInstall(o)))
 
 // ---- org ----
 const orgCmd = program.command('org').description('Manage organizations')
