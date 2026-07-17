@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process'
 import os from 'node:os'
 import { ApiClient } from '../api.js'
 import { info } from '../util.js'
+import { installAgentConfigs } from './mcp.js'
 
 // The `skills` tool we shell out to prints a clack UI: a frame-by-frame clone spinner, an
 // "Installing to all N agents" banner, a full N-line install-path box, and a third-party
@@ -96,7 +97,7 @@ const defaultRunner: Runner = (cmd, args) =>
 // (Claude Code, Codex, Cursor, OpenCode, Copilot, …); --copy = real files, not cache symlinks.
 export const SETUP_ARGS = ['skills', 'add', 'InsForge/insta-skills', '-s', 'insta', '-a', '*', '-g', '-y', '--copy']
 
-// ---- remote MCP registration (the `railway mcp` gap) ----
+// ---- remote MCP registration ----
 
 export const MCP_SERVER_NAME = 'insta-cloud'
 export const DEFAULT_MCP_URL = 'https://mcp.instacloud.com/mcp'
@@ -147,7 +148,12 @@ export async function registerMcp(run: Runner = defaultRunner, mint: TokenMinter
   }
 }
 
-export async function setupAgent(opts: { yes?: boolean; mcpToken?: boolean }, run: Runner = defaultRunner, mint?: TokenMinter): Promise<void> {
+export async function setupAgent(
+  opts: { yes?: boolean; mcpToken?: boolean },
+  run: Runner = defaultRunner,
+  mint?: TokenMinter,
+  installConfigs: (agent?: string) => Promise<string[]> = installAgentConfigs,
+): Promise<void> {
   if (!opts.yes && !process.stdout.isTTY) {
     info('non-interactive shell — assuming -y')
   }
@@ -169,4 +175,6 @@ export async function setupAgent(opts: { yes?: boolean; mcpToken?: boolean }, ru
   info(summarizeInstall(res.output ?? ''))
   info('  every coding agent on this machine now knows InstaCloud (review skills before use — they run with full permissions).')
   await registerMcp(run, mint, !!opts.mcpToken)
+  const others = await installConfigs()
+  if (others.length) info(`✓ MCP — also configured for ${others.join(', ')} (restart those tools to pick it up)`)
 }
