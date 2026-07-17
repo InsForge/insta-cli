@@ -131,3 +131,18 @@ export async function servicesUpgrade(type: string, name: string, spec: string, 
   if (_opts.json) return printJson(res.body.service)
   info(`upgraded ${type} ${name} to ${spec}`)
 }
+
+// insta services secrets <type> <name> — the secret names bound to a service.
+export async function servicesSecrets(type: string, name: string, opts: { branch?: string; json?: boolean } = {}): Promise<void> {
+  assertType(type)
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(opts.branch ?? p.branch)}`)
+  const id = resolveServiceId(services, type, name)
+  const res = await api.rawRequest('GET', `/projects/${p.projectId}/services/${id}/secrets`)
+  if (handleApproval(res)) return
+  const { secrets } = res.body
+  if (opts.json) return printJson(secrets)
+  if (!secrets.length) return info(`(no secrets bound to ${type}/${name})`)
+  for (const n of secrets) info(n)
+}
