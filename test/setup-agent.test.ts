@@ -41,27 +41,42 @@ test('registerMcp is idempotent — an existing registration is left alone (no t
   expect(minted).toBe(0)
 })
 
-test('registerMcp mints a token and adds the server user-scoped over streamable http', async () => {
+test('registerMcp defaults to OAuth: adds the server with NO auth header and mints nothing', async () => {
   const runs: string[][] = []
+  let minted = 0
   await registerMcp(
     async (_cmd, args) => {
       runs.push(args)
       // version probe ok; `mcp get` says not registered; `mcp add` ok
       return { ok: !(args[0] === 'mcp' && args[1] === 'get'), output: '' }
     },
-    async () => 'insta_abc_secret',
+    async () => { minted++; return 'insta_x_y' },
   )
   const add = runs.find((a) => a[0] === 'mcp' && a[1] === 'add')!
   expect(add).toBeDefined()
   expect(add.join(' ')).toContain(`--transport http --scope user ${MCP_SERVER_NAME} ${DEFAULT_MCP_URL}`)
+  expect(add).not.toContain('--header') // OAuth flow — no static credential on disk
+  expect(minted).toBe(0)
+})
+
+test('registerMcp --mcp-token mints a durable token into the Authorization header (headless)', async () => {
+  const runs: string[][] = []
+  await registerMcp(
+    async (_cmd, args) => { runs.push(args); return { ok: !(args[0] === 'mcp' && args[1] === 'get'), output: '' } },
+    async () => 'insta_abc_secret',
+    true,
+  )
+  const add = runs.find((a) => a[0] === 'mcp' && a[1] === 'add')!
+  expect(add.join(' ')).toContain(`--transport http --scope user ${MCP_SERVER_NAME} ${DEFAULT_MCP_URL}`)
   expect(add.join(' ')).toContain('Authorization: Bearer insta_abc_secret')
 })
 
-test('registerMcp prints the login hint instead of registering when no token can be minted', async () => {
+test('registerMcp --mcp-token prints the login hint instead of registering when no token can be minted', async () => {
   const runs: string[][] = []
   await registerMcp(
     async (_cmd, args) => { runs.push(args); return { ok: !(args[0] === 'mcp' && args[1] === 'get'), output: '' } },
     async () => null, // not logged in
+    true,
   )
   expect(runs.some((a) => a[0] === 'mcp' && a[1] === 'add')).toBe(false)
 })

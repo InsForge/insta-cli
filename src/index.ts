@@ -68,6 +68,7 @@ program.command('run <cmd> [args...]').description('Run a command with the branc
 const setupCmd = program.command('setup').description('Set up this machine for InstaCloud agent workflows')
 setupCmd.command('agent').description('Install the insta skill user-globally for all coding agents')
   .option('-y, --yes', 'non-interactive')
+  .option('--mcp-token', 'register the MCP server with a minted insta_ API token instead of OAuth (headless machines / CI)')
   .action(guard((o) => setup.setupAgent(o)))
 
 // ---- org ----

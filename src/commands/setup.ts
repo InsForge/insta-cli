@@ -101,9 +101,10 @@ export const SETUP_ARGS = ['skills', 'add', 'InsForge/insta-skills', '-s', 'inst
 export const MCP_SERVER_NAME = 'insta-cloud'
 export const DEFAULT_MCP_URL = 'https://mcp.instacloud.com/mcp'
 
-// The MCP config outlives the CLI's refreshable session, so registration needs a durable
-// `insta_` API token — minted once, named after this machine. Returns null when not logged in
-// (or the mint fails); the caller prints the login hint.
+// Headless fallback only (`--mcp-token`): the MCP config outlives the CLI's refreshable
+// session, so a static-header registration needs a durable `insta_` API token — minted once,
+// named after this machine. Returns null when not logged in (or the mint fails); the caller
+// prints the login hint.
 export type TokenMinter = () => Promise<string | null>
 const defaultMinter: TokenMinter = async () => {
   try {
@@ -115,30 +116,38 @@ const defaultMinter: TokenMinter = async () => {
 }
 
 // Register the insta-cloud remote MCP server with Claude Code (user scope, so it follows the
-// machine like the skill install above). Idempotent — an existing registration is left alone,
-// so no token is re-minted. Best-effort: the skill install is the primary outcome; agents
-// without an MCP registry are covered by the skill alone.
-export async function registerMcp(run: Runner = defaultRunner, mint: TokenMinter = defaultMinter): Promise<void> {
+// machine like the skill install above). Default is OAuth: register with NO credential — the
+// platform's Better Auth MCP authorization server is discovered via RFC 9728 and Claude runs
+// the browser flow on first `/mcp` use, so no static token ever lands on disk. `--mcp-token`
+// is the headless fallback (CI, no browser): mint a durable token into the header instead.
+// Idempotent — an existing registration is left alone. Best-effort: the skill install is the
+// primary outcome; agents without an MCP registry are covered by the skill alone.
+export async function registerMcp(run: Runner = defaultRunner, mint: TokenMinter = defaultMinter, useToken = false): Promise<void> {
   const url = process.env.INSTA_MCP_URL || DEFAULT_MCP_URL
   if (!(await run('claude', ['--version'])).ok) return // no Claude Code on this machine
   if ((await run('claude', ['mcp', 'get', MCP_SERVER_NAME])).ok) {
     info(`✓ MCP — ${MCP_SERVER_NAME} already registered with Claude Code`)
     return
   }
-  const token = await mint()
-  if (!token) {
-    info('  MCP not registered (needs a login) — run `insta login`, then `insta setup agent` again')
-    return
+  const args = ['mcp', 'add', '--transport', 'http', '--scope', 'user', MCP_SERVER_NAME, url]
+  if (useToken) {
+    const token = await mint()
+    if (!token) {
+      info('  MCP not registered (--mcp-token needs a login) — run `insta login`, then `insta setup agent --mcp-token` again')
+      return
+    }
+    args.push('--header', `Authorization: Bearer ${token}`)
   }
-  const res = await run('claude', [
-    'mcp', 'add', '--transport', 'http', '--scope', 'user', MCP_SERVER_NAME, url,
-    '--header', `Authorization: Bearer ${token}`,
-  ])
-  if (res.ok) info(`✓ MCP — ${MCP_SERVER_NAME} registered with Claude Code (\`claude mcp list\` to verify)`)
-  else info(`  MCP registration failed — add manually:\n    claude mcp add --transport http ${MCP_SERVER_NAME} ${url} --header "Authorization: Bearer <insta_ token>"`)
+  const res = await run('claude', args)
+  if (res.ok) {
+    info(`✓ MCP — ${MCP_SERVER_NAME} registered with Claude Code (\`claude mcp list\` to verify)`)
+    if (!useToken) info('  first use: run `/mcp` in Claude Code and authorize in the browser (headless machines: `insta setup agent --mcp-token`)')
+  } else {
+    info(`  MCP registration failed — add manually:\n    claude mcp add --transport http ${MCP_SERVER_NAME} ${url}`)
+  }
 }
 
-export async function setupAgent(opts: { yes?: boolean }, run: Runner = defaultRunner, mint?: TokenMinter): Promise<void> {
+export async function setupAgent(opts: { yes?: boolean; mcpToken?: boolean }, run: Runner = defaultRunner, mint?: TokenMinter): Promise<void> {
   if (!opts.yes && !process.stdout.isTTY) {
     info('non-interactive shell — assuming -y')
   }
@@ -159,5 +168,5 @@ export async function setupAgent(opts: { yes?: boolean }, run: Runner = defaultR
   }
   info(summarizeInstall(res.output ?? ''))
   info('  every coding agent on this machine now knows InstaCloud (review skills before use — they run with full permissions).')
-  await registerMcp(run, mint)
+  await registerMcp(run, mint, !!opts.mcpToken)
 }
