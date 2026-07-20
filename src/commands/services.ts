@@ -54,10 +54,11 @@ export function buildAddServiceBody(type: string, name: string, opts: { branch?:
 
 export async function servicesAdd(type: string, name: string, opts: { branch?: string; public?: boolean; region?: string } = {}): Promise<void> {
   assertType(type)
+  const base = buildAddServiceBody(type, name, opts) // validate client-side BEFORE any I/O
   const api = await ApiClient.load()
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
-  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services`, buildAddServiceBody(type, name, { ...opts, branch }))
+  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services`, { ...base, ...(branch ? { branch } : {}) })
   if (handleApproval(res)) return
   const svc = res.body.service
   const access = svc.type === 'storage' ? `  [${svc.public ? 'public' : 'private'}]` : ''
