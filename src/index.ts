@@ -11,6 +11,7 @@ import * as org from './commands/org.js'
 import * as project from './commands/project.js'
 import * as branch from './commands/branch.js'
 import * as services from './commands/services.js'
+import * as regions from './commands/regions.js'
 import * as secretsCmd from './commands/secrets.js'
 import { deploy } from './commands/deploy.js'
 import * as computeCmd from './commands/compute.js'
@@ -104,6 +105,7 @@ br.command('merge <source>').description('Merge a branch service set into anothe
 const svc = program.command('services').alias('svc').description('Manage project services (postgres|storage|compute)')
 svc.command('add <type> <name>').description('Provision a service on demand (assigns a default domain for postgres/compute)')
   .option('--branch <branch>', 'target branch (default: current)')
+  .option('--region <region>', 'region for postgres/compute, e.g. us-east (see `insta regions`)')
   .option('--public', 'storage only: serve the bucket with anonymous public-read (default private)')
   .action(guard((type, name, o) => services.servicesAdd(type, name, o)))
 svc.command('list').option('--json').option('--branch <branch>', 'branch (default: current)')
@@ -158,6 +160,9 @@ compute.command('status [service]').description("Show a compute service's desire
 
 // ---- manifest ----
 program.command('manifest').description('Print an agent-legible view of the project environments').option('--json').action(guard((o) => manifest(o)))
+
+// ---- regions ----
+program.command('regions').description('List regions available for postgres/compute services').option('--json').action(guard((o) => regions.regionsList(o)))
 
 // ---- observability ----
 program.command('metrics <target> [group]').description('Service metrics (target: db|compute)')

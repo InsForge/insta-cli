@@ -45,17 +45,23 @@ export function resolveComputeServiceId(services: Array<{ id: string; type: stri
 
 // ---- commands ----
 
-export async function servicesAdd(type: string, name: string, opts: { branch?: string; public?: boolean } = {}): Promise<void> {
-  assertType(type)
+// Pure: build the POST body for `services add`, enforcing client-side guards (mirrors the platform).
+export function buildAddServiceBody(type: string, name: string, opts: { branch?: string; public?: boolean; region?: string }): Record<string, unknown> {
   if (opts.public && type !== 'storage') throw new Error('--public is only valid for storage services')
+  if (opts.region && type === 'storage') throw new Error('--region is not valid for storage services')
+  return { type, name, ...(opts.branch ? { branch: opts.branch } : {}), ...(opts.region ? { region: opts.region } : {}), public: !!opts.public }
+}
+
+export async function servicesAdd(type: string, name: string, opts: { branch?: string; public?: boolean; region?: string } = {}): Promise<void> {
+  assertType(type)
   const api = await ApiClient.load()
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
-  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services`, { type, name, ...(branch ? { branch } : {}), public: !!opts.public })
+  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services`, buildAddServiceBody(type, name, { ...opts, branch }))
   if (handleApproval(res)) return
   const svc = res.body.service
   const access = svc.type === 'storage' ? `  [${svc.public ? 'public' : 'private'}]` : ''
-  info(`added ${type} service ${name} on ${branch ?? 'default'} (${svc.id})${access}${svc.domain ? ` — ${svc.domain}` : ''}`)
+  info(`added ${type} service ${name} on ${branch ?? 'default'} (${svc.id})${access}${svc.region ? `  ${svc.region}` : ''}${svc.domain ? ` — ${svc.domain}` : ''}`)
   renderNextActions(res.body.nextActions)
 }
 
