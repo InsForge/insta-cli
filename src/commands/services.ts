@@ -4,6 +4,7 @@ import { info, printJson, handleApproval, renderNextActions } from '../util.js'
 
 export const SERVICE_TYPES = ['postgres', 'storage', 'compute'] as const
 export type ServiceType = (typeof SERVICE_TYPES)[number]
+const SERVICE_NAME_RE = /^[a-z0-9][a-z0-9-]{0,38}$/
 
 export function q(branch?: string): string {
   return branch ? `?branch=${encodeURIComponent(branch)}` : ''
@@ -14,6 +15,10 @@ export function q(branch?: string): string {
 // Validate a service-type argument against the allowed set for a command.
 export function assertType(type: string, allowed: readonly string[] = SERVICE_TYPES): asserts type is ServiceType {
   if (!allowed.includes(type)) throw new Error(`type must be ${allowed.join('|')}`)
+}
+
+export function assertServiceName(name: string): void {
+  if (!SERVICE_NAME_RE.test(name)) throw new Error('service name must be lower-kebab (a-z, 0-9, -)')
 }
 
 // Parse a positive-integer machine count.
@@ -82,6 +87,20 @@ export async function servicesRemove(type: string, name: string, opts: { branch?
   const res = await api.rawRequest('DELETE', `/projects/${p.projectId}/services/${id}`)
   if (handleApproval(res)) return
   info(`removed ${type} service ${name} from ${branch ?? 'default'}`)
+}
+
+export async function servicesRename(type: string, name: string, newName: string, opts: { branch?: string; json?: boolean } = {}): Promise<void> {
+  assertType(type)
+  assertServiceName(newName)
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const branch = opts.branch ?? p.branch
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
+  const id = resolveServiceId(services, type, name)
+  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/rename`, { name: newName })
+  if (handleApproval(res)) return
+  if (opts.json) return printJson(res.body.service)
+  info(`renamed ${type} service ${name} to ${newName}`)
 }
 
 // Validate a bucket access-mode argument.
