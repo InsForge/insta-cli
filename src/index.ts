@@ -105,6 +105,8 @@ const svc = program.command('services').alias('svc').description('Manage project
 svc.command('add <type> <name>').description('Provision a service on demand (assigns a default domain for postgres/compute)')
   .option('--branch <branch>', 'target branch (default: current)')
   .option('--public', 'storage only: serve the bucket with anonymous public-read (default private)')
+  .option('--image <url>', 'compute only: run this container image at creation')
+  .option('--port <n>', 'compute only: port the image listens on (default 8080)')
   .action(guard((type, name, o) => services.servicesAdd(type, name, o)))
 svc.command('list').option('--json').option('--branch <branch>', 'branch (default: current)')
   .action(guard((o) => services.servicesList(o)))
