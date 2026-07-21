@@ -45,7 +45,7 @@ export function resolveComputeServiceId(services: Array<{ id: string; type: stri
 
 // ---- commands ----
 
-export type ServicesAddOpts = { branch?: string; public?: boolean; image?: string; port?: string }
+export type ServicesAddOpts = { branch?: string; public?: boolean; image?: string; port?: string; region?: string }
 
 // Map service-add options to the platform POST body. Pure, so it's unit-tested without a network
 // mock (mirrors deployRequestBody in deploy.ts). Validation (which options are valid for which
@@ -54,12 +54,14 @@ export function servicesAddRequestBody(type: string, name: string, branch: strin
   return {
     type, name, ...(branch ? { branch } : {}), public: !!opts.public,
     ...(opts.image ? { image: opts.image } : {}), ...(opts.port ? { port: Number(opts.port) } : {}),
+    ...(opts.region ? { region: opts.region } : {}),
   }
 }
 
 export async function servicesAdd(type: string, name: string, opts: ServicesAddOpts = {}): Promise<void> {
   assertType(type)
   if (opts.public && type !== 'storage') throw new Error('--public is only valid for storage services')
+  if (opts.region && type === 'storage') throw new Error('--region is not valid for storage services')
   if (opts.image && type !== 'compute') throw new Error('--image is only valid for compute services')
   if (opts.port && type !== 'compute') throw new Error('--port is only valid for compute services')
   const api = await ApiClient.load()
@@ -70,7 +72,7 @@ export async function servicesAdd(type: string, name: string, opts: ServicesAddO
   const svc = res.body.service
   const access = svc.type === 'storage' ? `  [${svc.public ? 'public' : 'private'}]` : ''
   const img = svc.image ? `  running ${svc.image}${svc.port ? `:${svc.port}` : ''}` : ''
-  info(`added ${type} service ${name} on ${branch ?? 'default'} (${svc.id})${access}${img}${svc.domain ? ` — ${svc.domain}` : ''}`)
+  info(`added ${type} service ${name} on ${branch ?? 'default'} (${svc.id})${access}${svc.region ? `  ${svc.region}` : ''}${img}${svc.domain ? ` — ${svc.domain}` : ''}`)
   renderNextActions(res.body.nextActions)
 }
 

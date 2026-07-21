@@ -95,6 +95,10 @@ describe('servicesAddRequestBody', () => {
   it('carries --public through unchanged', () => {
     expect(servicesAddRequestBody('storage', 'bkt', 'main', { public: true })).toMatchObject({ public: true })
   })
+  it('sends region when passed, omits it when absent', () => {
+    expect(servicesAddRequestBody('postgres', 'db', 'main', { region: 'us-east' })).toMatchObject({ region: 'us-east' })
+    expect(servicesAddRequestBody('postgres', 'db', 'main', {})).not.toHaveProperty('region')
+  })
 })
 
 describe('servicesAdd validation (throws before any network/config access)', () => {
@@ -106,6 +110,9 @@ describe('servicesAdd validation (throws before any network/config access)', () 
   })
   it('rejects --public for a non-storage type', async () => {
     await expect(servicesAdd('compute', 'api', { public: true })).rejects.toThrow(/--public is only valid for storage services/)
+  })
+  it('rejects --region for a storage type', async () => {
+    await expect(servicesAdd('storage', 'bkt', { region: 'us-east' })).rejects.toThrow(/--region is not valid for storage services/)
   })
   it('rejects an unknown service type before any option checks', async () => {
     await expect(servicesAdd('lambda', 'x', {})).rejects.toThrow(/postgres\|storage\|compute/)
