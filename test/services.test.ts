@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  assertType, parseCount, parseAccess, resolveServiceId, resolveComputeServiceId, SERVICE_TYPES,
+  assertType, assertServiceName, parseCount, parseAccess, resolveServiceId, resolveComputeServiceId, SERVICE_TYPES,
   servicesAddRequestBody, servicesAdd, serviceListLine,
 } from '../src/commands/services.js'
 
@@ -28,6 +28,16 @@ describe('parseCount', () => {
     expect(() => parseCount('-2')).toThrow(/positive integer/)
     expect(() => parseCount('2.5')).toThrow(/positive integer/)
     expect(() => parseCount('abc')).toThrow(/positive integer/)
+  })
+})
+
+describe('assertServiceName', () => {
+  it('accepts lower-kebab service names', () => {
+    expect(() => assertServiceName('primary-db')).not.toThrow()
+  })
+  it('rejects names outside the platform service-name rule', () => {
+    expect(() => assertServiceName('Primary')).toThrow(/lower-kebab/)
+    expect(() => assertServiceName('-db')).toThrow(/lower-kebab/)
   })
 })
 
