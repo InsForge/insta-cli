@@ -50,18 +50,44 @@ export function resolveComputeServiceId(services: Array<{ id: string; type: stri
 
 // ---- commands ----
 
-export async function servicesAdd(type: string, name: string, opts: { branch?: string; public?: boolean } = {}): Promise<void> {
+export type ServicesAddOpts = { branch?: string; public?: boolean; image?: string; port?: string; region?: string }
+
+// Map service-add options to the platform POST body. Pure, so it's unit-tested without a network
+// mock (mirrors deployRequestBody in deploy.ts). Validation (which options are valid for which
+// type) stays in servicesAdd, ahead of any network/config access.
+export function servicesAddRequestBody(type: string, name: string, branch: string | undefined, opts: ServicesAddOpts): Record<string, unknown> {
+  return {
+    type, name, ...(branch ? { branch } : {}), public: !!opts.public,
+    ...(opts.image ? { image: opts.image } : {}), ...(opts.port ? { port: Number(opts.port) } : {}),
+    ...(opts.region ? { region: opts.region } : {}),
+  }
+}
+
+export async function servicesAdd(type: string, name: string, opts: ServicesAddOpts = {}): Promise<void> {
   assertType(type)
   if (opts.public && type !== 'storage') throw new Error('--public is only valid for storage services')
+  if (opts.region && type === 'storage') throw new Error('--region is not valid for storage services')
+  if (opts.image && type !== 'compute') throw new Error('--image is only valid for compute services')
+  if (opts.port && type !== 'compute') throw new Error('--port is only valid for compute services')
   const api = await ApiClient.load()
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
-  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services`, { type, name, ...(branch ? { branch } : {}), public: !!opts.public })
+  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services`, servicesAddRequestBody(type, name, branch, opts))
   if (handleApproval(res)) return
   const svc = res.body.service
   const access = svc.type === 'storage' ? `  [${svc.public ? 'public' : 'private'}]` : ''
-  info(`added ${type} service ${name} on ${branch ?? 'default'} (${svc.id})${access}${svc.domain ? ` — ${svc.domain}` : ''}`)
+  const img = svc.image ? `  running ${svc.image}${svc.port ? `:${svc.port}` : ''}` : ''
+  info(`added ${type} service ${name} on ${branch ?? 'default'} (${svc.id})${access}${svc.region ? `  ${svc.region}` : ''}${img}${svc.domain ? ` — ${svc.domain}` : ''}`)
   renderNextActions(res.body.nextActions)
+}
+
+// Render one `services list` row. Pure, so it's unit-tested without a network mock (mirrors
+// billingLines in billing.ts). Compute rows show the running image when the platform reports one.
+export function serviceListLine(s: { type: string; name: string; status: string; id: string; domain?: string; machine_count?: number; public?: boolean; image?: string; port?: number }): string {
+  const extra = s.type === 'compute'
+    ? `  x${s.machine_count}${s.image ? `  running ${s.image}${s.port ? `:${s.port}` : ''}` : ''}`
+    : s.type === 'storage' ? `  ${s.public ? 'public' : 'private'}` : ''
+  return `${s.type}/${s.name}  [${s.status}]${extra}${s.domain ? `  ${s.domain}` : ''}  ${s.id}`
 }
 
 export async function servicesList(opts: { json?: boolean; branch?: string }): Promise<void> {
@@ -71,10 +97,7 @@ export async function servicesList(opts: { json?: boolean; branch?: string }): P
   const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
   if (opts.json) return printJson(services)
   if (!services.length) return info(`(no services on ${branch ?? 'default'} — add one with \`insta services add <postgres|storage|compute> <name>\`)`)
-  for (const s of services) {
-    const extra = s.type === 'compute' ? `  x${s.machine_count}` : s.type === 'storage' ? `  ${s.public ? 'public' : 'private'}` : ''
-    info(`${s.type}/${s.name}  [${s.status}]${extra}${s.domain ? `  ${s.domain}` : ''}  ${s.id}`)
-  }
+  for (const s of services) info(serviceListLine(s))
 }
 
 export async function servicesRemove(type: string, name: string, opts: { branch?: string } = {}): Promise<void> {
@@ -149,4 +172,19 @@ export async function servicesUpgrade(type: string, name: string, spec: string, 
   if (handleApproval(res)) return
   if (_opts.json) return printJson(res.body.service)
   info(`upgraded ${type} ${name} to ${spec}`)
+}
+
+// insta services secrets <type> <name> — the secret names bound to a service.
+export async function servicesSecrets(type: string, name: string, opts: { branch?: string; json?: boolean } = {}): Promise<void> {
+  assertType(type)
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(opts.branch ?? p.branch)}`)
+  const id = resolveServiceId(services, type, name)
+  const res = await api.rawRequest('GET', `/projects/${p.projectId}/services/${id}/secrets`)
+  if (handleApproval(res)) return
+  const { secrets } = res.body
+  if (opts.json) return printJson(secrets)
+  if (!secrets.length) return info(`(no secrets bound to ${type}/${name})`)
+  for (const n of secrets) info(n)
 }

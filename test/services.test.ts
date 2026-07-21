@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { assertType, assertServiceName, parseCount, parseAccess, resolveServiceId, resolveComputeServiceId, SERVICE_TYPES } from '../src/commands/services.js'
+import {
+  assertType, assertServiceName, parseCount, parseAccess, resolveServiceId, resolveComputeServiceId, SERVICE_TYPES,
+  servicesAddRequestBody, servicesAdd, serviceListLine,
+} from '../src/commands/services.js'
 
 describe('assertType', () => {
   it('accepts valid service types', () => {
@@ -83,5 +86,68 @@ describe('resolveComputeServiceId', () => {
   })
   it('errors when there is no compute service', () => {
     expect(() => resolveComputeServiceId([{ id: 'a', type: 'postgres', name: 'db' }])).toThrow(/no compute service/)
+  })
+})
+
+describe('servicesAddRequestBody', () => {
+  it('omits image/port when not passed', () => {
+    const b = servicesAddRequestBody('compute', 'api', 'main', {})
+    expect(b).toEqual({ type: 'compute', name: 'api', branch: 'main', public: false })
+  })
+  it('sends image and port (as a number) when passed', () => {
+    const b = servicesAddRequestBody('compute', 'api', 'main', { image: 'ghcr.io/acme/api:latest', port: '3000' })
+    expect(b).toMatchObject({ image: 'ghcr.io/acme/api:latest', port: 3000 })
+    expect(b.port).toBe(3000) // Number, not the raw string
+  })
+  it('omits branch when undefined', () => {
+    expect(servicesAddRequestBody('postgres', 'db', undefined, {})).toEqual({ type: 'postgres', name: 'db', public: false })
+  })
+  it('carries --public through unchanged', () => {
+    expect(servicesAddRequestBody('storage', 'bkt', 'main', { public: true })).toMatchObject({ public: true })
+  })
+  it('sends region when passed, omits it when absent', () => {
+    expect(servicesAddRequestBody('postgres', 'db', 'main', { region: 'us-east' })).toMatchObject({ region: 'us-east' })
+    expect(servicesAddRequestBody('postgres', 'db', 'main', {})).not.toHaveProperty('region')
+  })
+})
+
+describe('servicesAdd validation (throws before any network/config access)', () => {
+  it('rejects --image for a non-compute type', async () => {
+    await expect(servicesAdd('storage', 'bkt', { image: 'ghcr.io/acme/api:latest' })).rejects.toThrow(/--image is only valid for compute services/)
+  })
+  it('rejects --port for a non-compute type', async () => {
+    await expect(servicesAdd('postgres', 'db', { port: '3000' })).rejects.toThrow(/--port is only valid for compute services/)
+  })
+  it('rejects --public for a non-storage type', async () => {
+    await expect(servicesAdd('compute', 'api', { public: true })).rejects.toThrow(/--public is only valid for storage services/)
+  })
+  it('rejects --region for a storage type', async () => {
+    await expect(servicesAdd('storage', 'bkt', { region: 'us-east' })).rejects.toThrow(/--region is not valid for storage services/)
+  })
+  it('rejects an unknown service type before any option checks', async () => {
+    await expect(servicesAdd('lambda', 'x', {})).rejects.toThrow(/postgres\|storage\|compute/)
+  })
+})
+
+describe('serviceListLine', () => {
+  it('renders a compute row with the running image when present', () => {
+    const line = serviceListLine({ type: 'compute', name: 'api', status: 'active', id: 'svc_1', machine_count: 1, image: 'ghcr.io/acme/api:latest', port: 8080 })
+    expect(line).toBe('compute/api  [active]  x1  running ghcr.io/acme/api:latest:8080  svc_1')
+  })
+  it('renders a compute row without a port suffix when port is absent', () => {
+    const line = serviceListLine({ type: 'compute', name: 'api', status: 'active', id: 'svc_1', machine_count: 1, image: 'ghcr.io/acme/api:latest' })
+    expect(line).toBe('compute/api  [active]  x1  running ghcr.io/acme/api:latest  svc_1')
+  })
+  it('renders a compute row unchanged when no image is reported', () => {
+    const line = serviceListLine({ type: 'compute', name: 'api', status: 'active', id: 'svc_1', machine_count: 2 })
+    expect(line).toBe('compute/api  [active]  x2  svc_1')
+  })
+  it('renders a storage row with access, unaffected by the image change', () => {
+    const line = serviceListLine({ type: 'storage', name: 'bkt', status: 'active', id: 'svc_2', public: true })
+    expect(line).toBe('storage/bkt  [active]  public  svc_2')
+  })
+  it('renders a postgres row with domain', () => {
+    const line = serviceListLine({ type: 'postgres', name: 'db', status: 'active', id: 'svc_3', domain: 'db.example.com' })
+    expect(line).toBe('postgres/db  [active]  db.example.com  svc_3')
   })
 })
