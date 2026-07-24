@@ -78,10 +78,30 @@ export async function usage(opts: { from?: string; to?: string; json?: boolean; 
   }
 }
 
+// pure: platform path for a compute deploy-events request (used by `insta logs --deploy`).
+export function deployEventsPath(projectId: string, opts: { group?: string; branch?: string; limit?: string; instance?: string }): string {
+  return `/projects/${projectId}/deploy-events${qs({ group: opts.group, branch: opts.branch, limit: opts.limit, instance: opts.instance })}`
+}
+
+// pure: render one deploy event as a log-style line.
+export function deployEventLine(ev: { ts?: string; origin?: string; type?: string; status?: string; instance?: string }): string {
+  const inst = ev.instance ? `  (${ev.instance})` : ''
+  return `${ev.ts ?? ''}  [${ev.origin ?? ''}] ${ev.type ?? ''}: ${ev.status ?? ''}${inst}`
+}
+
 // insta logs <db|compute> [group]
-export async function logs(component: string, group: string | undefined, opts: { branch?: string; limit?: string; region?: string; instance?: string; json?: boolean }): Promise<void> {
+export async function logs(component: string, group: string | undefined, opts: { branch?: string; limit?: string; region?: string; instance?: string; json?: boolean; deploy?: boolean }): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
+  if (opts.deploy) {
+    if (component !== 'compute') return info('deploy events are only available for compute')
+    const res = await api.request('GET', deployEventsPath(p.projectId, { group, branch: opts.branch ?? p.branch, limit: opts.limit, instance: opts.instance }))
+    if (opts.json) return printJson(res)
+    if (res.note) info(`note: ${res.note}`)
+    if (!res.events?.length) return info('(no deploy events)')
+    for (const ev of res.events) info(deployEventLine(ev))
+    return
+  }
   const res = await api.request('GET', `/projects/${p.projectId}/logs${qs({ component, group, branch: opts.branch ?? p.branch, limit: opts.limit, region: opts.region, instance: opts.instance })}`)
   if (opts.json) return printJson(res)
   if (res.note) info(`note: ${res.note}`)
