@@ -59,8 +59,11 @@ function claudeEntry(): Group {
   // Claude Code executes `command` as ONE shell string with $CLAUDE_PROJECT_DIR in the env —
   // there is no `args` field in its hooks schema, so a ${…} template in args reaches node
   // verbatim and throws MODULE_NOT_FOUND after every tool call.
+  // .claude/settings.json is often committed while ./.insta stays local-only, so a fresh
+  // clone (cloud session, teammate) gets the hook without the script — no-op there.
+  const hook = '"$CLAUDE_PROJECT_DIR/.insta/observe/hook.js"'
   return { matcher: '*', hooks: [{ type: 'command',
-    command: 'node "$CLAUDE_PROJECT_DIR/.insta/observe/hook.js"', timeout: 15, _insta: MARKER }] }
+    command: `[ ! -f ${hook} ] || node ${hook}`, timeout: 15, _insta: MARKER }] }
 }
 function codexEntry(cwd: string): Group {
   const abs = join(cwd, '.insta', 'observe', 'hook.js') // Codex doesn't expand ${CLAUDE_PROJECT_DIR}; use an absolute path
