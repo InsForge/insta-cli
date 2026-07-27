@@ -54,9 +54,10 @@ export async function readGlobal(): Promise<GlobalConfig> {
     const parsed = JSON.parse(await readFile(GLOBAL_FILE, 'utf8')) as GlobalConfig
     if (envApi) return { ...parsed, apiUrl: envApi }
     if (typeof parsed.apiUrl === 'string' && isRetired(parsed.apiUrl)) {
-      // Drop the stored session with the host. The retired deployment is not the one
-      // DEFAULT_API points at, so its tokens 401 here — keeping them would swap an obvious
-      // network failure for an opaque "unauthorized" that reads as a bug in this migration.
+      // Drop the stored session with the host: it was minted by a different deployment (see
+      // DEFAULT_API above) and cannot authenticate here. Keeping it is not just useless —
+      // api.ts's 401 path POSTs the refresh token to whatever apiUrl now resolves to, which
+      // would send one deployment's credential to another. The stderr note covers recovery.
       // Resolving on read fixes every invocation at once; the file heals on the next persist.
       const rest: GlobalConfig = { ...parsed, apiUrl: DEFAULT_API }
       delete rest.accessToken
