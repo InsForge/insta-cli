@@ -35,11 +35,32 @@ test('a persisted retired host is replaced by the current default', async () => 
   expect((await (await load()).readGlobal()).apiUrl).toBe(DEFAULT_API)
 })
 
-test('replacing the host keeps the rest of the config intact', async () => {
+test('the session minted by the retired deployment is dropped with it', async () => {
+  seedHome({ apiUrl: RETIRED, accessToken: 'a', refreshToken: 'r', user: { id: 'u', email: null, name: null } })
+  const cfg = await (await load()).readGlobal()
+  expect(cfg.accessToken).toBeUndefined()
+  expect(cfg.refreshToken).toBeUndefined()
+  expect(cfg.user).toBeUndefined()
+})
+
+test('non-credential settings survive the replacement', async () => {
   seedHome({ apiUrl: RETIRED, accessToken: 't', autoUpdate: false })
-  expect(await (await load()).readGlobal()).toMatchObject({
-    apiUrl: DEFAULT_API, accessToken: 't', autoUpdate: false,
-  })
+  expect(await (await load()).readGlobal()).toMatchObject({ apiUrl: DEFAULT_API, autoUpdate: false })
+})
+
+test('the notice goes to stderr, so --json output on stdout stays parseable', async () => {
+  seedHome({ apiUrl: RETIRED, accessToken: 't' })
+  const err = vi.spyOn(process.stderr, 'write').mockReturnValue(true)
+  const out = vi.spyOn(process.stdout, 'write').mockReturnValue(true)
+  await (await load()).readGlobal()
+  expect(err).toHaveBeenCalledWith(expect.stringContaining(RETIRED))
+  expect(out).not.toHaveBeenCalled()
+  err.mockRestore(); out.mockRestore()
+})
+
+test('a healthy config keeps its session', async () => {
+  seedHome({ apiUrl: 'https://api.instacloud.com', accessToken: 'a', refreshToken: 'r' })
+  expect(await (await load()).readGlobal()).toMatchObject({ accessToken: 'a', refreshToken: 'r' })
 })
 
 test('a trailing slash does not smuggle the retired host through', async () => {
