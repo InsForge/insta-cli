@@ -23,13 +23,28 @@ export type ProjectConfig = { projectId: string; orgId: string; branch: string }
 // Only affects fresh installs: a persisted apiUrl (from a prior login) or INSTA_API_URL wins below.
 const DEFAULT_API = 'https://api.instacloud.com'
 
+// Hosts that used to be DEFAULT_API and no longer resolve. `readGlobal` materialises the
+// default into the object `persist()` writes back, so whatever DEFAULT_API was at a user's
+// first login is frozen into their config.json forever — upgrading the binary can't move it.
+// beta-api was the default in v0.0.3..v0.0.16 and went NXDOMAIN on 2026-07-27, so those
+// installs are hard-broken until the value is replaced. Retired hosts only: a persisted
+// localhost or self-hosted URL is a deliberate choice and must keep winning.
+const RETIRED_API_URLS = new Set(['https://beta-api.insta.insforge.dev'])
+
+const isRetired = (url: string): boolean => RETIRED_API_URLS.has(url.replace(/\/+$/, ''))
+
 export async function readGlobal(): Promise<GlobalConfig> {
   // INSTA_API_URL overrides the persisted apiUrl, not just the default — otherwise the
   // env var is silently ignored as soon as any login has written a config file.
   const envApi = process.env.INSTA_API_URL
   try {
     const parsed = JSON.parse(await readFile(GLOBAL_FILE, 'utf8')) as GlobalConfig
-    return { ...parsed, apiUrl: envApi ?? parsed.apiUrl ?? DEFAULT_API }
+    // A retired host is treated as absent, so it falls through to DEFAULT_API. Resolving on
+    // read (rather than rewriting the file here) fixes every invocation immediately, and the
+    // file itself heals the next time any command persists the config.
+    const persisted =
+      typeof parsed.apiUrl === 'string' && parsed.apiUrl && !isRetired(parsed.apiUrl) ? parsed.apiUrl : undefined
+    return { ...parsed, apiUrl: envApi ?? persisted ?? DEFAULT_API }
   } catch {
     return { apiUrl: envApi ?? DEFAULT_API }
   }
