@@ -19,9 +19,32 @@ export type GlobalConfig = {
 export type ProjectConfig = { projectId: string; orgId: string; branch: string }
 
 // The cloud API default. Uses the instacloud.com brand domain (matches the agents.instacloud.com
-// onboarding), NOT the legacy beta-api.insta.insforge.dev host — same backend, branded domain.
+// onboarding). It is NOT a rebrand of the legacy beta-api.insta.insforge.dev host: that name
+// resolved to insta-beta-api-lb in us-west-1, while this one is insta-platform-prod-alb in
+// us-east-2 — a separate deployment, so sessions do not carry across (see RETIRED_API_URLS).
 // Only affects fresh installs: a persisted apiUrl (from a prior login) or INSTA_API_URL wins below.
 const DEFAULT_API = 'https://api.instacloud.com'
+
+// Hosts that used to be DEFAULT_API and no longer resolve. `readGlobal` materialises the
+// default into the object `persist()` writes back, so whatever DEFAULT_API was at a user's
+// first login is frozen into their config.json forever — upgrading the binary can't move it,
+// and neither can logging in again (login only calls setApiUrl when --api-url is passed).
+// beta-api was the default in v0.0.3..v0.0.16 and went NXDOMAIN on 2026-07-27, so those
+// installs are hard-broken until the value is replaced. Retired hosts only: a persisted
+// localhost or self-hosted URL is a deliberate choice and must keep winning.
+const RETIRED_API_URLS = new Set(['https://beta-api.insta.insforge.dev'])
+
+const isRetired = (url: string): boolean => RETIRED_API_URLS.has(url.replace(/\/+$/, ''))
+
+// Once per process, on stderr — stdout carries `--json` output and must stay machine-readable.
+let noticed = false
+function noticeRetired(retired: string): void {
+  if (noticed) return
+  noticed = true
+  process.stderr.write(
+    `note: ${retired} has been retired; using ${DEFAULT_API}. Run \`insta login\` to sign in again.\n`,
+  )
+}
 
 export async function readGlobal(): Promise<GlobalConfig> {
   // INSTA_API_URL overrides the persisted apiUrl, not just the default — otherwise the
@@ -29,7 +52,22 @@ export async function readGlobal(): Promise<GlobalConfig> {
   const envApi = process.env.INSTA_API_URL
   try {
     const parsed = JSON.parse(await readFile(GLOBAL_FILE, 'utf8')) as GlobalConfig
-    return { ...parsed, apiUrl: envApi ?? parsed.apiUrl ?? DEFAULT_API }
+    if (envApi) return { ...parsed, apiUrl: envApi }
+    if (typeof parsed.apiUrl === 'string' && isRetired(parsed.apiUrl)) {
+      // Drop the stored session with the host: it was minted by a different deployment (see
+      // DEFAULT_API above) and cannot authenticate here. Keeping it is not just useless —
+      // api.ts's 401 path POSTs the refresh token to whatever apiUrl now resolves to, which
+      // would send one deployment's credential to another. The stderr note covers recovery.
+      // Resolving on read fixes every invocation at once; the file heals on the next persist.
+      const rest: GlobalConfig = { ...parsed, apiUrl: DEFAULT_API }
+      delete rest.accessToken
+      delete rest.refreshToken
+      delete rest.user
+      noticeRetired(parsed.apiUrl)
+      return rest
+    }
+    const persisted = typeof parsed.apiUrl === 'string' && parsed.apiUrl ? parsed.apiUrl : DEFAULT_API
+    return { ...parsed, apiUrl: persisted }
   } catch {
     return { apiUrl: envApi ?? DEFAULT_API }
   }
