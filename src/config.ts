@@ -83,6 +83,22 @@ export async function resolveEnv(): Promise<{
   return { apiUrl, env, mcpUrl, skills }
 }
 
+/** The config exactly as stored: no env-var overrides, no session scrubbing.
+ *
+ *  `env use` must read this rather than `readGlobal()`. With INSTA_ENV set, `readGlobal()` already
+ *  reports the override's host, so `env use <that same env>` would look like a no-op, print
+ *  "already on X" and never write the file — leaving the next process (without the override in its
+ *  environment) still pointed at the old one. Deciding "is this a real switch?" has to be done
+ *  against what is persisted. */
+export async function readPersistedGlobal(): Promise<GlobalConfig> {
+  try {
+    const parsed = JSON.parse(await readFile(GLOBAL_FILE, 'utf8')) as GlobalConfig
+    return { ...parsed, apiUrl: parsed.apiUrl ?? DEFAULT_API }
+  } catch {
+    return { apiUrl: DEFAULT_API }
+  }
+}
+
 export async function writeGlobal(c: GlobalConfig): Promise<void> {
   await mkdir(GLOBAL_DIR, { recursive: true })
   await writeFile(GLOBAL_FILE, JSON.stringify(c, null, 2))

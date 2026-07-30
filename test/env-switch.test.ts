@@ -352,6 +352,50 @@ describe('config + env use', () => {
     }
   })
 
+  // `env use` must decide against the PERSISTED host, not the override-resolved one. Otherwise
+  // `INSTA_ENV=staging insta env use staging` sees "already on staging", writes nothing, and the
+  // next process — without INSTA_ENV in its environment — is still on prod.
+  it('env use persists even when INSTA_ENV already names the target', async () => {
+    await writeConfig({ apiUrl: PROD_API, accessToken: 'a' })
+    process.env.INSTA_ENV = 'staging'
+    vi.resetModules()
+    const { envUse } = await import('../src/commands/env.js')
+    await envUse('staging')
+    expect((await readConfig()).apiUrl).toBe(STAGING_API)
+  })
+
+  // A stored trailing slash is the same environment (envForApiUrl says so), so this is a no-op and
+  // must not rewrite the URL or discard a valid session.
+  it('env use treats a trailing-slash host as already-current and keeps the session', async () => {
+    await writeConfig({ apiUrl: STAGING_API + '/', accessToken: 'stg-a', refreshToken: 'stg-r' })
+    vi.resetModules()
+    const { envUse } = await import('../src/commands/env.js')
+    await envUse('staging')
+    const c = await readConfig()
+    expect(c.apiUrl).toBe(STAGING_API + '/')
+    expect(c.accessToken).toBe('stg-a')
+  })
+
+  // hadSession used to check accessToken alone, so a config with only a refreshToken kept it — and
+  // api.ts's 401 path would POST that token to the new deployment.
+  it('env use drops a refresh-token-only session on a real switch', async () => {
+    await writeConfig({ apiUrl: PROD_API, refreshToken: 'prod-r' })
+    vi.resetModules()
+    const { envUse } = await import('../src/commands/env.js')
+    await envUse('staging')
+    const c = await readConfig()
+    expect(c.apiUrl).toBe(STAGING_API)
+    expect(c.refreshToken).toBeUndefined()
+  })
+
+  it('env use drops a user-only remnant on a real switch', async () => {
+    await writeConfig({ apiUrl: PROD_API, user: { id: 'u', email: 'a@b.c', name: null } })
+    vi.resetModules()
+    const { envUse } = await import('../src/commands/env.js')
+    await envUse('staging')
+    expect((await readConfig()).user).toBeUndefined()
+  })
+
   it('preserves unrelated config keys across a switch', async () => {
     await writeConfig({ apiUrl: PROD_API, autoUpdate: false })
     vi.resetModules()

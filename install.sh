@@ -38,6 +38,9 @@ while [ $# -gt 0 ]; do
     -y|--yes) YES=1 ;;
     --staging) ENV_NAME=staging ;;
     --env) shift; [ $# -gt 0 ] || { echo "error: --env needs a value (prod|staging)" >&2; exit 1; }; ENV_NAME="$1" ;;
+    # `--env=` (empty) must be rejected like a bare `--env`, not silently treated as "no environment
+    # requested" — otherwise a malformed selection falls through to the default instead of erroring.
+    --env=) echo "error: --env needs a value (prod|staging)" >&2; exit 1 ;;
     --env=*) ENV_NAME="${1#--env=}" ;;
   esac
   shift
@@ -64,8 +67,12 @@ resolve_latest() {
 # so the list endpoint is the only way to find them. Within a release object GitHub emits tag_name
 # before draft/prerelease, so we remember the tag and act when the flags arrive; a draft clears it
 # (drafts have no downloadable assets).
+# per_page=100 (the API maximum) rather than the default 30: with 30, once thirty newer stable
+# releases pile up the newest prerelease slides onto page 2 and staging would silently install
+# stable. 100 is a single request and covers any realistic release history; INSTA_VERSION remains
+# the escape hatch beyond that.
 resolve_prerelease() {
-  curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=30" 2>/dev/null | awk '
+  curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=100" 2>/dev/null | awk '
     /"tag_name":/          { if (match($0, /v[^"]+/)) tag = substr($0, RSTART, RLENGTH) }
     /"draft": *true/       { tag = "" }
     /"prerelease": *true/  { if (tag != "") { print tag; exit } }'

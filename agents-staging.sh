@@ -26,4 +26,15 @@
 # so an env var would evaporate before the `insta project create` the user runs next.
 set -eu
 
-curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh -s -- --agents --staging -y "$@"
+# Download to a file and check curl's status BEFORE running it, rather than piping straight into sh.
+# A piped `curl … | sh` that fails to fetch hands sh an EMPTY stream, and sh exits 0 — so the
+# one-liner reports success while installing nothing. That matters most for automation, which has
+# only the exit code to go on.
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+if ! curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh -o "$tmp"; then
+  echo "error: could not download install.sh (network, or GitHub raw unavailable)" >&2
+  exit 1
+fi
+[ -s "$tmp" ] || { echo "error: downloaded install.sh is empty" >&2; exit 1; }
+sh "$tmp" --agents --staging -y "$@"

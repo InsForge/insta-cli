@@ -100,6 +100,12 @@ jobs:
               --target "$GITHUB_SHA" \
               --title "insta $TAG" \
               --generate-notes $PRERELEASE
+          elif [ -n "$PRERELEASE" ]; then
+            # The release already exists (created by hand, or this job is a re-run). Enforce the
+            # flag anyway: applying it only on the create path would leave a pre-existing
+            # prerelease marked "Latest", which is precisely what install.sh's production
+            # /releases/latest channel would then serve.
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease
           fi
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
             dist-bin/insta-* dist-bin/SHA256SUMS install.sh

@@ -23,8 +23,18 @@ curl -fsSL agents.instacloud.com | sh            # production
 curl -fsSL agents.staging.instacloud.com | sh    # staging
 ```
 
-Both install the same released binary — the difference is which control plane it targets. See
-[Environments](#environments).
+Each installs a complete stack for its environment — CLI build, control plane, MCP registration and
+skill text all match. See [Environments](#environments).
+
+> The staging host serves this repo's `agents-staging.sh` from `main`, so it returns 404 until that
+> file is on `main`. Equivalent, and works regardless:
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh -s -- --agents --staging -y
+> ```
+>
+> If the environment can't be applied (a CLI predating `insta env`), the installer exits non-zero
+> rather than silently leaving you on production.
 
 **Build from source (requires node):**
 

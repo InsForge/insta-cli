@@ -5,9 +5,8 @@
 // to make `INSTA_ENV=staging` stick for the `insta project create` the user runs next. Persisting
 // the choice into ~/.insta/config.json is the only mechanism that survives the pipe — and it is the
 // same file `login --api-url` already writes, so this adds a surface, not a concept.
-import { ApiClient } from '../api.js'
-import { resolveEnv } from '../config.js'
-import { DEFAULT_ENV, ENVS, ENV_NAMES, envForApiUrl, isEnvName, mcpServerName, type EnvName } from '../env.js'
+import { readPersistedGlobal, resolveEnv, writeGlobal, type GlobalConfig } from '../config.js'
+import { DEFAULT_ENV, ENVS, ENV_NAMES, envForApiUrl, isEnvName, mcpServerName, normalizeUrl, type EnvName } from '../env.js'
 import { die, info, printJson } from '../util.js'
 
 export async function envShow(opts: { json?: boolean }): Promise<void> {
@@ -26,22 +25,32 @@ export async function envUse(name: string): Promise<void> {
   if (!isEnvName(want)) die(`unknown environment "${name}" — expected one of: ${ENV_NAMES.join(', ')}`)
   const target: EnvName = want
 
-  const api = await ApiClient.load()
-  const from = envForApiUrl(api.apiUrl)
   const nextApi = ENVS[target].api
-  if (api.apiUrl === nextApi) {
+  // The PERSISTED config, deliberately not the override-resolved view — see readPersistedGlobal.
+  const stored = await readPersistedGlobal()
+  const from = envForApiUrl(stored.apiUrl)
+
+  // Compare normalised, so a stored trailing slash is recognised as the same environment (which is
+  // how envForApiUrl already treats it) instead of being rewritten as a "switch" that needlessly
+  // drops a perfectly good session.
+  if (normalizeUrl(stored.apiUrl) === normalizeUrl(nextApi)) {
     info(`already on ${target} (${nextApi})`)
     return
   }
 
-  // Drop the stored session along with the host. prod and staging are separate deployments, so the
-  // old token cannot authenticate here — and keeping it is actively unsafe, because api.ts's 401
-  // path POSTs the refresh token to whatever apiUrl now resolves to, handing one deployment's
-  // credential to another. Same reasoning as the retired-host path in config.ts.
-  const hadSession = !!api.config.accessToken
-  api.setApiUrl(nextApi)
-  if (hadSession) api.clearSession()
-  await api.persist()
+  // A real switch, so drop the stored session unconditionally. prod and staging are separate
+  // deployments: the old token cannot authenticate here, and keeping it is actively unsafe because
+  // api.ts's 401 path POSTs the refresh token to whatever apiUrl now resolves to, handing one
+  // deployment's credential to another. Same reasoning as the retired-host path in config.ts.
+  //
+  // "Any field" rather than accessToken alone: a config holding only a refreshToken (an interrupted
+  // login, a hand-edited file) would otherwise keep that token and post it to the new host.
+  const hadSession = !!(stored.accessToken || stored.refreshToken || stored.user)
+  const next: GlobalConfig = { ...stored, apiUrl: nextApi }
+  delete next.accessToken
+  delete next.refreshToken
+  delete next.user
+  await writeGlobal(next)
 
   info(`switched ${from ?? '(custom)'} → ${target}`)
   info(`  api: ${nextApi}`)
