@@ -1,175 +1,188 @@
-# insta-cli
+# insta
 
-InstaCloud CLI (`insta`) — a thin client of the [platform](../platform) control-plane API.
-Manages project / branch / secrets / deploy / governance — built for developers and agents.
+[![npm](https://img.shields.io/npm/v/insta?color=blue)](https://www.npmjs.com/package/insta)
+[![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg)](LICENSE)
 
-Tech stack: Node 20 + TypeScript (ESM) + commander. Every command is a wrapper around the platform API.
+The InstaCloud CLI. Provision Postgres, object storage and compute, fork the whole
+environment per branch, and give your coding agent scoped credentials without pasting
+secrets into a chat window.
 
-## Installation
+`insta` is a thin client over the InstaCloud control-plane API. Every command is one API
+call, so anything you can do, an agent can do.
 
-**One-line install (native binary, no node required)** — macOS / Linux / WSL:
+## Install
+
+Native binary, no Node required (macOS / Linux / WSL). Installs to `~/.insta/bin` and
+verifies the download against `SHA256SUMS`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh
-#   Installs to ~/.insta/bin/insta (override with INSTA_INSTALL_DIR); verifies SHA256SUMS.
-#   Pin a version: curl -fsSL .../install.sh | INSTA_VERSION=v0.1.0 sh
-# Windows: download insta-windows-x64.exe from the releases page.
 ```
 
-**Agent one-liner** (CLI + agent skills + MCP registration, non-interactive):
+From npm:
 
 ```bash
-curl -fsSL agents.instacloud.com | sh            # production
-curl -fsSL agents.staging.instacloud.com | sh    # staging
+npm install -g insta
 ```
 
-Each installs a complete stack for its environment — CLI build, control plane, MCP registration and
-skill text all match. See [Environments](#environments).
-
-> The staging host serves this repo's `agents-staging.sh` from `main`, so it returns 404 until that
-> file is on `main`. Equivalent, and works regardless:
->
-> ```bash
-> curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh -s -- --agents --staging -y
-> ```
->
-> If the environment can't be applied (a CLI predating `insta env`), the installer exits non-zero
-> rather than silently leaving you on production.
-
-**Build from source (requires node):**
+For coding agents. Installs the CLI, the `insta` skill for every agent on the machine, and
+registers the MCP server:
 
 ```bash
-npm install
-npm run build         # -> dist/index.js (bin: insta; pure JS, requires node to run)
-node dist/index.js --help
+curl -fsSL agents.instacloud.com | sh
 ```
 
-### Build your own binaries (Bun cross-compilation)
+On Windows, download `insta-windows-x64.exe` from the
+[releases page](https://github.com/InsForge/insta-cli/releases).
 
-The binaries that `install.sh` installs are cross-compiled with Bun by CI (tag `v*` → `.github/workflows/release.yml`)
-and published to GitHub releases. You can also build them locally: requires [Bun](https://bun.sh). The npm package still
-ships JS (`dist/index.js`) — binaries are a separate distribution channel.
-
-```bash
-npm run compile            # compile for the current platform only -> dist/bin/insta
-npm run build:binaries     # cross-compile all platforms -> dist/bin/insta-<os>-<arch>(.exe) + SHA256SUMS
-#   The version (baked into `insta --version`) defaults to package.json, or pass it: bash scripts/build-binaries.sh 1.2.3
-```
-
-Artifacts look like `insta-darwin-arm64` / `insta-linux-x64` / `insta-windows-x64.exe` (`file` reports native Mach-O/ELF/PE executables).
-`dist/` is gitignored; binaries are not committed — CI publishes them to releases.
+Pin a version with `INSTA_VERSION=v0.0.22`; change the install directory with
+`INSTA_INSTALL_DIR`. While the CLI is pre-1.0 it updates itself on new releases. Turn that
+off with `insta autoupdate off`.
 
 ## Quickstart
 
 ```bash
-# Point at the control plane (defaults to http://localhost:8080; override with $INSTA_API_URL or --api-url)
-insta login --email you@example.com --password ****** --api-url http://localhost:8080
-insta project create my-app          # create an empty project and link the current directory (no services by default)
-insta services add postgres db       # add services on demand (postgres/storage/compute)
-insta services add compute api       # compute is used to deploy images
-insta secrets                        # write the current branch's credentials to ./.env (secret seam)
-insta deploy --image <registry/img>  # deploy a container image to the current branch's compute service
-insta status                         # login state + linked project/branch
+insta login --oauth github
+insta project create my-app
+insta services add postgres db
+insta services add compute api
+insta secrets
+insta deploy .
 ```
+
+`project create` makes an empty project and links the current directory. Services are
+opt-in, so you add only what you need. `secrets` writes the current branch's credentials to
+`./.env`. `deploy .` builds the directory remotely and ships it to the branch's compute
+service; it needs a `Dockerfile`, but no local Docker.
+
+## How it works
+
+### Services are branch-scoped
+
+A project holds services (`postgres`, `storage`, `compute`) and each branch owns its own
+set. `insta branch create feature-x` forks the parent's services: a Neon branch per
+Postgres, a copy-on-write bucket per storage, a clone of every compute service. From there
+the two branches diverge independently. A project is capped at 10 branches.
+
+### Credentials come from a seam, not a file you maintain
+
+`insta secrets` fetches the current branch's bundle and writes `./.env`. `insta run <cmd>`
+does the same without touching disk, injecting the bundle into the child process only.
+Credential names are per service — `DATABASE_URL`, `BUCKET_NAME`, `AWS_ACCESS_KEY_ID` —
+suffixed with the service name when a project has more than one service of a type.
+
+### Destructive actions can require approval
+
+Reading secrets, deploying, deleting a project or branch, and changing services are
+governed by a per-project policy. Where the policy says `approve`, the command stops and
+prints an approval id for an admin to grant with `insta approvals approve <id>`. Run
+`insta policy get` for the live policy.
+
+### Agents get the same surface
+
+`insta manifest` prints an agent-legible view of every branch and its URLs. `insta setup
+agent` installs the InstaCloud skill and registers the remote MCP server for the coding
+agents on the machine.
 
 ## Environments
 
-`prod` and `staging` are **separate deployments** — different regions, different databases,
-different auth. A session from one cannot authenticate against the other, so switching drops the
-stored session and you log in again.
+`prod` and `staging` are separate deployments, in different regions, with different
+databases and different auth. A session minted by one cannot authenticate against the
+other, so switching environments drops the stored session and you log in again.
 
 | | `prod` (default) | `staging` |
 |---|---|---|
-| control plane | `api.instacloud.com` (us-east-2) | `api.staging.instacloud.com` (us-west-1) |
+| control plane | `api.instacloud.com` | `api.staging.instacloud.com` |
 | MCP server | `mcp.instacloud.com/mcp` | `mcp.staging.instacloud.com/mcp` |
-| registers as | `insta-cloud` | `insta-cloud-staging` |
-| agent skills | `InsForge/insta-skills` | `InsForge/insta-skills@devel` |
-| CLI channel | latest stable release | newest prerelease (`v*-rc.N`), else stable |
+| MCP registers as | `insta-cloud` | `insta-cloud-staging` |
+| agent skills | `InsForge/insta-skills` | `InsForge/insta-skills#devel` |
+| CLI channel | latest stable release | newest prerelease, else stable |
 
 ```bash
-insta env                      # show the current environment and everything derived from it
-insta env use staging          # switch (persisted to ~/.insta/config.json)
-insta login --env staging --oauth github
+insta env                 # current environment and everything derived from it
+insta env use staging     # switch; persisted to ~/.insta/config.json
 ```
 
-Control plane, MCP host **and** skill source are all resolved from one switch, so a machine can
-never end up with its CLI on staging while its agents talk to prod and read prod's skill text.
-Distinct MCP registration names mean both environments can be installed side by side.
+The control plane, the MCP host and the skill source all resolve from that one switch, so a
+machine cannot end up running staging while its agents read production's skill text. The
+two MCP registrations use different names, so both environments can be installed side by
+side.
+
+To install against staging directly:
+
+```bash
+curl -fsSL agents.staging.instacloud.com | sh
+```
 
 Resolution order, most specific first:
 
-1. `INSTA_API_URL` — a literal URL. The only way to reach a host no environment name covers
-   (`insta-oss` on localhost, a preview deployment). `INSTA_MCP_URL` and `INSTA_SKILLS_REPO` do the
-   same for the MCP host and the skill source.
-2. `INSTA_ENV` — `prod` | `staging`. An unrecognised value is an error, never a silent fallback.
-3. the persisted `apiUrl` in `~/.insta/config.json`.
+1. `INSTA_API_URL` — a literal URL, and the only way to reach a host no environment name
+   covers, such as a local daemon or a preview deployment. `INSTA_MCP_URL` and
+   `INSTA_SKILLS_REPO` do the same for the MCP host and the skill source.
+2. `INSTA_ENV` — `prod` or `staging`. An unrecognised value is an error, never a fallback.
+3. The `apiUrl` persisted in `~/.insta/config.json`.
 4. `prod`.
 
-Prereleases never take the `latest` GitHub release or the `latest` npm dist-tag — they publish with
-`--prerelease` and under npm's `next` tag — so a staging build can't reach production installers.
+Prereleases publish with `--prerelease` on GitHub and under npm's `next` tag, so a staging
+build never reaches a production installer.
 
 ## Commands
 
-| Command | Description |
-|------|------|
-| `insta login [--email --password --api-url --env]` | Log in (email/password; tokens auto-refresh) |
-| `insta env [--json]` / `insta env use <prod\|staging>` | Show or switch deployment environment |
-| `insta login --oauth <github\|google>` | Browser OAuth login (starts a local loopback port; the token is carried back automatically after browser authorization) |
-| `insta logout` / `insta status [--json]` | Log out / show status |
-| `insta org list [--json]` / `org create <name>` | Organizations (each user may own only one free org) |
-| `insta project create <name> [--org]` | Create an empty project and link it (no services by default) |
-| `insta project list [--org] [--json]` / `link <id>` / `delete` | Project management |
-| `insta services add <postgres\|storage\|compute> <name>` | Provision a service on demand (postgres/compute get a default access domain) |
-| `insta services list [--json]` / `services remove <type> <name>` | List / remove services |
-| `insta services scale compute <name> <number> [region]` | Set the compute machine count (paid tiers; rejected on free) |
-| `insta services upgrade <compute\|postgres> <name> <spec>` | Upgrade the spec (paid tiers; upgrade only, no downgrade) |
-| `insta branch create <name> [--from]` | Create a branch environment (materializes the project's current services; up to 10 branches per project) |
-| `insta branch list [--json]` / `switch <name>` / `delete <name>` | Branch management |
-| `insta secrets [--branch -o --print --json]` | Secret seam: write credentials to `.env` |
-| `insta secrets list [--branch]` | List secret names only |
-| `insta deploy --image <url> [--branch --group --port]` | Deploy an image |
-| `insta manifest [--json]` | Agent-readable environment manifest |
-| `insta metrics <db\|compute> [group] [--branch --from --to --step --json]` | Resource metrics (compute=Fly; db limited) |
-| `insta logs <db\|compute> [group] [--branch --limit --region --instance --json]` | Runtime logs (compute=Fly; db limited) |
-| `insta events [--branch --limit --json]` | Audit + agent event timeline |
-| `insta usage [--from --to --json]` | Resource usage aggregated by meter (includes costUsd) |
-| `insta billing [--org --json]` | Current billing-cycle summary (tier / quota / used / overage / status) |
-| `insta billing upgrade <pro\|enterprise> [--org --no-open --json]` | Subscribe to a paid tier via Stripe Checkout; returns and opens the payment link |
-| `insta billing portal [--org --no-open --json]` | Open the Stripe Customer Portal (change plan / card / cancel) |
-| `insta approvals list [--status] [--json]` | Governance approval list |
-| `insta approvals approve <id> [--always]` / `deny <id>` | Approve / deny (admin) |
-| `insta policy get [--json]` / `policy set <action> <decision>` | Governance policy (actions include `service.add/remove/scale/upgrade`) |
+`insta --help` is the authoritative list. For flags, approval gates and plan limits, see the
+[full command reference](https://github.com/InsForge/insta-skills/blob/main/insta/cli-reference.md).
 
-When a governance-gated operation (`secrets.read`/`deploy`/`project.delete`/`branch.delete`/`service.add`/`service.remove`/`service.scale`/`service.upgrade`) hits an approval,
-the CLI prompts `approval required — run: insta approvals approve <id>`.
+| Command | What it covers |
+|---|---|
+| `insta login` · `logout` · `status` | Email/password, or `--oauth github\|google`; tokens auto-refresh |
+| `insta env` | `show` · `use <prod\|staging>` |
+| `insta setup` | `agent` — install the skill and register MCP for every coding agent |
+| `insta mcp` | `install` — register the remote MCP server only |
+| `insta org` | `list` · `create` (one free org per user) |
+| `insta project` | `create` · `list` · `link` · `delete` |
+| `insta branch` | `create` · `list` · `switch` · `delete` · `merge` |
+| `insta services` | `add` · `list` · `remove` · `rename` · `set-access` · `scale` · `upgrade` · `secrets` |
+| `insta secrets` | Write `.env`, plus `list` · `set` · `unset` · `tree` |
+| `insta run <cmd>` | Run a command with the branch bundle injected, nothing written to disk |
+| `insta deploy [dir]` | Deploy a source directory (built remotely) or `--image <url>` |
+| `insta compute` | `start` · `stop` · `suspend` · `status` · `set-domain` · `check-domain` · `remove-domain` |
+| `insta regions` | Regions available for postgres and compute |
+| `insta manifest` | Agent-legible view of every branch and its URLs |
+| `insta metrics` · `logs` · `events` | Service metrics; runtime logs (`--deploy` for deploy events); audit timeline |
+| `insta usage` · `billing` | Usage by billing dimension; `billing upgrade` · `billing portal` |
+| `insta approvals` | `list` · `approve` · `deny` |
+| `insta policy` | `get` · `set <action> <decision>` |
+| `insta observe` | `install` · `uninstall` · `report` · `sync` — local credential audit |
+| `insta upgrade` · `autoupdate` | Update the CLI; show or set auto-update |
 
-## Configuration locations
+## Configuration
 
-- Global: `~/.insta/config.json` (apiUrl + access/refresh token + user)
-- Project: `./.insta/project.json` (projectId / orgId / current branch)
+| Location | Contents |
+|---|---|
+| `~/.insta/config.json` | API URL, access and refresh tokens, user, auto-update preference |
+| `./.insta/project.json` | Project id, org id, current branch |
 
-## Local end-to-end run
+| Variable | Effect |
+|---|---|
+| `INSTA_API_URL` | Control-plane URL; outranks every other source |
+| `INSTA_ENV` | `prod` or `staging` |
+| `INSTA_MCP_URL` · `INSTA_SKILLS_REPO` | Override the MCP host and the agent-skill source |
+| `INSTA_PROJECT_ID` · `INSTA_ORG_ID` · `INSTA_BRANCH` | Target a project, org or branch without linking |
+| `INSTA_PASSWORD` | Password for non-interactive login |
+| `INSTA_NO_AUTOUPDATE` | Disable self-update |
 
-The platform provides a `dev:fake` mode (fake provider adapters, no Neon/Fly/Tigris credentials required):
+## Agent skills
 
-```bash
-# 1) Start Postgres + the platform dev server (see ../platform)
-docker run -d --name pg -e POSTGRES_PASSWORD=insta -e POSTGRES_DB=insta_dev -p 55432:5432 postgres:16-alpine
-cd ../platform && DATABASE_URL='postgres://postgres:insta@localhost:55432/insta_dev' PORT=8899 npm run dev:fake
+The `insta` skill and its task guides live in
+[InsForge/insta-skills](https://github.com/InsForge/insta-skills). `insta setup agent`
+installs it user-globally for every coding agent on the machine. `insta project create` and
+`insta project link` additionally install the stack skills (Neon Postgres, Tigris, Better
+Auth) into the project, along with the `insta observe` credential-audit hook.
 
-# 2) Run the full flow with the CLI (signup goes through /auth/signup + /auth/verify-email; in dev mode the verification code is printed in the server logs)
-INSTA_API_URL=http://localhost:8899 insta login --email you@x.com --password ...
-```
+## Contributing
 
-## OAuth browser login
+Dev loop, architecture, cross-compilation and the release process are in
+[CONTRIBUTING.md](CONTRIBUTING.md). Issues and pull requests are welcome.
 
-```bash
-insta login --oauth github          # or google
-# CLI starts a local loopback port → opens the browser to /auth/cli/authorize → Better Auth runs provider authorization →
-# the platform reads the session cookie to exchange for a bearer token → carries it back to the loopback port → CLI stores it as login state
-```
+## License
 
-> The platform must have an OAuth app configured for that provider (`GITHUB_OAUTH_CLIENT_ID/SECRET` or `GOOGLE_*`),
-> and the app's callback URL must be **`{INSTA_API_BASE_URL}/api/auth/callback/<provider>`** (not the loopback address).
-
-> `metrics` / `logs` / `usage` are supported (usage is aggregated at the collection layer). Multiple compute services (`services add compute`) and `services scale/upgrade` are implemented; image building will come later. Multiple postgres/storage services (>1 per project) are currently constrained by the credential seam and remain future work.
+Apache 2.0. See [LICENSE](LICENSE).
