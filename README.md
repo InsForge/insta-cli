@@ -165,7 +165,7 @@ build never reaches a production installer.
 
 | Command | What it covers |
 |---|---|
-| `insta login` · `logout` · `status` | Email/password, or `--oauth github\|google`; tokens auto-refresh |
+| `insta login` · `logout` · `status` | Email/password or `--oauth github\|google`; `status` shows the environment, login and linked project/branch |
 | `insta env` | `show` · `use <prod\|staging>` |
 | `insta setup` | `agent` — install the skill and register MCP for every coding agent |
 | `insta mcp` | `install` — register the remote MCP server only |

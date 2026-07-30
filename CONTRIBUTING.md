@@ -19,6 +19,9 @@ Run `npm run typecheck && npm test` before every commit.
 
 ## Architecture
 
+Node 18 or newer, TypeScript compiled to ESM, [commander](https://github.com/tj/commander.js)
+for the command surface. Every command wraps one control-plane API call.
+
 | Path | Responsibility |
 |---|---|
 | `src/index.ts` | The commander program; registers every command |
