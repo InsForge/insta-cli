@@ -1,4 +1,4 @@
-# insta
+# insta-cli
 
 [![npm](https://img.shields.io/npm/v/insta?color=blue)](https://www.npmjs.com/package/insta)
 [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg)](LICENSE)
