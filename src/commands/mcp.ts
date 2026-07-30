@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { info } from '../util.js'
-import { DEFAULT_MCP_URL, MCP_SERVER_NAME, registerMcp } from './setup.js'
+import { MCP_SERVER_NAME, registerMcp, resolveMcpTarget } from './setup.js'
 
 export const MCP_AGENT_TARGETS = ['cursor', 'codex', 'opencode', 'copilot', 'factory-droid'] as const
 export type McpAgent = (typeof MCP_AGENT_TARGETS)[number]
@@ -31,7 +31,7 @@ export function detectAgents(home: string): McpAgent[] {
 
 // Merge our entry into existing JSON config. Returns null (skip, leave file alone) when the
 // existing content isn't valid JSON — never clobber a config we can't parse.
-export function renderJsonConfig(slug: McpAgent, existing: string | null, url: string): string | null {
+export function renderJsonConfig(slug: McpAgent, existing: string | null, url: string, name: string = MCP_SERVER_NAME): string | null {
   let root: any = {}
   if (existing && existing.trim()) {
     try { root = JSON.parse(existing) } catch { return null }
@@ -39,34 +39,34 @@ export function renderJsonConfig(slug: McpAgent, existing: string | null, url: s
   }
   if (slug === 'opencode') {
     // OpenCode: `mcp` key, `type: "remote"` schema (docs.opencode.ai).
-    root.mcp = { ...(root.mcp ?? {}), [MCP_SERVER_NAME]: { type: 'remote', url, enabled: true } }
+    root.mcp = { ...(root.mcp ?? {}), [name]: { type: 'remote', url, enabled: true } }
     root.$schema ??= 'https://opencode.ai/config.json'
   } else {
     const entry =
       slug === 'cursor' ? { url } // Cursor auto-detects HTTP from `url`
       : slug === 'copilot' ? { type: 'http', url, tools: ['*'] }
       : { type: 'http', url, disabled: false } // factory-droid
-    root.mcpServers = { ...(root.mcpServers ?? {}), [MCP_SERVER_NAME]: entry }
+    root.mcpServers = { ...(root.mcpServers ?? {}), [name]: entry }
   }
   return JSON.stringify(root, null, 2) + '\n'
 }
 
 // Codex config is TOML. Appending a complete `[mcp_servers.<name>]` table is always valid at
 // EOF, so we avoid a TOML parser: string-detect for idempotency, append for install.
-export function renderCodexConfig(existing: string | null, url: string): string | null {
+export function renderCodexConfig(existing: string | null, url: string, name: string = MCP_SERVER_NAME): string | null {
   const base = existing ?? ''
-  if (base.includes(`[mcp_servers.${MCP_SERVER_NAME}]`)) return null // already configured
+  if (base.includes(`[mcp_servers.${name}]`)) return null // already configured
   const sep = base.length && !base.endsWith('\n') ? '\n' : ''
-  return `${base}${sep}\n[mcp_servers.${MCP_SERVER_NAME}]\nurl = "${url}"\n`
+  return `${base}${sep}\n[mcp_servers.${name}]\nurl = "${url}"\n`
 }
 
 // Install for one agent. Returns 'installed' | 'already' | 'skipped' (unparseable config).
-export async function installFor(slug: McpAgent, home: string, url: string): Promise<'installed' | 'already' | 'skipped'> {
+export async function installFor(slug: McpAgent, home: string, url: string, name: string = MCP_SERVER_NAME): Promise<'installed' | 'already' | 'skipped'> {
   const file = configPath(slug, home)
   let existing: string | null = null
   try { existing = await fs.readFile(file, 'utf8') } catch { existing = null }
   if (slug === 'codex') {
-    const next = renderCodexConfig(existing, url)
+    const next = renderCodexConfig(existing, url, name)
     if (next === null) return 'already'
     await fs.mkdir(path.dirname(file), { recursive: true })
     await fs.writeFile(file, next)
@@ -75,11 +75,11 @@ export async function installFor(slug: McpAgent, home: string, url: string): Pro
   if (existing) {
     try {
       const root = JSON.parse(existing)
-      const entry = slug === 'opencode' ? root?.mcp?.[MCP_SERVER_NAME] : root?.mcpServers?.[MCP_SERVER_NAME]
+      const entry = slug === 'opencode' ? root?.mcp?.[name] : root?.mcpServers?.[name]
       if (entry) return 'already'
     } catch { /* fall through to renderJsonConfig, which refuses to clobber */ }
   }
-  const next = renderJsonConfig(slug, existing, url)
+  const next = renderJsonConfig(slug, existing, url, name)
   if (next === null) return 'skipped'
   await fs.mkdir(path.dirname(file), { recursive: true })
   await fs.writeFile(file, next)
@@ -93,7 +93,7 @@ const AGENT_LABELS: Record<McpAgent, string> = {
 // Configure every detected config-file agent (or one forced via `agent`). Returns the labels of
 // agents now configured (installed or already present) for the caller's summary line.
 export async function installAgentConfigs(agent?: string, home: string = os.homedir()): Promise<string[]> {
-  const url = process.env.INSTA_MCP_URL || DEFAULT_MCP_URL
+  const { name, url } = await resolveMcpTarget()
   const targets = agent
     ? (MCP_AGENT_TARGETS as readonly string[]).includes(agent) ? [agent as McpAgent] : []
     : detectAgents(home)
@@ -103,8 +103,8 @@ export async function installAgentConfigs(agent?: string, home: string = os.home
   }
   const done: string[] = []
   for (const slug of targets) {
-    const result = await installFor(slug, home, url)
-    if (result === 'skipped') info(`  ${AGENT_LABELS[slug]}: existing config at ${configPath(slug, home)} isn't valid JSON — add ${MCP_SERVER_NAME} manually`)
+    const result = await installFor(slug, home, url, name)
+    if (result === 'skipped') info(`  ${AGENT_LABELS[slug]}: existing config at ${configPath(slug, home)} isn't valid JSON — add ${name} manually`)
     else done.push(AGENT_LABELS[slug])
   }
   return done

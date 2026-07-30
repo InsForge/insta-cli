@@ -16,6 +16,26 @@ curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh 
 # Windows: download insta-windows-x64.exe from the releases page.
 ```
 
+**Agent one-liner** (CLI + agent skills + MCP registration, non-interactive):
+
+```bash
+curl -fsSL agents.instacloud.com | sh            # production
+curl -fsSL agents.staging.instacloud.com | sh    # staging
+```
+
+Each installs a complete stack for its environment — CLI build, control plane, MCP registration and
+skill text all match. See [Environments](#environments).
+
+> The staging host serves this repo's `agents-staging.sh` from `main`, so it returns 404 until that
+> file is on `main`. Equivalent, and works regardless:
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh -s -- --agents --staging -y
+> ```
+>
+> If the environment can't be applied (a CLI predating `insta env`), the installer exits non-zero
+> rather than silently leaving you on production.
+
 **Build from source (requires node):**
 
 ```bash
@@ -52,11 +72,48 @@ insta deploy --image <registry/img>  # deploy a container image to the current b
 insta status                         # login state + linked project/branch
 ```
 
+## Environments
+
+`prod` and `staging` are **separate deployments** — different regions, different databases,
+different auth. A session from one cannot authenticate against the other, so switching drops the
+stored session and you log in again.
+
+| | `prod` (default) | `staging` |
+|---|---|---|
+| control plane | `api.instacloud.com` (us-east-2) | `api.staging.instacloud.com` (us-west-1) |
+| MCP server | `mcp.instacloud.com/mcp` | `mcp.staging.instacloud.com/mcp` |
+| registers as | `insta-cloud` | `insta-cloud-staging` |
+| agent skills | `InsForge/insta-skills` | `InsForge/insta-skills@devel` |
+| CLI channel | latest stable release | newest prerelease (`v*-rc.N`), else stable |
+
+```bash
+insta env                      # show the current environment and everything derived from it
+insta env use staging          # switch (persisted to ~/.insta/config.json)
+insta login --env staging --oauth github
+```
+
+Control plane, MCP host **and** skill source are all resolved from one switch, so a machine can
+never end up with its CLI on staging while its agents talk to prod and read prod's skill text.
+Distinct MCP registration names mean both environments can be installed side by side.
+
+Resolution order, most specific first:
+
+1. `INSTA_API_URL` — a literal URL. The only way to reach a host no environment name covers
+   (`insta-oss` on localhost, a preview deployment). `INSTA_MCP_URL` and `INSTA_SKILLS_REPO` do the
+   same for the MCP host and the skill source.
+2. `INSTA_ENV` — `prod` | `staging`. An unrecognised value is an error, never a silent fallback.
+3. the persisted `apiUrl` in `~/.insta/config.json`.
+4. `prod`.
+
+Prereleases never take the `latest` GitHub release or the `latest` npm dist-tag — they publish with
+`--prerelease` and under npm's `next` tag — so a staging build can't reach production installers.
+
 ## Commands
 
 | Command | Description |
 |------|------|
-| `insta login [--email --password --api-url]` | Log in (email/password; tokens auto-refresh) |
+| `insta login [--email --password --api-url --env]` | Log in (email/password; tokens auto-refresh) |
+| `insta env [--json]` / `insta env use <prod\|staging>` | Show or switch deployment environment |
 | `insta login --oauth <github\|google>` | Browser OAuth login (starts a local loopback port; the token is carried back automatically after browser authorization) |
 | `insta logout` / `insta status [--json]` | Log out / show status |
 | `insta org list [--json]` / `org create <name>` | Organizations (each user may own only one free org) |

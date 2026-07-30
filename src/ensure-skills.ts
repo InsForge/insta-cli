@@ -7,6 +7,8 @@
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { resolveEnv } from './config.js'
+import { DEFAULT_ENV, ENVS } from './env.js'
 
 // Where `npx skills add` drops skills for the agents we pin below: Claude Code → .claude/skills/,
 // Codex → .agents/skills/ (.github/skills/ is the third well-known dir). These are regenerable
@@ -34,8 +36,12 @@ const defaultRunner: Runner = (cmd, args, inherit = false) =>
 // name the exact skills (-s …) so there's no skill picker; -y to skip the scope/confirm prompt;
 // --copy to write real files (not symlinks into a transient npx cache).
 const AGENT_FLAGS = ['-a', 'claude-code', '-a', 'codex', '-y', '--copy']
-const SKILLS: Array<{ label: string; args: string[] }> = [
-  { label: 'insta', args: ['skills', 'add', 'InsForge/insta-skills', '-s', 'insta', ...AGENT_FLAGS] },
+
+// `instaSpec` is the insta skill source for the resolved environment (`owner/repo[@ref]`), so a
+// project created against staging gets the staging skill text. The third-party stack skills are
+// environment-independent — they document Neon/Tigris/Better Auth, not our control plane.
+const skillTargets = (instaSpec: string): Array<{ label: string; args: string[] }> => [
+  { label: 'insta', args: ['skills', 'add', instaSpec, '-s', 'insta', ...AGENT_FLAGS] },
   { label: 'neon-postgres', args: ['skills', 'add', 'neondatabase/agent-skills', '-s', 'neon-postgres', ...AGENT_FLAGS] },
   { label: 'tigris', args: ['skills', 'add', 'tigrisdata/skills',
     '-s', 'tigris-object-operations', '-s', 'file-storage', '-s', 'tigris-sdk-guide',
@@ -47,6 +53,9 @@ const SKILLS: Array<{ label: string; args: string[] }> = [
     '-s', 'better-auth-security-best-practices', ...AGENT_FLAGS] },
 ]
 
+/** Production's targets — kept for tests and as the fallback when no env resolves. */
+const SKILLS = skillTargets(ENVS[DEFAULT_ENV].skills)
+
 type Deps = { cwd: string; run?: Runner; print?: (s: string) => void }
 
 // Install all related skills. Production omits `run`/`print` → the real spawn + stdout; tests inject
@@ -56,8 +65,16 @@ export async function installSkills(deps: Deps): Promise<void> {
   const run = deps.run ?? defaultRunner
   const print = deps.print ?? ((s: string) => process.stdout.write(s + '\n'))
   try {
+    // Resolve once per call so the insta skill follows this machine's environment. Falls back to
+    // production's targets if anything about the resolve fails — a bad read must not skip the
+    // whole best-effort install.
+    let targets = SKILLS
+    try {
+      const { skills } = await resolveEnv()
+      targets = skillTargets(skills)
+    } catch { /* keep production defaults */ }
     print('  installing related agent skills (insta, neon-postgres, tigris, better-auth) …')
-    for (const s of SKILLS) {
+    for (const s of targets) {
       // Don't stream: the `skills` tool's clack UI (clone spinner, banners) is noise. Run it
       // silent (stdio 'ignore') and let the per-skill ✓/failed line below be the clean output —
       // it appears as each skill finishes, so there's still live progress. (Also avoids the

@@ -8,6 +8,8 @@
 import { spawn } from 'node:child_process'
 import os from 'node:os'
 import { ApiClient } from '../api.js'
+import { resolveEnv } from '../config.js'
+import { DEFAULT_ENV, ENVS, mcpServerName } from '../env.js'
 import { info } from '../util.js'
 import { installAgentConfigs } from './mcp.js'
 
@@ -95,12 +97,30 @@ const defaultRunner: Runner = (cmd, args) =>
 
 // -g = user-level (machine-global); -a '*' = every agent dir the skills tool supports
 // (Claude Code, Codex, Cursor, OpenCode, Copilot, …); --copy = real files, not cache symlinks.
-export const SETUP_ARGS = ['skills', 'add', 'InsForge/insta-skills', '-s', 'insta', '-a', '*', '-g', '-y', '--copy']
+// `spec` is the skill source for the resolved environment (`owner/repo` or `owner/repo@ref`), so a
+// staging install reads the staging skill text rather than what's published on main.
+export const setupArgs = (spec: string): string[] =>
+  ['skills', 'add', spec, '-s', 'insta', '-a', '*', '-g', '-y', '--copy']
+
+/** Production's args. Kept as a named export because it is the installed-base default and is
+ *  asserted directly by tests; runtime goes through `setupArgs(resolveEnv().skills)`. */
+export const SETUP_ARGS = setupArgs(ENVS[DEFAULT_ENV].skills)
 
 // ---- remote MCP registration ----
 
-export const MCP_SERVER_NAME = 'insta-cloud'
-export const DEFAULT_MCP_URL = 'https://mcp.instacloud.com/mcp'
+// Prod's name/URL, kept as named exports because they are the installed-base defaults and are
+// asserted directly by tests. Everything at runtime goes through `resolveMcpTarget()` instead, so
+// a staging install registers staging's MCP server under its own name rather than reusing prod's.
+export const MCP_SERVER_NAME = mcpServerName(DEFAULT_ENV)
+export const DEFAULT_MCP_URL = ENVS[DEFAULT_ENV].mcp
+
+/** The MCP server this machine should register, derived from the SAME resolved environment as the
+ *  control-plane API. Returning name and url together is deliberate: they must never be chosen
+ *  independently, or a staging machine ends up registering prod's URL under prod's name. */
+export async function resolveMcpTarget(): Promise<{ name: string; url: string }> {
+  const { env, mcpUrl } = await resolveEnv()
+  return { name: mcpServerName(env ?? DEFAULT_ENV), url: mcpUrl }
+}
 
 // Headless fallback only (`--mcp-token`): the MCP config outlives the CLI's refreshable
 // session, so a static-header registration needs a durable `insta_` API token — minted once,
@@ -124,13 +144,13 @@ const defaultMinter: TokenMinter = async () => {
 // Idempotent — an existing registration is left alone. Best-effort: the skill install is the
 // primary outcome; agents without an MCP registry are covered by the skill alone.
 export async function registerMcp(run: Runner = defaultRunner, mint: TokenMinter = defaultMinter, useToken = false): Promise<void> {
-  const url = process.env.INSTA_MCP_URL || DEFAULT_MCP_URL
+  const { name, url } = await resolveMcpTarget()
   if (!(await run('claude', ['--version'])).ok) return // no Claude Code on this machine
-  if ((await run('claude', ['mcp', 'get', MCP_SERVER_NAME])).ok) {
-    info(`✓ MCP — ${MCP_SERVER_NAME} already registered with Claude Code`)
+  if ((await run('claude', ['mcp', 'get', name])).ok) {
+    info(`✓ MCP — ${name} already registered with Claude Code`)
     return
   }
-  const args = ['mcp', 'add', '--transport', 'http', '--scope', 'user', MCP_SERVER_NAME, url]
+  const args = ['mcp', 'add', '--transport', 'http', '--scope', 'user', name, url]
   if (useToken) {
     const token = await mint()
     if (!token) {
@@ -141,10 +161,10 @@ export async function registerMcp(run: Runner = defaultRunner, mint: TokenMinter
   }
   const res = await run('claude', args)
   if (res.ok) {
-    info(`✓ MCP — ${MCP_SERVER_NAME} registered with Claude Code (\`claude mcp list\` to verify)`)
+    info(`✓ MCP — ${name} registered with Claude Code (\`claude mcp list\` to verify)`)
     if (!useToken) info('  first use: run `/mcp` in Claude Code and authorize in the browser (headless machines: `insta setup agent --mcp-token`)')
   } else {
-    info(`  MCP registration failed — add manually:\n    claude mcp add --transport http ${MCP_SERVER_NAME} ${url}`)
+    info(`  MCP registration failed — add manually:\n    claude mcp add --transport http ${name} ${url}`)
   }
 }
 
@@ -157,11 +177,17 @@ export async function setupAgent(
   if (!opts.yes && !process.stdout.isTTY) {
     info('non-interactive shell — assuming -y')
   }
-  info('setting up coding-agent skills …')
-  const res = await run('npx', SETUP_ARGS)
+  // One resolve for the whole step, so the skills and the MCP registration below cannot disagree
+  // about which environment this machine belongs to.
+  const { env, skills } = await resolveEnv()
+  const args = setupArgs(skills)
+  info(env && env !== DEFAULT_ENV
+    ? `setting up coding-agent skills (${env}) …`
+    : 'setting up coding-agent skills …')
+  const res = await run('npx', args)
   if (!res.ok) {
     info('  skill install failed — install manually with:')
-    info('    npx skills add InsForge/insta-skills -s insta -a "*" -g -y --copy')
+    info(`    npx ${args.map((a) => (a === '*' ? '"*"' : a)).join(' ')}`)
     // Surface the REAL error: the captured tail, minus the expected no-global-support noise.
     const tail = (res.output ?? '')
       .split('\n')

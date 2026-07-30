@@ -2,6 +2,7 @@
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { DEFAULT_ENV, ENVS, envForApiUrl, envFromEnvVar, normalizeUrl, type EnvName } from './env.js'
 
 const GLOBAL_DIR = join(homedir(), '.insta')
 const GLOBAL_FILE = join(GLOBAL_DIR, 'config.json')
@@ -21,17 +22,80 @@ export type ProjectConfig = { projectId: string; orgId: string; branch: string }
 // The cloud API default. Uses the instacloud.com brand domain (matches the agents.instacloud.com
 // onboarding), NOT the legacy beta-api.insta.insforge.dev host — same backend, branded domain.
 // Only affects fresh installs: a persisted apiUrl (from a prior login) or INSTA_API_URL wins below.
-const DEFAULT_API = 'https://api.instacloud.com'
+const DEFAULT_API = ENVS[DEFAULT_ENV].api
 
 export async function readGlobal(): Promise<GlobalConfig> {
-  // INSTA_API_URL overrides the persisted apiUrl, not just the default — otherwise the
-  // env var is silently ignored as soon as any login has written a config file.
+  // Precedence, most explicit first:
+  //   1. INSTA_API_URL  — a literal URL. Overrides the persisted apiUrl, not just the default,
+  //      otherwise the env var is silently ignored as soon as any login has written a config file.
+  //      It also outranks INSTA_ENV: a hand-written URL is the more specific instruction, and it
+  //      is the only way to reach a host no environment name covers (insta-oss, a preview).
+  //   2. INSTA_ENV      — a named environment (see env.ts), resolved to its api host.
+  //   3. the persisted apiUrl, written by `insta login --env|--api-url` or `insta env use`.
+  //   4. DEFAULT_API.
   const envApi = process.env.INSTA_API_URL
+  const named = envFromEnvVar()
+  const override = envApi ?? (named ? ENVS[named].api : undefined)
   try {
     const parsed = JSON.parse(await readFile(GLOBAL_FILE, 'utf8')) as GlobalConfig
-    return { ...parsed, apiUrl: envApi ?? parsed.apiUrl ?? DEFAULT_API }
+    const persisted = parsed.apiUrl ?? DEFAULT_API
+    // An override that points at a DIFFERENT deployment than the stored session was minted for
+    // must not carry that session along. `env use` already drops it on an explicit switch; without
+    // this, `INSTA_ENV=staging insta …` on a prod-logged-in machine sends prod's bearer to staging
+    // and then — on the 401 — POSTs prod's REFRESH token to staging's /auth/refresh (api.ts), which
+    // is the cross-deployment credential leak env.ts's header calls out as never allowed.
+    //
+    // In-memory only: the file keeps the real login, so unsetting the override restores it. A
+    // custom host (insta-oss, a preview) is treated the same way — its session is equally foreign.
+    if (override && normalizeUrl(override) !== normalizeUrl(persisted)) {
+      const scrubbed: GlobalConfig = { ...parsed, apiUrl: override }
+      delete scrubbed.accessToken
+      delete scrubbed.refreshToken
+      delete scrubbed.user
+      return scrubbed
+    }
+    return { ...parsed, apiUrl: override ?? persisted }
   } catch {
-    return { apiUrl: envApi ?? DEFAULT_API }
+    return { apiUrl: override ?? DEFAULT_API }
+  }
+}
+
+/** The environment the CLI is currently pointed at, plus everything derived from it. `env` is null
+ *  when apiUrl is a custom host (insta-oss, a preview deployment) — deliberate, and left alone.
+ *
+ *  API host, MCP host, and skill source are resolved from ONE environment on purpose: the failure
+ *  mode of picking them independently is silent (a machine whose CLI talks to staging while its
+ *  agents are wired to prod and reading prod's skill text). */
+export async function resolveEnv(): Promise<{
+  apiUrl: string
+  env: EnvName | null
+  mcpUrl: string
+  skills: string
+}> {
+  const { apiUrl } = await readGlobal()
+  const env = envForApiUrl(apiUrl)
+  const hosts = ENVS[env ?? DEFAULT_ENV]
+  // Each single-purpose env var still wins outright, for a self-hosted MCP / a tunnel / a skills
+  // fork. A custom apiUrl with none of them set falls back to the default environment, since
+  // there is nothing better to guess and it preserves today's behaviour.
+  const mcpUrl = process.env.INSTA_MCP_URL || hosts.mcp
+  const skills = process.env.INSTA_SKILLS_REPO || hosts.skills
+  return { apiUrl, env, mcpUrl, skills }
+}
+
+/** The config exactly as stored: no env-var overrides, no session scrubbing.
+ *
+ *  `env use` must read this rather than `readGlobal()`. With INSTA_ENV set, `readGlobal()` already
+ *  reports the override's host, so `env use <that same env>` would look like a no-op, print
+ *  "already on X" and never write the file — leaving the next process (without the override in its
+ *  environment) still pointed at the old one. Deciding "is this a real switch?" has to be done
+ *  against what is persisted. */
+export async function readPersistedGlobal(): Promise<GlobalConfig> {
+  try {
+    const parsed = JSON.parse(await readFile(GLOBAL_FILE, 'utf8')) as GlobalConfig
+    return { ...parsed, apiUrl: parsed.apiUrl ?? DEFAULT_API }
+  } catch {
+    return { apiUrl: DEFAULT_API }
   }
 }
 

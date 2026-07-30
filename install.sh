@@ -9,22 +9,47 @@
 #   (equivalent to piping this script with:  sh -s -- --agents -y)
 #
 # Flags:
-#   --agents   after installing, run `insta setup agent` (skills for Claude Code/Codex/Cursor/…)
-#   -y         non-interactive
+#   --agents       after installing, run `insta setup agent` (skills for Claude Code/Codex/Cursor/…)
+#   -y             non-interactive
+#   --staging      target the staging deployment (shorthand for --env staging)
+#   --env <name>   target a named deployment: prod (default) | staging
+#
+# Release channels:
+#   prod (default)  the latest stable release
+#   staging         the newest PRERELEASE (v*-rc.N etc), falling back to stable if none exists
+#   Either way, INSTA_VERSION pins an exact tag and always wins.
 #
 # Options (env):
-#   INSTA_VERSION      release tag to install (e.g. v0.1.0); default: latest
+#   INSTA_VERSION      release tag to install (e.g. v0.1.0); default: the channel's newest
 #   INSTA_INSTALL_DIR  install directory; default: $HOME/.insta/bin
+#   INSTA_ENV          same as --env; the flag wins if both are given
+#   INSTA_SKILLS_REPO  override the agent-skill source (default: per-environment, see src/env.ts)
 set -eu
 
 AGENTS=0
 YES=0
-for arg in "$@"; do
-  case "$arg" in
+# Environment is PERSISTED via `insta env use` below rather than exported, because the canonical
+# install is a pipe and a piped script cannot set variables in the parent shell — an exported
+# INSTA_ENV would vanish before the user's next `insta` command.
+ENV_NAME="${INSTA_ENV:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
     --agents) AGENTS=1 ;;
     -y|--yes) YES=1 ;;
+    --staging) ENV_NAME=staging ;;
+    --env) shift; [ $# -gt 0 ] || { echo "error: --env needs a value (prod|staging)" >&2; exit 1; }; ENV_NAME="$1" ;;
+    # `--env=` (empty) must be rejected like a bare `--env`, not silently treated as "no environment
+    # requested" — otherwise a malformed selection falls through to the default instead of erroring.
+    --env=) echo "error: --env needs a value (prod|staging)" >&2; exit 1 ;;
+    --env=*) ENV_NAME="${1#--env=}" ;;
   esac
+  shift
 done
+
+case "$ENV_NAME" in
+  ''|prod|staging) ;;
+  *) echo "error: unknown environment '$ENV_NAME' (expected prod or staging)" >&2; exit 1 ;;
+esac
 
 REPO="InsForge/insta-cli"
 BIN="insta"
@@ -32,11 +57,42 @@ INSTALL_DIR="${INSTA_INSTALL_DIR:-$HOME/.insta/bin}"
 
 command -v curl >/dev/null 2>&1 || { echo "error: curl is required" >&2; exit 1; }
 
-# ---- already current? (skip the download; Railway-style existing-install awareness) ----
+# ---- release channel resolution ----
 resolve_latest() {
   curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
     | sed -n 's/.*"tag_name": *"\(v[^"]*\)".*/\1/p' | head -1
 }
+
+# Newest PRERELEASE tag = the staging channel. /releases/latest deliberately excludes prereleases,
+# so the list endpoint is the only way to find them. Within a release object GitHub emits tag_name
+# before draft/prerelease, so we remember the tag and act when the flags arrive; a draft clears it
+# (drafts have no downloadable assets).
+# per_page=100 (the API maximum) rather than the default 30: with 30, once thirty newer stable
+# releases pile up the newest prerelease slides onto page 2 and staging would silently install
+# stable. 100 is a single request and covers any realistic release history; INSTA_VERSION remains
+# the escape hatch beyond that.
+resolve_prerelease() {
+  curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=100" 2>/dev/null | awk '
+    /"tag_name":/          { if (match($0, /v[^"]+/)) tag = substr($0, RSTART, RLENGTH) }
+    /"draft": *true/       { tag = "" }
+    /"prerelease": *true/  { if (tag != "") { print tag; exit } }'
+}
+
+# Staging tracks the prerelease channel so it can run a build that has not shipped to production.
+# An explicit INSTA_VERSION always wins. If no prerelease exists yet, say so and fall back to
+# stable rather than failing — staging is still perfectly usable on the released binary, since the
+# environment split is about which control plane the CLI talks to.
+if [ "$ENV_NAME" = "staging" ] && [ -z "${INSTA_VERSION:-}" ]; then
+  pre_tag="$(resolve_prerelease || true)"
+  if [ -n "$pre_tag" ]; then
+    INSTA_VERSION="$pre_tag"
+    echo "staging channel: prerelease $pre_tag"
+  else
+    echo "note: no prerelease published yet — installing the latest stable build (staging control plane either way)"
+  fi
+fi
+
+# ---- already current? (skip the download; Railway-style existing-install awareness) ----
 if [ -x "$INSTALL_DIR/$BIN" ] && [ -z "${INSTA_VERSION:-}" ]; then
   current="v$("$INSTALL_DIR/$BIN" --version 2>/dev/null | tail -1)"
   latest="$(resolve_latest || true)"
@@ -143,6 +199,26 @@ if [ "$ON_PATH" != "1" ]; then
   done
 fi
 
+# ---- environment (--staging / --env) ----
+# MUST run before `setup agent`: that step registers the MCP server, and it derives the MCP host and
+# registration name from the persisted environment. Switching afterwards would leave the machine's
+# agents pointed at production's MCP server while the CLI talked to staging.
+if [ -n "$ENV_NAME" ]; then
+  echo
+  if ! "$INSTALL_DIR/$BIN" env use "$ENV_NAME"; then
+    # HARD FAIL, deliberately. The environment was requested and could not be applied, so this
+    # install is still pointed at PRODUCTION. Carrying on would be the worst outcome: the canonical
+    # usage is `curl … | sh && insta project create`, often run unattended by an agent, which would
+    # then provision real production infrastructure believing it was staging. Exiting here also
+    # stops `setup agent` from wiring this machine's agents to the wrong environment.
+    echo "error: could not select environment '$ENV_NAME' — this install is still pointed at PRODUCTION." >&2
+    echo "  The installed CLI ($("$INSTALL_DIR/$BIN" --version 2>/dev/null | tail -1)) may predate \`insta env\` (needs >= 0.0.23)." >&2
+    echo "  Upgrade, then retry:  insta upgrade && insta env use $ENV_NAME" >&2
+    exit 1
+  fi
+  ENV_APPLIED=1
+fi
+
 # ---- agent setup (--agents) ----
 if [ "$AGENTS" = "1" ]; then
   echo
@@ -175,6 +251,12 @@ fi
 
 # ---- next steps (the 3-command wow: real infra, then a full isolated clone of it) ----
 echo
+# Only claim persistence when `env use` actually succeeded (it exits above if not, so this is
+# belt-and-braces against the banner ever outliving the step it describes).
+if [ "$ENV_NAME" = "staging" ] && [ "${ENV_APPLIED:-0}" = "1" ]; then
+  echo "Environment: staging (api.staging.instacloud.com) — persisted; \`insta env use prod\` to switch back."
+  echo
+fi
 echo "Next steps:"
 echo "  insta login --oauth github     # connect to the cloud (or run insta-oss locally to skip)"
 echo "  insta project create demo      # postgres + storage + compute, provisioned in one shot"
