@@ -55,6 +55,25 @@ opt-in, so you add only what you need. `secrets` writes the current branch's cre
 `./.env`. `deploy .` builds the directory remotely and ships it to the branch's compute
 service; it needs a `Dockerfile`, but no local Docker.
 
+## Authentication
+
+```bash
+insta login --email you@example.com          # password from $INSTA_PASSWORD or a prompt
+insta login --oauth github                   # or google, through the browser
+insta login --env staging --oauth github     # log in to a specific deployment
+```
+
+Tokens are stored in `~/.insta/config.json` and refresh automatically.
+
+`--oauth` starts a loopback listener on `127.0.0.1`, opens the browser at the control
+plane's `/auth/cli/authorize`, and receives the token back on that listener once the
+provider has authorized you. Nothing is pasted by hand.
+
+If you operate your own control plane, the provider's OAuth app needs
+`GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` (or the `GOOGLE_*` equivalents), and
+its callback URL must be `{INSTA_API_BASE_URL}/api/auth/callback/<provider>` — the control
+plane's address, not the CLI's loopback address.
+
 ## How it works
 
 ### Services are branch-scoped
@@ -64,7 +83,7 @@ set. `insta branch create feature-x` forks the parent's services: a Neon branch 
 Postgres, a copy-on-write bucket per storage, a clone of every compute service. From there
 the two branches diverge independently. A project is capped at 10 branches.
 
-### Credentials come from a seam, not a file you maintain
+### Credentials come from the secret seam, not a file you maintain
 
 `insta secrets` fetches the current branch's bundle and writes `./.env`. `insta run <cmd>`
 does the same without touching disk, injecting the bundle into the child process only.
@@ -113,6 +132,19 @@ To install against staging directly:
 ```bash
 curl -fsSL agents.staging.instacloud.com | sh
 ```
+
+That host is a CloudFront cache, so after a change to the installer it can serve the
+previous copy for up to about a day. This form is equivalent and always current:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh -s -- --agents --staging -y
+```
+
+If the environment cannot be applied — an installed CLI older than 0.0.23 has no `insta
+env` — the installer exits non-zero and says so, rather than leaving you silently pointed
+at production. The canonical usage is `curl … | sh && insta project create`, often run
+unattended by an agent, and a silent fallback there would provision real production
+infrastructure.
 
 Resolution order, most specific first:
 

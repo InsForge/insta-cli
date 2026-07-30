@@ -87,15 +87,29 @@ publish a prerelease to `latest`.
 ## Running against a local control plane
 
 The CLI talks to whatever `INSTA_API_URL` points at, and that variable outranks the
-persisted config:
+persisted config, so a local control plane gives you an end-to-end loop without touching
+cloud infrastructure.
+
+The platform has a `dev:fake` mode that swaps in fake provider adapters, so it needs no
+Neon, Fly or Tigris credentials:
 
 ```bash
-INSTA_API_URL=http://localhost:8899 npx tsx src/index.ts status
+# 1. Postgres for the control plane itself
+docker run -d --name pg \
+  -e POSTGRES_PASSWORD=insta -e POSTGRES_DB=insta_dev -p 55432:5432 postgres:16-alpine
+
+# 2. The platform dev server (separate repository)
+DATABASE_URL='postgres://postgres:insta@localhost:55432/insta_dev' PORT=8899 npm run dev:fake
+
+# 3. Point the CLI at it
+INSTA_API_URL=http://localhost:8899 npx tsx src/index.ts login --email you@example.com
 ```
 
-Pointing it at a locally running control plane (`insta-oss`, or the platform's dev server)
-gives you an end-to-end loop without touching cloud infrastructure. Both of those live in
-separate repositories.
+Signup goes through `/auth/signup` and `/auth/verify-email`. In dev mode the verification
+code is printed to the server log rather than emailed.
+
+`insta-oss` runs the same API surface as a local daemon and works the same way. Both it and
+the platform live in separate repositories.
 
 ## The onboarding domain
 
