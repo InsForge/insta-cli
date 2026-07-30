@@ -9,22 +9,38 @@
 #   (equivalent to piping this script with:  sh -s -- --agents -y)
 #
 # Flags:
-#   --agents   after installing, run `insta setup agent` (skills for Claude Code/Codex/Cursor/…)
-#   -y         non-interactive
+#   --agents       after installing, run `insta setup agent` (skills for Claude Code/Codex/Cursor/…)
+#   -y             non-interactive
+#   --staging      target the staging deployment (shorthand for --env staging)
+#   --env <name>   target a named deployment: prod (default) | staging
 #
 # Options (env):
 #   INSTA_VERSION      release tag to install (e.g. v0.1.0); default: latest
 #   INSTA_INSTALL_DIR  install directory; default: $HOME/.insta/bin
+#   INSTA_ENV          same as --env; the flag wins if both are given
 set -eu
 
 AGENTS=0
 YES=0
-for arg in "$@"; do
-  case "$arg" in
+# Environment is PERSISTED via `insta env use` below rather than exported, because the canonical
+# install is a pipe and a piped script cannot set variables in the parent shell — an exported
+# INSTA_ENV would vanish before the user's next `insta` command.
+ENV_NAME="${INSTA_ENV:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
     --agents) AGENTS=1 ;;
     -y|--yes) YES=1 ;;
+    --staging) ENV_NAME=staging ;;
+    --env) shift; [ $# -gt 0 ] || { echo "error: --env needs a value (prod|staging)" >&2; exit 1; }; ENV_NAME="$1" ;;
+    --env=*) ENV_NAME="${1#--env=}" ;;
   esac
+  shift
 done
+
+case "$ENV_NAME" in
+  ''|prod|staging) ;;
+  *) echo "error: unknown environment '$ENV_NAME' (expected prod or staging)" >&2; exit 1 ;;
+esac
 
 REPO="InsForge/insta-cli"
 BIN="insta"
@@ -143,6 +159,16 @@ if [ "$ON_PATH" != "1" ]; then
   done
 fi
 
+# ---- environment (--staging / --env) ----
+# MUST run before `setup agent`: that step registers the MCP server, and it derives the MCP host and
+# registration name from the persisted environment. Switching afterwards would leave the machine's
+# agents pointed at production's MCP server while the CLI talked to staging.
+if [ -n "$ENV_NAME" ]; then
+  echo
+  "$INSTALL_DIR/$BIN" env use "$ENV_NAME" \
+    || echo "warn: could not select environment '$ENV_NAME' — run: insta env use $ENV_NAME"
+fi
+
 # ---- agent setup (--agents) ----
 if [ "$AGENTS" = "1" ]; then
   echo
@@ -175,6 +201,10 @@ fi
 
 # ---- next steps (the 3-command wow: real infra, then a full isolated clone of it) ----
 echo
+if [ "$ENV_NAME" = "staging" ]; then
+  echo "Environment: staging (api.staging.instacloud.com) — persisted; \`insta env use prod\` to switch back."
+  echo
+fi
 echo "Next steps:"
 echo "  insta login --oauth github     # connect to the cloud (or run insta-oss locally to skip)"
 echo "  insta project create demo      # postgres + storage + compute, provisioned in one shot"

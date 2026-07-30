@@ -4,6 +4,8 @@ import { Command } from 'commander'
 import { ApiError } from './api.js'
 import { die } from './util.js'
 import * as auth from './commands/auth.js'
+import * as envCmd_ from './commands/env.js'
+import { ENV_NAMES } from './env.js'
 import * as setup from './commands/setup.js'
 import * as mcp from './commands/mcp.js'
 import * as runCmd from './commands/run.js'
@@ -56,9 +58,17 @@ program.command('login').description('Log in with email + password, or --oauth <
   .option('--password <password>', 'account password (else $INSTA_PASSWORD or prompt)')
   .option('--oauth <provider>', 'browser OAuth login: github | google')
   .option('--api-url <url>', 'control-plane API base URL')
+  .option('--env <name>', `deployment environment: ${ENV_NAMES.join(' | ')}`)
   .action(guard((o) => auth.login(o)))
 program.command('logout').description('Log out and clear local tokens').action(guard(() => auth.logout()))
 program.command('status').description('Show login + linked project').option('--json').action(guard((o) => auth.status(o)))
+
+// ---- environment (prod | staging) ----
+const envCmd = program.command('env').description('Show or switch the deployment environment (prod | staging)')
+envCmd.command('show', { isDefault: true }).description('Show the current environment and its hosts')
+  .option('--json').action(guard((o) => envCmd_.envShow(o)))
+envCmd.command('use <name>').description(`Switch environment (${ENV_NAMES.join(' | ')}) — drops the stored session, which is deployment-specific`)
+  .action(guard((name) => envCmd_.envUse(name)))
 
 // ---- run (per-request secret injection — nothing written to disk) ----
 program.command('run <cmd> [args...]').description('Run a command with the branch credential bundle injected into its environment (no .env written)')

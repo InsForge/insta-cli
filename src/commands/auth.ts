@@ -1,12 +1,25 @@
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { ApiClient, linkedProject } from '../api.js'
+import { ENVS, ENV_NAMES, envForApiUrl, isEnvName } from '../env.js'
 import { info, die, printJson, promptPassword, openUrl } from '../util.js'
 
-export async function login(opts: { email?: string; password?: string; apiUrl?: string; oauth?: string }): Promise<void> {
+/** --api-url and --env both set the target host; --api-url wins (more specific), matching the
+ *  INSTA_API_URL > INSTA_ENV precedence in config.ts. Returns the URL to point at, or undefined
+ *  to leave whatever is already resolved alone. */
+function targetApiUrl(opts: { apiUrl?: string; env?: string }): string | undefined {
+  if (opts.apiUrl) return opts.apiUrl
+  if (!opts.env) return undefined
+  const want = opts.env.trim().toLowerCase()
+  if (!isEnvName(want)) die(`unknown --env "${opts.env}" — expected one of: ${ENV_NAMES.join(', ')}`)
+  return ENVS[want].api
+}
+
+export async function login(opts: { email?: string; password?: string; apiUrl?: string; env?: string; oauth?: string }): Promise<void> {
   if (opts.oauth) return loginOauth(opts.oauth, opts)
   const api = await ApiClient.load()
-  if (opts.apiUrl) api.setApiUrl(opts.apiUrl)
+  const target = targetApiUrl(opts)
+  if (target) api.setApiUrl(target)
   if (!opts.email) die('--email is required (or use --oauth <github|google>)')
   const password = opts.password ?? process.env.INSTA_PASSWORD ?? (await promptPassword())
   const res = await api.request('POST', '/auth/login', { email: opts.email, password }, { auth: false })
@@ -17,10 +30,11 @@ export async function login(opts: { email?: string; password?: string; apiUrl?: 
 
 // Browser OAuth (GitHub/Google) via a loopback listener. We open the platform's CLI-OAuth bridge,
 // which runs Better Auth's social flow and bounces the resulting session token back to us.
-export async function loginOauth(provider: string, opts: { apiUrl?: string }): Promise<void> {
+export async function loginOauth(provider: string, opts: { apiUrl?: string; env?: string }): Promise<void> {
   if (provider !== 'github' && provider !== 'google') die('provider must be github or google')
   const api = await ApiClient.load()
-  if (opts.apiUrl) api.setApiUrl(opts.apiUrl)
+  const target = targetApiUrl(opts)
+  if (target) api.setApiUrl(target)
   const token = await browserOauth(api.apiUrl, provider)
   api.setSession({ accessToken: token, refreshToken: token })
   const me = await api.request<{ user: { id: string; email: string | null; name: string | null } }>('GET', '/me')
@@ -77,7 +91,11 @@ export async function status(opts: { json?: boolean }): Promise<void> {
   let user: any = null
   try { user = (await api.request('GET', '/me')).user } catch { /* not logged in */ }
   const project = await linkedProject()
-  if (opts.json) return printJson({ apiUrl: api.apiUrl, user, project })
+  // Surface the environment name alongside the URL: "api: https://api.staging.instacloud.com" is
+  // easy to skim past, and mistaking staging for prod is the mistake worth making loud.
+  const env = envForApiUrl(api.apiUrl)
+  if (opts.json) return printJson({ env, apiUrl: api.apiUrl, user, project })
+  info(`env:     ${env ?? '(custom)'}`)
   info(`api:     ${api.apiUrl}`)
   info(`user:    ${user ? (user.email ?? user.id) : '(not logged in)'}`)
   info(`project: ${project ? `${project.projectId} (branch ${project.branch})` : '(none linked)'}`)

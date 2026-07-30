@@ -2,6 +2,7 @@
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { DEFAULT_ENV, ENVS, envForApiUrl, envFromEnvVar, type EnvName } from './env.js'
 
 const GLOBAL_DIR = join(homedir(), '.insta')
 const GLOBAL_FILE = join(GLOBAL_DIR, 'config.json')
@@ -21,18 +22,39 @@ export type ProjectConfig = { projectId: string; orgId: string; branch: string }
 // The cloud API default. Uses the instacloud.com brand domain (matches the agents.instacloud.com
 // onboarding), NOT the legacy beta-api.insta.insforge.dev host — same backend, branded domain.
 // Only affects fresh installs: a persisted apiUrl (from a prior login) or INSTA_API_URL wins below.
-const DEFAULT_API = 'https://api.instacloud.com'
+const DEFAULT_API = ENVS[DEFAULT_ENV].api
 
 export async function readGlobal(): Promise<GlobalConfig> {
-  // INSTA_API_URL overrides the persisted apiUrl, not just the default — otherwise the
-  // env var is silently ignored as soon as any login has written a config file.
+  // Precedence, most explicit first:
+  //   1. INSTA_API_URL  — a literal URL. Overrides the persisted apiUrl, not just the default,
+  //      otherwise the env var is silently ignored as soon as any login has written a config file.
+  //      It also outranks INSTA_ENV: a hand-written URL is the more specific instruction, and it
+  //      is the only way to reach a host no environment name covers (insta-oss, a preview).
+  //   2. INSTA_ENV      — a named environment (see env.ts), resolved to its api host.
+  //   3. the persisted apiUrl, written by `insta login --env|--api-url` or `insta env use`.
+  //   4. DEFAULT_API.
   const envApi = process.env.INSTA_API_URL
+  const named = envFromEnvVar()
+  const override = envApi ?? (named ? ENVS[named].api : undefined)
   try {
     const parsed = JSON.parse(await readFile(GLOBAL_FILE, 'utf8')) as GlobalConfig
-    return { ...parsed, apiUrl: envApi ?? parsed.apiUrl ?? DEFAULT_API }
+    return { ...parsed, apiUrl: override ?? parsed.apiUrl ?? DEFAULT_API }
   } catch {
-    return { apiUrl: envApi ?? DEFAULT_API }
+    return { apiUrl: override ?? DEFAULT_API }
   }
+}
+
+/** The environment the CLI is currently pointed at, plus its matched hosts. `env` is null when
+ *  apiUrl is a custom host (insta-oss, a preview deployment) — deliberate, and left alone. */
+export async function resolveEnv(): Promise<{ apiUrl: string; env: EnvName | null; mcpUrl: string }> {
+  const { apiUrl } = await readGlobal()
+  const env = envForApiUrl(apiUrl)
+  // INSTA_MCP_URL still wins outright (self-hosted MCP, a tunnel). Otherwise the MCP host is
+  // derived from the SAME resolved environment as the API — one switch, matched hosts, so the
+  // two can never drift apart. A custom apiUrl with no INSTA_MCP_URL falls back to the default
+  // environment's MCP: there is nothing better to guess, and it preserves today's behaviour.
+  const mcpUrl = process.env.INSTA_MCP_URL || ENVS[env ?? DEFAULT_ENV].mcp
+  return { apiUrl, env, mcpUrl }
 }
 
 export async function writeGlobal(c: GlobalConfig): Promise<void> {

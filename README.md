@@ -16,6 +16,16 @@ curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh 
 # Windows: download insta-windows-x64.exe from the releases page.
 ```
 
+**Agent one-liner** (CLI + agent skills + MCP registration, non-interactive):
+
+```bash
+curl -fsSL agents.instacloud.com | sh            # production
+curl -fsSL agents.staging.instacloud.com | sh    # staging
+```
+
+Both install the same released binary — the difference is which control plane it targets. See
+[Environments](#environments).
+
 **Build from source (requires node):**
 
 ```bash
@@ -52,11 +62,41 @@ insta deploy --image <registry/img>  # deploy a container image to the current b
 insta status                         # login state + linked project/branch
 ```
 
+## Environments
+
+`prod` and `staging` are **separate deployments** — different regions, different databases,
+different auth. A session from one cannot authenticate against the other, so switching drops the
+stored session and you log in again.
+
+| Environment | Control plane | MCP server | Registers as |
+|---|---|---|---|
+| `prod` (default) | `api.instacloud.com` (us-east-2) | `mcp.instacloud.com/mcp` | `insta-cloud` |
+| `staging` | `api.staging.instacloud.com` (us-west-1) | `mcp.staging.instacloud.com/mcp` | `insta-cloud-staging` |
+
+```bash
+insta env                      # show the current environment and its hosts
+insta env use staging          # switch (persisted to ~/.insta/config.json)
+insta login --env staging --oauth github
+```
+
+The API and MCP hosts are always resolved together from one switch, so the CLI and your agents can
+never end up pointed at different environments. Distinct MCP registration names mean both can be
+installed on the same machine at once.
+
+Resolution order, most specific first:
+
+1. `INSTA_API_URL` — a literal URL. The only way to reach a host no environment name covers
+   (`insta-oss` on localhost, a preview deployment). `INSTA_MCP_URL` does the same for MCP.
+2. `INSTA_ENV` — `prod` | `staging`. An unrecognised value is an error, never a silent fallback.
+3. the persisted `apiUrl` in `~/.insta/config.json`.
+4. `prod`.
+
 ## Commands
 
 | Command | Description |
 |------|------|
-| `insta login [--email --password --api-url]` | Log in (email/password; tokens auto-refresh) |
+| `insta login [--email --password --api-url --env]` | Log in (email/password; tokens auto-refresh) |
+| `insta env [--json]` / `insta env use <prod\|staging>` | Show or switch deployment environment |
 | `insta login --oauth <github\|google>` | Browser OAuth login (starts a local loopback port; the token is carried back automatically after browser authorization) |
 | `insta logout` / `insta status [--json]` | Log out / show status |
 | `insta org list [--json]` / `org create <name>` | Organizations (each user may own only one free org) |
