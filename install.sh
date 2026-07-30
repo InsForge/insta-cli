@@ -198,8 +198,18 @@ fi
 # agents pointed at production's MCP server while the CLI talked to staging.
 if [ -n "$ENV_NAME" ]; then
   echo
-  "$INSTALL_DIR/$BIN" env use "$ENV_NAME" \
-    || echo "warn: could not select environment '$ENV_NAME' — run: insta env use $ENV_NAME"
+  if ! "$INSTALL_DIR/$BIN" env use "$ENV_NAME"; then
+    # HARD FAIL, deliberately. The environment was requested and could not be applied, so this
+    # install is still pointed at PRODUCTION. Carrying on would be the worst outcome: the canonical
+    # usage is `curl … | sh && insta project create`, often run unattended by an agent, which would
+    # then provision real production infrastructure believing it was staging. Exiting here also
+    # stops `setup agent` from wiring this machine's agents to the wrong environment.
+    echo "error: could not select environment '$ENV_NAME' — this install is still pointed at PRODUCTION." >&2
+    echo "  The installed CLI ($("$INSTALL_DIR/$BIN" --version 2>/dev/null | tail -1)) may predate \`insta env\` (needs >= 0.0.23)." >&2
+    echo "  Upgrade, then retry:  insta upgrade && insta env use $ENV_NAME" >&2
+    exit 1
+  fi
+  ENV_APPLIED=1
 fi
 
 # ---- agent setup (--agents) ----
@@ -234,7 +244,9 @@ fi
 
 # ---- next steps (the 3-command wow: real infra, then a full isolated clone of it) ----
 echo
-if [ "$ENV_NAME" = "staging" ]; then
+# Only claim persistence when `env use` actually succeeded (it exits above if not, so this is
+# belt-and-braces against the banner ever outliving the step it describes).
+if [ "$ENV_NAME" = "staging" ] && [ "${ENV_APPLIED:-0}" = "1" ]; then
   echo "Environment: staging (api.staging.instacloud.com) — persisted; \`insta env use prod\` to switch back."
   echo
 fi
