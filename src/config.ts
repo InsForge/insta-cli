@@ -44,17 +44,27 @@ export async function readGlobal(): Promise<GlobalConfig> {
   }
 }
 
-/** The environment the CLI is currently pointed at, plus its matched hosts. `env` is null when
- *  apiUrl is a custom host (insta-oss, a preview deployment) — deliberate, and left alone. */
-export async function resolveEnv(): Promise<{ apiUrl: string; env: EnvName | null; mcpUrl: string }> {
+/** The environment the CLI is currently pointed at, plus everything derived from it. `env` is null
+ *  when apiUrl is a custom host (insta-oss, a preview deployment) — deliberate, and left alone.
+ *
+ *  API host, MCP host, and skill source are resolved from ONE environment on purpose: the failure
+ *  mode of picking them independently is silent (a machine whose CLI talks to staging while its
+ *  agents are wired to prod and reading prod's skill text). */
+export async function resolveEnv(): Promise<{
+  apiUrl: string
+  env: EnvName | null
+  mcpUrl: string
+  skills: string
+}> {
   const { apiUrl } = await readGlobal()
   const env = envForApiUrl(apiUrl)
-  // INSTA_MCP_URL still wins outright (self-hosted MCP, a tunnel). Otherwise the MCP host is
-  // derived from the SAME resolved environment as the API — one switch, matched hosts, so the
-  // two can never drift apart. A custom apiUrl with no INSTA_MCP_URL falls back to the default
-  // environment's MCP: there is nothing better to guess, and it preserves today's behaviour.
-  const mcpUrl = process.env.INSTA_MCP_URL || ENVS[env ?? DEFAULT_ENV].mcp
-  return { apiUrl, env, mcpUrl }
+  const hosts = ENVS[env ?? DEFAULT_ENV]
+  // Each single-purpose env var still wins outright, for a self-hosted MCP / a tunnel / a skills
+  // fork. A custom apiUrl with none of them set falls back to the default environment, since
+  // there is nothing better to guess and it preserves today's behaviour.
+  const mcpUrl = process.env.INSTA_MCP_URL || hosts.mcp
+  const skills = process.env.INSTA_SKILLS_REPO || hosts.skills
+  return { apiUrl, env, mcpUrl, skills }
 }
 
 export async function writeGlobal(c: GlobalConfig): Promise<void> {

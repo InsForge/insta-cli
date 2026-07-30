@@ -33,6 +33,21 @@ describe('env table', () => {
     expect(ENVS.staging.mcp).toContain('staging.instacloud.com')
     expect(ENVS.prod.mcp).not.toContain('staging')
   })
+
+  it('gives every environment a skill source', () => {
+    for (const name of ENV_NAMES) {
+      expect(ENVS[name].skills).toMatch(/^[\w.-]+\/[\w.-]+(@[\w./-]+)?$/)
+    }
+  })
+
+  // Prod must stay unpinned (whatever is published on the default branch); staging pins a ref so
+  // an installer run reads the staging skill text. `owner/repo@ref` is what the skills tool accepts.
+  it('pins staging skills to a ref and leaves prod unpinned', () => {
+    expect(ENVS.prod.skills).toBe('InsForge/insta-skills')
+    expect(ENVS.prod.skills).not.toContain('@')
+    expect(ENVS.staging.skills).toContain('@')
+    expect(ENVS.staging.skills.split('@')[0]).toBe('InsForge/insta-skills')
+  })
 })
 
 describe('mcpServerName', () => {
@@ -112,6 +127,7 @@ describe('config + env use', () => {
   const origEnv = process.env.INSTA_ENV
   const origApi = process.env.INSTA_API_URL
   const origMcp = process.env.INSTA_MCP_URL
+  const origSkills = process.env.INSTA_SKILLS_REPO
 
   const configFile = () => join(home, '.insta', 'config.json')
   const writeConfig = async (c: unknown) => {
@@ -132,6 +148,7 @@ describe('config + env use', () => {
     delete process.env.INSTA_ENV
     delete process.env.INSTA_API_URL
     delete process.env.INSTA_MCP_URL
+    delete process.env.INSTA_SKILLS_REPO
   })
 
   afterEach(() => {
@@ -139,6 +156,7 @@ describe('config + env use', () => {
     if (origEnv === undefined) delete process.env.INSTA_ENV; else process.env.INSTA_ENV = origEnv
     if (origApi === undefined) delete process.env.INSTA_API_URL; else process.env.INSTA_API_URL = origApi
     if (origMcp === undefined) delete process.env.INSTA_MCP_URL; else process.env.INSTA_MCP_URL = origMcp
+    if (origSkills === undefined) delete process.env.INSTA_SKILLS_REPO; else process.env.INSTA_SKILLS_REPO = origSkills
     vi.resetModules()
   })
 
@@ -172,6 +190,37 @@ describe('config + env use', () => {
     const r = await resolveEnv()
     expect(r.apiUrl).toBe('http://localhost:9999')
     expect(r.env).toBeNull()
+  })
+
+  // The point of one switch: api, mcp AND skills all move together, so a staging machine can never
+  // end up with prod's skill text describing a control plane it isn't talking to.
+  it('resolves api, mcp and skills together for staging', async () => {
+    process.env.INSTA_ENV = 'staging'
+    const { resolveEnv } = await freshConfig()
+    expect(await resolveEnv()).toMatchObject({
+      env: 'staging',
+      apiUrl: STAGING_API,
+      mcpUrl: ENVS.staging.mcp,
+      skills: ENVS.staging.skills,
+    })
+  })
+
+  it('uses prod skills by default', async () => {
+    const { resolveEnv } = await freshConfig()
+    expect((await resolveEnv()).skills).toBe(ENVS.prod.skills)
+  })
+
+  it('resolves staging skills from a persisted staging apiUrl (the installer path)', async () => {
+    await writeConfig({ apiUrl: STAGING_API })
+    const { resolveEnv } = await freshConfig()
+    expect((await resolveEnv()).skills).toBe(ENVS.staging.skills)
+  })
+
+  it('lets INSTA_SKILLS_REPO override the environment skill source', async () => {
+    process.env.INSTA_ENV = 'staging'
+    process.env.INSTA_SKILLS_REPO = 'me/my-skills@wip'
+    const { resolveEnv } = await freshConfig()
+    expect(await resolveEnv()).toMatchObject({ env: 'staging', skills: 'me/my-skills@wip' })
   })
 
   it('lets INSTA_MCP_URL override the environment mcp host', async () => {

@@ -14,10 +14,16 @@
 #   --staging      target the staging deployment (shorthand for --env staging)
 #   --env <name>   target a named deployment: prod (default) | staging
 #
+# Release channels:
+#   prod (default)  the latest stable release
+#   staging         the newest PRERELEASE (v*-rc.N etc), falling back to stable if none exists
+#   Either way, INSTA_VERSION pins an exact tag and always wins.
+#
 # Options (env):
-#   INSTA_VERSION      release tag to install (e.g. v0.1.0); default: latest
+#   INSTA_VERSION      release tag to install (e.g. v0.1.0); default: the channel's newest
 #   INSTA_INSTALL_DIR  install directory; default: $HOME/.insta/bin
 #   INSTA_ENV          same as --env; the flag wins if both are given
+#   INSTA_SKILLS_REPO  override the agent-skill source (default: per-environment, see src/env.ts)
 set -eu
 
 AGENTS=0
@@ -48,11 +54,38 @@ INSTALL_DIR="${INSTA_INSTALL_DIR:-$HOME/.insta/bin}"
 
 command -v curl >/dev/null 2>&1 || { echo "error: curl is required" >&2; exit 1; }
 
-# ---- already current? (skip the download; Railway-style existing-install awareness) ----
+# ---- release channel resolution ----
 resolve_latest() {
   curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
     | sed -n 's/.*"tag_name": *"\(v[^"]*\)".*/\1/p' | head -1
 }
+
+# Newest PRERELEASE tag = the staging channel. /releases/latest deliberately excludes prereleases,
+# so the list endpoint is the only way to find them. Within a release object GitHub emits tag_name
+# before draft/prerelease, so we remember the tag and act when the flags arrive; a draft clears it
+# (drafts have no downloadable assets).
+resolve_prerelease() {
+  curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=30" 2>/dev/null | awk '
+    /"tag_name":/          { if (match($0, /v[^"]+/)) tag = substr($0, RSTART, RLENGTH) }
+    /"draft": *true/       { tag = "" }
+    /"prerelease": *true/  { if (tag != "") { print tag; exit } }'
+}
+
+# Staging tracks the prerelease channel so it can run a build that has not shipped to production.
+# An explicit INSTA_VERSION always wins. If no prerelease exists yet, say so and fall back to
+# stable rather than failing — staging is still perfectly usable on the released binary, since the
+# environment split is about which control plane the CLI talks to.
+if [ "$ENV_NAME" = "staging" ] && [ -z "${INSTA_VERSION:-}" ]; then
+  pre_tag="$(resolve_prerelease || true)"
+  if [ -n "$pre_tag" ]; then
+    INSTA_VERSION="$pre_tag"
+    echo "staging channel: prerelease $pre_tag"
+  else
+    echo "note: no prerelease published yet — installing the latest stable build (staging control plane either way)"
+  fi
+fi
+
+# ---- already current? (skip the download; Railway-style existing-install awareness) ----
 if [ -x "$INSTALL_DIR/$BIN" ] && [ -z "${INSTA_VERSION:-}" ]; then
   current="v$("$INSTALL_DIR/$BIN" --version 2>/dev/null | tail -1)"
   latest="$(resolve_latest || true)"

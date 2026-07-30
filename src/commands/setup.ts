@@ -97,7 +97,14 @@ const defaultRunner: Runner = (cmd, args) =>
 
 // -g = user-level (machine-global); -a '*' = every agent dir the skills tool supports
 // (Claude Code, Codex, Cursor, OpenCode, Copilot, …); --copy = real files, not cache symlinks.
-export const SETUP_ARGS = ['skills', 'add', 'InsForge/insta-skills', '-s', 'insta', '-a', '*', '-g', '-y', '--copy']
+// `spec` is the skill source for the resolved environment (`owner/repo` or `owner/repo@ref`), so a
+// staging install reads the staging skill text rather than what's published on main.
+export const setupArgs = (spec: string): string[] =>
+  ['skills', 'add', spec, '-s', 'insta', '-a', '*', '-g', '-y', '--copy']
+
+/** Production's args. Kept as a named export because it is the installed-base default and is
+ *  asserted directly by tests; runtime goes through `setupArgs(resolveEnv().skills)`. */
+export const SETUP_ARGS = setupArgs(ENVS[DEFAULT_ENV].skills)
 
 // ---- remote MCP registration ----
 
@@ -170,11 +177,17 @@ export async function setupAgent(
   if (!opts.yes && !process.stdout.isTTY) {
     info('non-interactive shell — assuming -y')
   }
-  info('setting up coding-agent skills …')
-  const res = await run('npx', SETUP_ARGS)
+  // One resolve for the whole step, so the skills and the MCP registration below cannot disagree
+  // about which environment this machine belongs to.
+  const { env, skills } = await resolveEnv()
+  const args = setupArgs(skills)
+  info(env && env !== DEFAULT_ENV
+    ? `setting up coding-agent skills (${env}) …`
+    : 'setting up coding-agent skills …')
+  const res = await run('npx', args)
   if (!res.ok) {
     info('  skill install failed — install manually with:')
-    info('    npx skills add InsForge/insta-skills -s insta -a "*" -g -y --copy')
+    info(`    npx ${args.map((a) => (a === '*' ? '"*"' : a)).join(' ')}`)
     // Surface the REAL error: the captured tail, minus the expected no-global-support noise.
     const tail = (res.output ?? '')
       .split('\n')

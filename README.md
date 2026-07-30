@@ -68,28 +68,35 @@ insta status                         # login state + linked project/branch
 different auth. A session from one cannot authenticate against the other, so switching drops the
 stored session and you log in again.
 
-| Environment | Control plane | MCP server | Registers as |
-|---|---|---|---|
-| `prod` (default) | `api.instacloud.com` (us-east-2) | `mcp.instacloud.com/mcp` | `insta-cloud` |
-| `staging` | `api.staging.instacloud.com` (us-west-1) | `mcp.staging.instacloud.com/mcp` | `insta-cloud-staging` |
+| | `prod` (default) | `staging` |
+|---|---|---|
+| control plane | `api.instacloud.com` (us-east-2) | `api.staging.instacloud.com` (us-west-1) |
+| MCP server | `mcp.instacloud.com/mcp` | `mcp.staging.instacloud.com/mcp` |
+| registers as | `insta-cloud` | `insta-cloud-staging` |
+| agent skills | `InsForge/insta-skills` | `InsForge/insta-skills@devel` |
+| CLI channel | latest stable release | newest prerelease (`v*-rc.N`), else stable |
 
 ```bash
-insta env                      # show the current environment and its hosts
+insta env                      # show the current environment and everything derived from it
 insta env use staging          # switch (persisted to ~/.insta/config.json)
 insta login --env staging --oauth github
 ```
 
-The API and MCP hosts are always resolved together from one switch, so the CLI and your agents can
-never end up pointed at different environments. Distinct MCP registration names mean both can be
-installed on the same machine at once.
+Control plane, MCP host **and** skill source are all resolved from one switch, so a machine can
+never end up with its CLI on staging while its agents talk to prod and read prod's skill text.
+Distinct MCP registration names mean both environments can be installed side by side.
 
 Resolution order, most specific first:
 
 1. `INSTA_API_URL` — a literal URL. The only way to reach a host no environment name covers
-   (`insta-oss` on localhost, a preview deployment). `INSTA_MCP_URL` does the same for MCP.
+   (`insta-oss` on localhost, a preview deployment). `INSTA_MCP_URL` and `INSTA_SKILLS_REPO` do the
+   same for the MCP host and the skill source.
 2. `INSTA_ENV` — `prod` | `staging`. An unrecognised value is an error, never a silent fallback.
 3. the persisted `apiUrl` in `~/.insta/config.json`.
 4. `prod`.
+
+Prereleases never take the `latest` GitHub release or the `latest` npm dist-tag — they publish with
+`--prerelease` and under npm's `next` tag — so a staging build can't reach production installers.
 
 ## Commands
 

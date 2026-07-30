@@ -85,13 +85,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ steps.t.outputs.tag }}"
+          # A semver prerelease tag (v0.0.23-rc.1, v1.0.0-beta.2 — anything with a hyphen) MUST be
+          # published with --prerelease. Without it GitHub marks the release "Latest", and
+          # install.sh resolves /releases/latest for the default channel — so an unmarked
+          # prerelease would be handed to every PRODUCTION installer. The staging channel
+          # (install.sh --staging) deliberately looks for the newest prerelease instead.
+          PRERELEASE=""
+          case "$TAG" in *-*) PRERELEASE="--prerelease" ;; esac
           # Create the release if it doesn't exist (dispatch also creates the tag), else just upload.
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # shellcheck disable=SC2086  # $PRERELEASE is a single intentional flag or empty
             gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "insta $TAG" \
-              --generate-notes
+              --generate-notes $PRERELEASE
           fi
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
             dist-bin/insta-* dist-bin/SHA256SUMS install.sh
@@ -118,4 +126,11 @@ jobs:
       - run: npm install -g npm@latest
       - run: npm ci
       - name: Publish to npm (OIDC)
-        run: npm publish --provenance --access public
+        run: |
+          # Mirror the GitHub-release rule: a prerelease version must NOT take the `latest`
+          # dist-tag, or `npm i -g insta` (and `npx insta@latest`) would hand a staging build to
+          # production users. Publish those under `next` instead — `npm i -g insta@next` opts in.
+          TAG_ARG=""
+          case "${GITHUB_REF_NAME}" in *-*) TAG_ARG="--tag next" ;; esac
+          # shellcheck disable=SC2086  # $TAG_ARG is a single intentional flag pair or empty
+          npm publish --provenance --access public $TAG_ARG

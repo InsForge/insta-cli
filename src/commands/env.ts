@@ -7,15 +7,17 @@
 // same file `login --api-url` already writes, so this adds a surface, not a concept.
 import { ApiClient } from '../api.js'
 import { resolveEnv } from '../config.js'
-import { ENVS, ENV_NAMES, envForApiUrl, isEnvName, mcpServerName, type EnvName } from '../env.js'
+import { DEFAULT_ENV, ENVS, ENV_NAMES, envForApiUrl, isEnvName, mcpServerName, type EnvName } from '../env.js'
 import { die, info, printJson } from '../util.js'
 
 export async function envShow(opts: { json?: boolean }): Promise<void> {
-  const { apiUrl, env, mcpUrl } = await resolveEnv()
-  if (opts.json) return printJson({ env, apiUrl, mcpUrl, mcpServer: mcpServerName(env ?? 'prod') })
+  const { apiUrl, env, mcpUrl, skills } = await resolveEnv()
+  const mcpServer = mcpServerName(env ?? DEFAULT_ENV)
+  if (opts.json) return printJson({ env, apiUrl, mcpUrl, mcpServer, skills })
   info(`env:     ${env ?? '(custom)'}`)
   info(`api:     ${apiUrl}`)
-  info(`mcp:     ${mcpUrl}`)
+  info(`mcp:     ${mcpUrl} (${mcpServer})`)
+  info(`skills:  ${skills}`)
   if (!env) info('  (custom apiUrl — `insta env use <name>` to switch to a named environment)')
 }
 

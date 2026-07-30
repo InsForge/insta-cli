@@ -8,12 +8,18 @@
 #  agents.instacloud.com → agents.sh. The raw fallback also works:
 #  curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/agents-staging.sh | sh)
 #
-# Identical to agents.sh except that it targets the staging deployment
-# (api/mcp.staging.instacloud.com, us-west-1) instead of production (us-east-2).
+# Identical to agents.sh except that everything it installs points at staging:
 #
-# Note this ships from the SAME main branch as agents.sh — the staging/prod split here is about
-# which control plane the CLI talks to, NOT which build of the CLI you get. You always get the
-# current released binary; use INSTA_VERSION to pin a different one.
+#   CLI      the newest PRERELEASE build (v*-rc.N), falling back to the latest stable if none
+#            exists yet. INSTA_VERSION pins an exact tag and overrides this.
+#   API      api.staging.instacloud.com   (us-west-1, a separate deployment from prod)
+#   MCP      mcp.staging.instacloud.com, registered as `insta-cloud-staging` so it can coexist
+#            with a production registration on the same machine
+#   skills   the staging ref of InsForge/insta-skills, so the agent reads skill text that
+#            describes the staging control plane
+#
+# One command, and every piece is staging. This script itself ships from `main` (same as
+# agents.sh) — it is the installer, not the thing being staged.
 #
 # --staging is passed to install.sh (rather than exporting INSTA_ENV around it) so the choice is
 # PERSISTED into ~/.insta/config.json. A piped `curl … | sh` cannot export into the parent shell,

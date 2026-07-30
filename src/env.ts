@@ -12,16 +12,26 @@
 // staging, forget the MCP URL, and the machine talks to staging while its agents talk to prod.
 export type EnvName = 'prod' | 'staging'
 
-export type EnvHosts = { api: string; mcp: string }
+export type EnvHosts = {
+  api: string
+  mcp: string
+  // The agent-skill source passed to `npx skills add`, as `owner/repo` or `owner/repo@ref`.
+  // Staging pins the integration branch so a staging install gets the skill text that documents
+  // the staging control plane, rather than whatever is published on main. The `@ref` form is
+  // supported by the skills tool (it resolves to `…insta-skills.git @<ref>`).
+  skills: string
+}
 
 export const ENVS: Record<EnvName, EnvHosts> = {
   prod: {
     api: 'https://api.instacloud.com',
     mcp: 'https://mcp.instacloud.com/mcp',
+    skills: 'InsForge/insta-skills',
   },
   staging: {
     api: 'https://api.staging.instacloud.com',
     mcp: 'https://mcp.staging.instacloud.com/mcp',
+    skills: 'InsForge/insta-skills@devel',
   },
 }
 
