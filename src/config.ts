@@ -2,7 +2,7 @@
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { DEFAULT_ENV, ENVS, envForApiUrl, envFromEnvVar, type EnvName } from './env.js'
+import { DEFAULT_ENV, ENVS, envForApiUrl, envFromEnvVar, normalizeUrl, type EnvName } from './env.js'
 
 const GLOBAL_DIR = join(homedir(), '.insta')
 const GLOBAL_FILE = join(GLOBAL_DIR, 'config.json')
@@ -38,7 +38,23 @@ export async function readGlobal(): Promise<GlobalConfig> {
   const override = envApi ?? (named ? ENVS[named].api : undefined)
   try {
     const parsed = JSON.parse(await readFile(GLOBAL_FILE, 'utf8')) as GlobalConfig
-    return { ...parsed, apiUrl: override ?? parsed.apiUrl ?? DEFAULT_API }
+    const persisted = parsed.apiUrl ?? DEFAULT_API
+    // An override that points at a DIFFERENT deployment than the stored session was minted for
+    // must not carry that session along. `env use` already drops it on an explicit switch; without
+    // this, `INSTA_ENV=staging insta …` on a prod-logged-in machine sends prod's bearer to staging
+    // and then — on the 401 — POSTs prod's REFRESH token to staging's /auth/refresh (api.ts), which
+    // is the cross-deployment credential leak env.ts's header calls out as never allowed.
+    //
+    // In-memory only: the file keeps the real login, so unsetting the override restores it. A
+    // custom host (insta-oss, a preview) is treated the same way — its session is equally foreign.
+    if (override && normalizeUrl(override) !== normalizeUrl(persisted)) {
+      const scrubbed: GlobalConfig = { ...parsed, apiUrl: override }
+      delete scrubbed.accessToken
+      delete scrubbed.refreshToken
+      delete scrubbed.user
+      return scrubbed
+    }
+    return { ...parsed, apiUrl: override ?? persisted }
   } catch {
     return { apiUrl: override ?? DEFAULT_API }
   }

@@ -15,10 +15,15 @@ export type EnvName = 'prod' | 'staging'
 export type EnvHosts = {
   api: string
   mcp: string
-  // The agent-skill source passed to `npx skills add`, as `owner/repo` or `owner/repo@ref`.
+  // The agent-skill source passed to `npx skills add`, as `owner/repo` or `owner/repo#ref`.
   // Staging pins the integration branch so a staging install gets the skill text that documents
-  // the staging control plane, rather than whatever is published on main. The `@ref` form is
-  // supported by the skills tool (it resolves to `…insta-skills.git @<ref>`).
+  // the staging control plane, rather than whatever is published on the default branch.
+  //
+  // The ref MUST use the `#ref` fragment form. `owner/repo@thing` looks like a ref but the skills
+  // tool parses `@` as a SKILL-NAME FILTER, silently leaving the source on the default branch —
+  // and its progress line still echoes "Source: …insta-skills.git @thing", so it reads as if the
+  // ref took effect. Verified by installing both forms and diffing the result: `#docs/staging-env`
+  // produced that branch's cli-reference.md, `@docs/staging-env` produced main's.
   skills: string
 }
 
@@ -31,7 +36,7 @@ export const ENVS: Record<EnvName, EnvHosts> = {
   staging: {
     api: 'https://api.staging.instacloud.com',
     mcp: 'https://mcp.staging.instacloud.com/mcp',
-    skills: 'InsForge/insta-skills@devel',
+    skills: 'InsForge/insta-skills#devel',
   },
 }
 

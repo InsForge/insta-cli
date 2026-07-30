@@ -36,17 +36,27 @@ describe('env table', () => {
 
   it('gives every environment a skill source', () => {
     for (const name of ENV_NAMES) {
-      expect(ENVS[name].skills).toMatch(/^[\w.-]+\/[\w.-]+(@[\w./-]+)?$/)
+      expect(ENVS[name].skills).toMatch(/^[\w.-]+\/[\w.-]+(#[\w./-]+)?$/)
     }
   })
 
-  // Prod must stay unpinned (whatever is published on the default branch); staging pins a ref so
-  // an installer run reads the staging skill text. `owner/repo@ref` is what the skills tool accepts.
-  it('pins staging skills to a ref and leaves prod unpinned', () => {
+  // Prod stays unpinned (whatever is on the default branch); staging pins a ref so an installer
+  // run reads the staging skill text.
+  //
+  // The ref MUST be the `#ref` fragment form. `owner/repo@thing` is parsed by the skills tool as a
+  // SKILL-NAME FILTER, so the source silently stays on the default branch — while its output still
+  // prints "Source: …git @thing", which reads like the ref applied. Proven by installing both
+  // forms: `#docs/staging-env` yielded that branch's cli-reference.md, `@docs/staging-env` yielded
+  // main's. These assertions exist to stop that footgun coming back.
+  it('pins staging skills with the #ref form, never @', () => {
     expect(ENVS.prod.skills).toBe('InsForge/insta-skills')
-    expect(ENVS.prod.skills).not.toContain('@')
-    expect(ENVS.staging.skills).toContain('@')
-    expect(ENVS.staging.skills.split('@')[0]).toBe('InsForge/insta-skills')
+    expect(ENVS.staging.skills).toBe('InsForge/insta-skills#devel')
+  })
+
+  it('never uses @ in a skill source (it is a skill filter, not a ref)', () => {
+    for (const name of ENV_NAMES) {
+      expect(ENVS[name].skills).not.toContain('@')
+    }
   })
 })
 
@@ -214,6 +224,58 @@ describe('config + env use', () => {
     await writeConfig({ apiUrl: STAGING_API })
     const { resolveEnv } = await freshConfig()
     expect((await resolveEnv()).skills).toBe(ENVS.staging.skills)
+  })
+
+  // The security invariant env.ts's header states: a session minted by one deployment must never be
+  // sent to another. `env use` enforced it, but the INSTA_ENV / INSTA_API_URL override path did not
+  // — it returned the staging host with the prod session still attached, so api.ts's 401 path would
+  // POST prod's REFRESH token to staging's /auth/refresh.
+  it('drops the stored session when INSTA_ENV points at a different deployment', async () => {
+    await writeConfig({ apiUrl: PROD_API, accessToken: 'prod-a', refreshToken: 'prod-r', user: { id: 'u', email: null, name: null } })
+    process.env.INSTA_ENV = 'staging'
+    const { readGlobal } = await freshConfig()
+    const c = await readGlobal()
+    expect(c.apiUrl).toBe(STAGING_API)
+    expect(c.accessToken).toBeUndefined()
+    expect(c.refreshToken).toBeUndefined()
+    expect(c.user).toBeUndefined()
+  })
+
+  it('drops the stored session when INSTA_API_URL points at a custom host', async () => {
+    await writeConfig({ apiUrl: PROD_API, accessToken: 'prod-a', refreshToken: 'prod-r' })
+    process.env.INSTA_API_URL = 'http://localhost:8080'
+    const { readGlobal } = await freshConfig()
+    const c = await readGlobal()
+    expect(c.apiUrl).toBe('http://localhost:8080')
+    expect(c.accessToken).toBeUndefined()
+  })
+
+  // Only a MISMATCH scrubs. An override naming the same deployment must keep the session, or
+  // exporting INSTA_ENV=prod on a prod machine would silently log you out.
+  it('keeps the session when the override names the same deployment', async () => {
+    await writeConfig({ apiUrl: PROD_API, accessToken: 'prod-a', refreshToken: 'prod-r' })
+    process.env.INSTA_ENV = 'prod'
+    const { readGlobal } = await freshConfig()
+    expect((await readGlobal()).accessToken).toBe('prod-a')
+  })
+
+  it('keeps the session when the override differs only by a trailing slash', async () => {
+    await writeConfig({ apiUrl: STAGING_API, accessToken: 'stg-a' })
+    process.env.INSTA_API_URL = STAGING_API + '/'
+    const { readGlobal } = await freshConfig()
+    expect((await readGlobal()).accessToken).toBe('stg-a')
+  })
+
+  // The scrub is in-memory: the file still holds the real login, so unsetting the override restores
+  // it. Otherwise one stray `INSTA_ENV=staging` would permanently log the user out of prod.
+  it('does not persist the scrub — the stored login survives', async () => {
+    await writeConfig({ apiUrl: PROD_API, accessToken: 'prod-a', refreshToken: 'prod-r' })
+    process.env.INSTA_ENV = 'staging'
+    let mod = await freshConfig()
+    expect((await mod.readGlobal()).accessToken).toBeUndefined()
+    delete process.env.INSTA_ENV
+    mod = await freshConfig()
+    expect((await mod.readGlobal()).accessToken).toBe('prod-a')
   })
 
   it('lets INSTA_SKILLS_REPO override the environment skill source', async () => {

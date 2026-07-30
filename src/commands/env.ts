@@ -47,4 +47,9 @@ export async function envUse(name: string): Promise<void> {
   info(`  api: ${nextApi}`)
   info(`  mcp: ${ENVS[target].mcp} (registers as \`${mcpServerName(target)}\`)`)
   if (hadSession) info('  previous session dropped (separate deployment) — run `insta login --oauth github`')
+  // Switching the CLI does NOT re-point already-installed agents: their MCP registration and skill
+  // files were written for the previous environment and are keyed by a different server name, so
+  // they keep talking to it until setup is re-run. (The installer path is fine — install.sh runs
+  // `env use` before `setup agent`.)
+  info('  re-point this machine\'s agents at it with: insta setup agent')
 }

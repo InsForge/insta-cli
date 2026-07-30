@@ -78,3 +78,58 @@ test('detectAgents only reports agents whose config dir exists', async () => {
   await fs.mkdir(path.join(home, '.codex'), { recursive: true })
   expect(detectAgents(home)).toEqual(['cursor', 'codex'])
 })
+
+// ---- environment coexistence ----
+// Both environments must be installable on one machine: registration is idempotent BY NAME, so if
+// prod and staging shared a name a staging install would be a no-op that silently left the agent
+// pointed at prod. These cover the `name` parameter that makes the two distinct.
+
+const STAGING_NAME = 'insta-cloud-staging'
+const STAGING_URL = 'https://mcp.staging.instacloud.com/mcp'
+
+test('cursor: a staging install adds a SECOND entry beside prod, clobbering neither', async () => {
+  const home = await tmpHome()
+  expect(await installFor('cursor', home, DEFAULT_MCP_URL)).toBe('installed')
+  expect(await installFor('cursor', home, STAGING_URL, STAGING_NAME)).toBe('installed')
+  const cfg = JSON.parse(await fs.readFile(configPath('cursor', home), 'utf8'))
+  expect(cfg.mcpServers[MCP_SERVER_NAME]).toEqual({ url: DEFAULT_MCP_URL })
+  expect(cfg.mcpServers[STAGING_NAME]).toEqual({ url: STAGING_URL })
+  expect(Object.keys(cfg.mcpServers).sort()).toEqual([MCP_SERVER_NAME, STAGING_NAME].sort())
+})
+
+test('cursor: staging install is idempotent per name', async () => {
+  const home = await tmpHome()
+  expect(await installFor('cursor', home, STAGING_URL, STAGING_NAME)).toBe('installed')
+  expect(await installFor('cursor', home, STAGING_URL, STAGING_NAME)).toBe('already')
+  // ...and prod is still installable afterwards, not reported as "already"
+  expect(await installFor('cursor', home, DEFAULT_MCP_URL)).toBe('installed')
+})
+
+test('codex TOML: staging appends its own table without touching prod\'s', async () => {
+  const home = await tmpHome()
+  expect(await installFor('codex', home, DEFAULT_MCP_URL)).toBe('installed')
+  expect(await installFor('codex', home, STAGING_URL, STAGING_NAME)).toBe('installed')
+  const toml = await fs.readFile(configPath('codex', home), 'utf8')
+  expect(toml).toContain(`[mcp_servers.${MCP_SERVER_NAME}]`)
+  expect(toml).toContain(`[mcp_servers.${STAGING_NAME}]`)
+  expect(toml).toContain(STAGING_URL)
+  expect(toml).toContain(DEFAULT_MCP_URL)
+})
+
+// The prod name is a strict prefix of the staging name, so a substring-based idempotency check
+// would wrongly report staging as "already configured" once prod existed (or vice versa).
+test('codex TOML: prod name being a prefix of staging name does not confuse detection', async () => {
+  const home = await tmpHome()
+  expect(await installFor('codex', home, STAGING_URL, STAGING_NAME)).toBe('installed')
+  expect(await installFor('codex', home, DEFAULT_MCP_URL)).toBe('installed')
+  expect(renderCodexConfig(await fs.readFile(configPath('codex', home), 'utf8'), STAGING_URL, STAGING_NAME)).toBeNull()
+})
+
+test('opencode: staging entry coexists under the mcp key', async () => {
+  const home = await tmpHome()
+  expect(await installFor('opencode', home, DEFAULT_MCP_URL)).toBe('installed')
+  expect(await installFor('opencode', home, STAGING_URL, STAGING_NAME)).toBe('installed')
+  const cfg = JSON.parse(await fs.readFile(configPath('opencode', home), 'utf8'))
+  expect(cfg.mcp[MCP_SERVER_NAME]).toMatchObject({ url: DEFAULT_MCP_URL, type: 'remote' })
+  expect(cfg.mcp[STAGING_NAME]).toMatchObject({ url: STAGING_URL, type: 'remote' })
+})
