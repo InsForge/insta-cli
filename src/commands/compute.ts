@@ -104,7 +104,18 @@ export function parseMemoryMb(raw: string): number {
   return Math.round(mb)
 }
 
-const fmtMb = (mb: number) => (mb >= 1024 && mb % 1024 === 0 ? `${mb / 1024} GB` : `${mb} MB`)
+// Whole and half GB collapse (1536 → "1.5 GB"); anything else stays exact in MB — a display that
+// rounds 1536 to "2 GB" claims a ceiling the API did not set.
+const fmtMb = (mb: number) => (mb >= 1024 && mb % 512 === 0 ? `${mb / 1024} GB` : `${mb} MB`)
+
+// The --cpu override, through a throwing parser like every other user-typed number in this repo
+// (parseCount, parseMemoryMb). A bare Number() turns a typo into NaN, which JSON.stringify
+// serializes as null — the server then sees {cpu: null} instead of the user seeing an error.
+export function parseCpu(raw: string): number {
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n <= 0) throw new Error(`invalid cpu: ${raw} (provider sizes: 1, 2, 4, 6, 8)`)
+  return n
+}
 
 type LimitsOpts = LifeOpts & { cpu?: string; memory?: string }
 
@@ -128,7 +139,7 @@ export async function computeLimits(serviceName: string | undefined, opts: Limit
   if (!opts.memory) throw new Error('--memory is required when setting limits (cpu is derived from it; pass --cpu only to override)')
 
   const body: Record<string, unknown> = { memoryMb: parseMemoryMb(opts.memory) }
-  if (opts.cpu) body.cpu = Number(opts.cpu)
+  if (opts.cpu) body.cpu = parseCpu(opts.cpu)
   const res = await api.rawRequest('PUT', `/projects/${p.projectId}/services/${id}/limits`, body)
   if (handleApproval(res)) return
   if (opts.json) return printJson(res.body)

@@ -35,3 +35,45 @@ describe('parseMemoryMb', () => {
     expect(() => parseMemoryMb('huge')).toThrow(/try 512mb, 1gb, 2gb/)
   })
 })
+
+// Review round 2: both jwfing and cubic independently flagged the bare Number() on --cpu (NaN
+// serializes to null on the wire) and the unvalidated db strings. These pin the new seams.
+import { parseCpu } from '../src/commands/compute.js'
+import { parseDbCpu, parseDbMemory, fmtMib } from '../src/commands/db.js'
+
+describe('parseCpu (compute --cpu override)', () => {
+  it('accepts positive integers', () => {
+    expect(parseCpu('1')).toBe(1)
+    expect(parseCpu('8')).toBe(8)
+  })
+  it('throws locally on junk instead of sending null to the server', () => {
+    for (const raw of ['abc', '', '-2', '1.5', 'two']) {
+      expect(() => parseCpu(raw), raw).toThrow(/invalid cpu/)
+    }
+  })
+})
+
+describe('parseDbCpu / parseDbMemory (provider quantity strings)', () => {
+  it('passes valid k8s quantities through untouched', () => {
+    expect(parseDbCpu('2')).toBe('2')
+    expect(parseDbCpu('2500m')).toBe('2500m')
+    expect(parseDbMemory('4Gi')).toBe('4Gi')
+    expect(parseDbMemory('2048Mi')).toBe('2048Mi')
+  })
+  it('rejects junk locally with an example', () => {
+    expect(() => parseDbCpu('huge')).toThrow(/try 2, 4, or 2500m/)
+    expect(() => parseDbMemory('lots')).toThrow(/try 4Gi or 8Gi/)
+    expect(() => parseDbMemory('8')).toThrow() // unit required — a bare number is ambiguous here
+  })
+})
+
+describe('fmtMib (display must not claim a ceiling the API did not set)', () => {
+  it('collapses whole and half GiB', () => {
+    expect(fmtMib(2048)).toBe('2 GiB')
+    expect(fmtMib(1536)).toBe('1.5 GiB') // the review example: was shown as "2 GiB"
+  })
+  it('keeps everything else exact in MiB', () => {
+    expect(fmtMib(1300)).toBe('1300 MiB')
+    expect(fmtMib(512)).toBe('512 MiB')
+  })
+})

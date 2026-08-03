@@ -181,7 +181,7 @@ compute.command('always-on <mode> [service]').description('Set a compute service
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((mode, service, o) => computeCmd.computeAlwaysOn(mode, service, o)))
 
 // ---- db (postgres service controls) ----
-const db = program.command('db').description('Postgres service controls (always-on / scale-to-zero)')
+const db = program.command('db').description('Postgres service controls (limits / always-on / scale-to-zero)')
 db.command('limits').description("Show or set a postgres service's resource ceiling (paid plans; insta-db-backed only). Moves both directions")
   .option('--cpu <n>', "vCPU ceiling, e.g. 2 or 2500m").option('--memory <size>', "memory ceiling, e.g. 4Gi")
   .option('--json').option('--branch <branch>', 'branch (default: current)').option('--group <g>', 'postgres service name (default: the sole/default one)')
