@@ -174,11 +174,18 @@ compute.command('suspend [service]').description('Suspend a compute service (RAM
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeSuspend(service, o)))
 compute.command('status [service]').description("Show a compute service's desired vs. live state")
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeStatus(service, o)))
+compute.command('limits [service]').description("Show or set a compute service's resource ceiling (paid plans). --memory is the dial; cpu derives from it unless --cpu is given. Billing is actual usage — the ceiling caps what the app may burn, it is not a price")
+  .option('--memory <size>', 'memory ceiling, e.g. 512mb or 1gb').option('--cpu <n>', 'vCPU ceiling override (provider sizes: 1, 2, 4, 6, 8)')
+  .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeLimits(service, o)))
 compute.command('always-on <mode> [service]').description('Set a compute service always-on (mode: on|off). on = machines never scale to zero; off = default scale-to-zero. All plans; billing is actual usage either way')
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((mode, service, o) => computeCmd.computeAlwaysOn(mode, service, o)))
 
 // ---- db (postgres service controls) ----
 const db = program.command('db').description('Postgres service controls (always-on / scale-to-zero)')
+db.command('limits').description("Show or set a postgres service's resource ceiling (paid plans; insta-db-backed only). Moves both directions")
+  .option('--cpu <n>', "vCPU ceiling, e.g. 2 or 2500m").option('--memory <size>', "memory ceiling, e.g. 4Gi")
+  .option('--json').option('--branch <branch>', 'branch (default: current)').option('--group <g>', 'postgres service name (default: the sole/default one)')
+  .action(guard((o) => dbCmd.dbLimits(o)))
 db.command('always-on <mode>').description('Set a postgres service always-on (mode: on|off). on = instance stays warm, no cold starts; off = default scale-to-zero (idle instance suspends; first connection cold-starts). insta-db-backed services only')
   .option('--json').option('--branch <branch>', 'branch (default: current)').option('--group <g>', 'postgres service name (default: the sole/default one)')
   .action(guard((mode, o) => dbCmd.dbAlwaysOn(mode, o)))
