@@ -93,27 +93,34 @@ if [ "$ENV_NAME" = "staging" ] && [ -z "${INSTA_VERSION:-}" ]; then
 fi
 
 # ---- already current? (skip the download; never move an install backwards) ----
-# Numeric x.y.z comparison: returns 0 when $1 >= $2. Prerelease suffixes are ignored, so an
-# auto-updated prerelease (e.g. v0.0.23-rc.1) counts as newer than the stable it precedes
-# (v0.0.22) and is kept; INSTA_VERSION pins an exact tag when a downgrade is really wanted.
-ver_ge() {
+# Numeric x.y.z comparison: returns 0 when $1 is STRICTLY newer than $2, prerelease suffixes
+# ignored. Strictly — so an auto-updated prerelease is kept over the older stable it follows
+# (v0.0.23-rc.1 over v0.0.22), but equal numerics fall through and the prerelease graduates to
+# its own stable release (v0.0.23-rc.1 → v0.0.23) instead of pinning itself forever.
+ver_gt() {
   awk -v a="${1#v}" -v b="${2#v}" 'BEGIN{
     split(a, x, /[.-]/); split(b, y, /[.-]/)
     for (i = 1; i <= 3; i++) { if (x[i]+0 > y[i]+0) exit 0; if (x[i]+0 < y[i]+0) exit 1 }
-    exit 0 }'
+    exit 1 }'
 }
 if [ -x "$INSTALL_DIR/$BIN" ] && [ -z "${INSTA_VERSION:-}" ]; then
   current="v$("$INSTALL_DIR/$BIN" --version 2>/dev/null | tail -1)"
   latest="$(resolve_latest || true)"
-  if [ -n "$latest" ] && [ "$current" != "v" ]; then
-    if [ "$current" = "$latest" ]; then
-      echo "✓ insta $latest already installed at $INSTALL_DIR/$BIN — up to date"
-      SKIP_DOWNLOAD=1
-    elif ver_ge "$current" "$latest"; then
-      echo "✓ insta $current already installed — newer than latest stable ($latest); keeping it"
-      echo "  (INSTA_VERSION=$latest re-running this installer forces the stable build)"
-      SKIP_DOWNLOAD=1
-    fi
+  if [ "$current" = "v" ]; then
+    : # couldn't read the installed version; proceed with a normal install
+  elif [ -z "$latest" ]; then
+    # Release lookup failed (offline, or the unauthenticated GitHub API rate limit). Downloading
+    # "latest" blind could still move an auto-updated prerelease backwards — keep what works.
+    echo "! could not resolve the latest release (offline or rate-limited) — keeping installed insta $current"
+    echo "  (re-run later, or pin INSTA_VERSION=vX.Y.Z to force a specific build)"
+    SKIP_DOWNLOAD=1
+  elif [ "$current" = "$latest" ]; then
+    echo "✓ insta $latest already installed at $INSTALL_DIR/$BIN — up to date"
+    SKIP_DOWNLOAD=1
+  elif ver_gt "$current" "$latest"; then
+    echo "✓ insta $current already installed — newer than latest stable ($latest); keeping it"
+    echo "  (INSTA_VERSION=$latest re-running this installer forces the stable build)"
+    SKIP_DOWNLOAD=1
   fi
 fi
 # other insta on PATH shadowing ours? (shells use the first hit)
@@ -274,7 +281,13 @@ if [ "$ENV_NAME" = "staging" ] && [ "${ENV_APPLIED:-0}" = "1" ]; then
 fi
 # Don't tell an already-authenticated machine to log in again — check for a live session on the
 # selected environment and swap the login line for a confirmation instead.
-session_email="$("$INSTALL_DIR/$BIN" status --json 2>/dev/null | sed -n 's/.*"email": *"\([^"]*\)".*/\1/p' | head -1)"
+session_status="$("$INSTALL_DIR/$BIN" status --json 2>/dev/null)"
+session_email="$(printf '%s' "$session_status" | sed -n 's/.*"email": *"\([^"]*\)".*/\1/p' | head -1)"
+if [ -z "$session_email" ]; then
+  # an account without an email set is still a live session — fall back to the user id
+  session_id="$(printf '%s' "$session_status" | sed -n 's/.*"id": *"\([^"]*\)".*/\1/p' | head -1)"
+  [ -n "$session_id" ] && session_email="account $session_id"
+fi
 echo "Next steps:"
 if [ -n "$session_email" ]; then
   echo "  ✓ already logged in as $session_email — no login needed"
