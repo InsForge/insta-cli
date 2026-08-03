@@ -111,9 +111,12 @@ export const fmtMb = (mb: number) => (mb >= 1024 && mb % 512 === 0 ? `${mb / 102
 // The --cpu override, through a throwing parser like every other user-typed number in this repo
 // (parseCount, parseMemoryMb). A bare Number() turns a typo into NaN, which JSON.stringify
 // serializes as null — the server then sees {cpu: null} instead of the user seeing an error.
+// Enforces the provider grid the help text advertises: the server would reject 100 anyway, but a
+// value the client KNOWS is invalid should fail locally, matching what --help promises.
+const CPU_SIZES = [1, 2, 4, 6, 8]
 export function parseCpu(raw: string): number {
   const n = Number(raw)
-  if (!Number.isInteger(n) || n <= 0) throw new Error(`invalid cpu: ${raw} (provider sizes: 1, 2, 4, 6, 8)`)
+  if (!CPU_SIZES.includes(n)) throw new Error(`invalid cpu: ${raw} (provider sizes: ${CPU_SIZES.join(', ')})`)
   return n
 }
 

@@ -44,12 +44,11 @@ import { ApiError } from '../src/api.js'
 import { parseDbCpu, parseDbMemory, fmtMib } from '../src/commands/db.js'
 
 describe('parseCpu (compute --cpu override)', () => {
-  it('accepts positive integers', () => {
-    expect(parseCpu('1')).toBe(1)
-    expect(parseCpu('8')).toBe(8)
+  it('accepts exactly the provider grid the help text advertises', () => {
+    for (const n of [1, 2, 4, 6, 8]) expect(parseCpu(String(n))).toBe(n)
   })
-  it('throws locally on junk instead of sending null to the server', () => {
-    for (const raw of ['abc', '', '-2', '1.5', 'two']) {
+  it('throws locally on junk AND on off-grid sizes instead of deferring to the server', () => {
+    for (const raw of ['abc', '', '-2', '1.5', 'two', '3', '100']) {
       expect(() => parseCpu(raw), raw).toThrow(/invalid cpu/)
     }
   })
