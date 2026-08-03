@@ -92,13 +92,28 @@ if [ "$ENV_NAME" = "staging" ] && [ -z "${INSTA_VERSION:-}" ]; then
   fi
 fi
 
-# ---- already current? (skip the download; Railway-style existing-install awareness) ----
+# ---- already current? (skip the download; never move an install backwards) ----
+# Numeric x.y.z comparison: returns 0 when $1 >= $2. Prerelease suffixes are ignored, so an
+# auto-updated prerelease (e.g. v0.0.23-rc.1) counts as newer than the stable it precedes
+# (v0.0.22) and is kept; INSTA_VERSION pins an exact tag when a downgrade is really wanted.
+ver_ge() {
+  awk -v a="${1#v}" -v b="${2#v}" 'BEGIN{
+    split(a, x, /[.-]/); split(b, y, /[.-]/)
+    for (i = 1; i <= 3; i++) { if (x[i]+0 > y[i]+0) exit 0; if (x[i]+0 < y[i]+0) exit 1 }
+    exit 0 }'
+}
 if [ -x "$INSTALL_DIR/$BIN" ] && [ -z "${INSTA_VERSION:-}" ]; then
   current="v$("$INSTALL_DIR/$BIN" --version 2>/dev/null | tail -1)"
   latest="$(resolve_latest || true)"
-  if [ -n "$latest" ] && [ "$current" = "$latest" ]; then
-    echo "✓ insta $latest already installed at $INSTALL_DIR/$BIN — up to date"
-    SKIP_DOWNLOAD=1
+  if [ -n "$latest" ] && [ "$current" != "v" ]; then
+    if [ "$current" = "$latest" ]; then
+      echo "✓ insta $latest already installed at $INSTALL_DIR/$BIN — up to date"
+      SKIP_DOWNLOAD=1
+    elif ver_ge "$current" "$latest"; then
+      echo "✓ insta $current already installed — newer than latest stable ($latest); keeping it"
+      echo "  (INSTA_VERSION=$latest re-running this installer forces the stable build)"
+      SKIP_DOWNLOAD=1
+    fi
   fi
 fi
 # other insta on PATH shadowing ours? (shells use the first hit)
@@ -257,8 +272,15 @@ if [ "$ENV_NAME" = "staging" ] && [ "${ENV_APPLIED:-0}" = "1" ]; then
   echo "Environment: staging (api.staging.instacloud.com) — persisted; \`insta env use prod\` to switch back."
   echo
 fi
+# Don't tell an already-authenticated machine to log in again — check for a live session on the
+# selected environment and swap the login line for a confirmation instead.
+session_email="$("$INSTALL_DIR/$BIN" status --json 2>/dev/null | sed -n 's/.*"email": *"\([^"]*\)".*/\1/p' | head -1)"
 echo "Next steps:"
-echo "  insta login --oauth github     # connect to the cloud (or run insta-oss locally to skip)"
+if [ -n "$session_email" ]; then
+  echo "  ✓ already logged in as $session_email — no login needed"
+else
+  echo "  insta login --oauth github     # connect to the cloud (or run insta-oss locally to skip)"
+fi
 echo "  insta project create demo      # postgres + storage + compute, provisioned in one shot"
 echo "  insta deploy . --port 3000     # ship your app and get a live URL"
 echo "  insta branch create preview    # clone db + storage + app into an isolated env"
