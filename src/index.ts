@@ -17,6 +17,7 @@ import * as regions from './commands/regions.js'
 import * as secretsCmd from './commands/secrets.js'
 import { deploy } from './commands/deploy.js'
 import * as computeCmd from './commands/compute.js'
+import * as dbCmd from './commands/db.js'
 import { manifest } from './commands/manifest.js'
 import * as govern from './commands/govern.js'
 import * as observe from './commands/observe.js'
@@ -119,6 +120,7 @@ svc.command('add <type> <name>').description('Provision a service on demand (ass
   .option('--public', 'storage only: serve the bucket with anonymous public-read (default private)')
   .option('--image <url>', 'compute only: run this container image at creation')
   .option('--port <n>', 'compute only: port the image listens on (default 8080)')
+  .option('--always-on', 'compute only: create as always-on — never scales to zero (all plans; billing is actual usage either way)')
   .action(guard((type, name, o) => services.servicesAdd(type, name, o)))
 svc.command('list').option('--json').option('--branch <branch>', 'branch (default: current)')
   .action(guard((o) => services.servicesList(o)))
@@ -172,6 +174,14 @@ compute.command('suspend [service]').description('Suspend a compute service (RAM
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeSuspend(service, o)))
 compute.command('status [service]').description("Show a compute service's desired vs. live state")
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeStatus(service, o)))
+compute.command('always-on <mode> [service]').description('Set a compute service always-on (mode: on|off). on = machines never scale to zero; off = default scale-to-zero. All plans; billing is actual usage either way')
+  .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((mode, service, o) => computeCmd.computeAlwaysOn(mode, service, o)))
+
+// ---- db (postgres service controls) ----
+const db = program.command('db').description('Postgres service controls (always-on / scale-to-zero)')
+db.command('always-on <mode>').description('Set a postgres service always-on (mode: on|off). on = instance stays warm, no cold starts; off = default scale-to-zero (idle instance suspends; first connection cold-starts). insta-db-backed services only')
+  .option('--json').option('--branch <branch>', 'branch (default: current)').option('--group <g>', 'postgres service name (default: the sole/default one)')
+  .action(guard((mode, o) => dbCmd.dbAlwaysOn(mode, o)))
 
 // ---- manifest ----
 program.command('manifest').description('Print an agent-legible view of the project environments').option('--json').action(guard((o) => manifest(o)))

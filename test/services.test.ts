@@ -109,6 +109,10 @@ describe('servicesAddRequestBody', () => {
     expect(servicesAddRequestBody('postgres', 'db', 'main', { region: 'us-east' })).toMatchObject({ region: 'us-east' })
     expect(servicesAddRequestBody('postgres', 'db', 'main', {})).not.toHaveProperty('region')
   })
+  it('sends alwaysOn only when the flag is set (absent means the scale-to-zero default)', () => {
+    expect(servicesAddRequestBody('compute', 'api', 'main', { alwaysOn: true })).toMatchObject({ alwaysOn: true })
+    expect(servicesAddRequestBody('compute', 'api', 'main', {})).not.toHaveProperty('alwaysOn')
+  })
 })
 
 describe('servicesAdd validation (throws before any network/config access)', () => {
@@ -117,6 +121,9 @@ describe('servicesAdd validation (throws before any network/config access)', () 
   })
   it('rejects --port for a non-compute type', async () => {
     await expect(servicesAdd('postgres', 'db', { port: '3000' })).rejects.toThrow(/--port is only valid for compute services/)
+  })
+  it('rejects --always-on for a non-compute type, pointing at the db command instead', async () => {
+    await expect(servicesAdd('postgres', 'db', { alwaysOn: true })).rejects.toThrow(/--always-on is only valid for compute services/)
   })
   it('rejects --public for a non-storage type', async () => {
     await expect(servicesAdd('compute', 'api', { public: true })).rejects.toThrow(/--public is only valid for storage services/)
