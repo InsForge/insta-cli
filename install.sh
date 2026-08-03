@@ -281,7 +281,7 @@ if [ "$ENV_NAME" = "staging" ] && [ "${ENV_APPLIED:-0}" = "1" ]; then
 fi
 # Don't tell an already-authenticated machine to log in again — check for a live session on the
 # selected environment and swap the login line for a confirmation instead.
-session_status="$("$INSTALL_DIR/$BIN" status --json 2>/dev/null)"
+session_status="$("$INSTALL_DIR/$BIN" status --json 2>/dev/null || true)"
 session_email="$(printf '%s' "$session_status" | sed -n 's/.*"email": *"\([^"]*\)".*/\1/p' | head -1)"
 if [ -z "$session_email" ]; then
   # an account without an email set is still a live session — fall back to the user id
