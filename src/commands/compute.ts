@@ -73,3 +73,19 @@ export async function computeStatus(serviceName: string | undefined, opts: LifeO
   if (opts.json) return printJson(r)
   info(`compute ${serviceName ?? id}: desired=${r.desiredState}  live=${r.state}`)
 }
+
+// ---- always-on (opt out of scale-to-zero; all plans; billing is actual usage either way) ----
+
+export async function computeAlwaysOn(mode: string, serviceName: string | undefined, opts: LifeOpts): Promise<void> {
+  if (mode !== 'on' && mode !== 'off') throw new Error('mode must be on|off')
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const branch = opts.branch ?? p.branch
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
+  const id = resolveComputeServiceId(services, serviceName)
+  const res = await api.rawRequest('PUT', `/projects/${p.projectId}/services/${id}/always-on`, { enabled: mode === 'on' })
+  if (handleApproval(res)) return
+  if (opts.json) return printJson(res.body)
+  const on = res.body.service?.always_on
+  info(`compute ${res.body.service?.name ?? id}: always-on ${on ? 'ENABLED — machines stay warm (no cold starts; idle RAM bills at actual usage)' : 'disabled — scales to zero when idle (default)'}`)
+}
