@@ -279,7 +279,7 @@ echo "Next steps:"
 if [ -n "$session_email" ]; then
   echo "  ✓ already logged in as $session_email — no login needed"
 else
-  echo "  insta login --oauth github     # connect to the cloud (or run insta-oss locally to skip)"
+  echo "  insta login --oauth github     # or --oauth google; insta-oss locally skips login entirely"
 fi
 echo "  insta project create demo      # postgres + storage + compute, provisioned in one shot"
 echo "  insta deploy . --port 3000     # ship your app and get a live URL"
