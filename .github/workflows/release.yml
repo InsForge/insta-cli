@@ -1,7 +1,11 @@
 name: release
 
 # Build native `insta` binaries with Bun and publish them to a GitHub Release.
-# Trigger by pushing a tag (v*), or manually via workflow_dispatch with a version.
+# Trigger by pushing a tag (v*) — the ONLY complete release path — or manually via
+# workflow_dispatch with a version, which builds and publishes the GitHub binaries ONLY.
+# workflow_dispatch does NOT publish to npm: `publish-npm` is gated on a tag ref, and npm
+# publishes package.json's version (which a dispatch input does not change), so a dispatch
+# release would ship binaries at one version and leave npm on the previous one.
 on:
   push:
     tags: ['v*']
