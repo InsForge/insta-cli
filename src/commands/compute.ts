@@ -106,7 +106,7 @@ export function parseMemoryMb(raw: string): number {
 
 // Whole and half GB collapse (1536 → "1.5 GB"); anything else stays exact in MB — a display that
 // rounds 1536 to "2 GB" claims a ceiling the API did not set.
-const fmtMb = (mb: number) => (mb >= 1024 && mb % 512 === 0 ? `${mb / 1024} GB` : `${mb} MB`)
+export const fmtMb = (mb: number) => (mb >= 1024 && mb % 512 === 0 ? `${mb / 1024} GB` : `${mb} MB`)
 
 // The --cpu override, through a throwing parser like every other user-typed number in this repo
 // (parseCount, parseMemoryMb). A bare Number() turns a typo into NaN, which JSON.stringify

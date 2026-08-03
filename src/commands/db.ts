@@ -1,4 +1,4 @@
-import { ApiClient, requireProject } from '../api.js'
+import { ApiClient, ApiError, requireProject } from '../api.js'
 import { info, printJson, handleApproval } from '../util.js'
 
 type Opts = { branch?: string; group?: string; json?: boolean }
@@ -26,13 +26,15 @@ export async function dbAlwaysOn(mode: string, opts: Opts): Promise<void> {
 // Validated pass-throughs for the provider's quantity strings. The insta-db resize API takes
 // k8s-style quantities (cpu: "2", "2500m"; memory: "4Gi", "2048Mi"), so unlike the compute path
 // there is no unit conversion here — but junk must still fail LOCALLY with an example, not travel
-// to the server as-is.
+// to the server as-is. CASE-EXACT deliberately: k8s quantities are case-sensitive ("4gi" is
+// rejected server-side), and local validation that accepts a form the backend refuses would
+// defeat its own purpose.
 export function parseDbCpu(raw: string): string {
   if (!/^\d+(\.\d+)?m?$/.test(raw.trim())) throw new Error(`invalid cpu: ${raw} (try 2, 4, or 2500m)`)
   return raw.trim()
 }
 export function parseDbMemory(raw: string): string {
-  if (!/^\d+(\.\d+)?(Gi|Mi|G|M)$/i.test(raw.trim())) throw new Error(`invalid memory: ${raw} (try 4Gi or 8Gi)`)
+  if (!/^\d+(\.\d+)?(Gi|Mi|G|M)$/.test(raw.trim())) throw new Error(`invalid memory: ${raw} (try 4Gi or 8Gi)`)
   return raw.trim()
 }
 
@@ -40,6 +42,31 @@ export function parseDbMemory(raw: string): string {
 // (1536 MiB is "1.5 GiB", 1300 MiB is "1300 MiB" — never "1 GiB").
 export function fmtMib(mib: number): string {
   return mib >= 1024 && mib % 512 === 0 ? `${mib / 1024} GiB` : `${mib} MiB`
+}
+
+// The read outcome, as a seam. rawRequest THROWS ApiError on any status >= 400 (api.ts — it only
+// differs from request in returning {status,body} below 400, for 202 branching), so the Neon case
+// and the friendly wrapping must live in a catch, not in status branching on the return value —
+// branches on res.status >= 400 after rawRequest are unreachable. Takes the client as an argument
+// so tests drive it with a stub, per this repo's pure-seam convention.
+export type DbInstanceRead = { kind: 'ok'; body: any } | { kind: 'no-instance' }
+
+export async function fetchDbInstance(
+  api: { rawRequest: (m: string, p: string) => Promise<{ status: number; body: any }> },
+  projectId: string,
+  suffix: string,
+): Promise<DbInstanceRead> {
+  try {
+    const res = await api.rawRequest('GET', `/projects/${projectId}/database/instance${suffix}`)
+    return { kind: 'ok', body: res.body }
+  } catch (e) {
+    // The platform answers a provider-shaped 502 for services with no manageable instance
+    // (Neon-backed): a soft case, not a failure. Everything else stays an error — an expired
+    // token must not render as "no ceiling set" — but wrapped so the user sees what failed.
+    if (e instanceof ApiError && e.status === 502) return { kind: 'no-instance' }
+    if (e instanceof ApiError) throw new Error(`reading the instance failed (${e.status}): ${e.message}`)
+    throw e
+  }
 }
 
 // Show or set a postgres service's resource ceiling (insta-db-backed only). Paid plans — the
@@ -55,18 +82,14 @@ export async function dbLimits(opts: Opts & { cpu?: string; memory?: string }): 
   const suffix = qs.toString() ? `?${qs}` : ''
 
   if (!opts.cpu && !opts.memory) {
-    // A real read against GET /database/instance. Errors PROPAGATE — an expired token or a 502
-    // must not render as "no ceiling set"; the only softened case is a Neon-backed service, where
-    // the platform answers 502 provider-shaped because there is no manageable instance.
-    const res = await api.rawRequest('GET', `/projects/${p.projectId}/database/instance${suffix}`)
-    if (res.status === 502) {
+    const read = await fetchDbInstance(api, p.projectId, suffix)
+    if (read.kind === 'no-instance') {
       info(`postgres ${opts.group ?? 'default'}: no manageable instance (Neon-backed services manage their own resources)`)
       return
     }
-    if (res.status >= 400) throw new Error(`reading the instance failed (${res.status}): ${res.body?.error ?? 'unknown error'}`)
-    if (opts.json) return printJson(res.body)
-    const cpuMilli = res.body?.cpuMilli
-    const mib = res.body?.memoryMib
+    if (opts.json) return printJson(read.body)
+    const cpuMilli = read.body?.cpuMilli
+    const mib = read.body?.memoryMib
     if (typeof cpuMilli === 'number' && typeof mib === 'number') {
       const cpu = cpuMilli % 1000 === 0 ? `${cpuMilli / 1000}` : `${cpuMilli}m`
       info(`postgres ${opts.group ?? 'default'}: ceiling ${cpu} vCPU / ${fmtMib(mib)}`)
@@ -80,9 +103,14 @@ export async function dbLimits(opts: Opts & { cpu?: string; memory?: string }): 
   const body: Record<string, unknown> = {}
   if (opts.cpu) body.cpu = parseDbCpu(opts.cpu)
   if (opts.memory) body.memory = parseDbMemory(opts.memory)
-  const res = await api.rawRequest('PATCH', `/projects/${p.projectId}/database/settings${suffix}`, body)
+  let res
+  try {
+    res = await api.rawRequest('PATCH', `/projects/${p.projectId}/database/settings${suffix}`, body)
+  } catch (e) {
+    if (e instanceof ApiError) throw new Error(`setting the ceiling failed (${e.status}): ${e.message}`)
+    throw e
+  }
   if (handleApproval(res)) return
-  if (res.status >= 400) throw new Error(`setting the ceiling failed (${res.status}): ${res.body?.error ?? 'unknown error'}`)
   if (opts.json) return printJson(res.body)
   const cpu = typeof res.body?.cpuMilli === 'number' ? `${res.body.cpuMilli / 1000} vCPU` : (opts.cpu ?? 'unchanged')
   const mem = typeof res.body?.memoryMib === 'number' ? fmtMib(res.body.memoryMib) : (opts.memory ?? 'unchanged')
