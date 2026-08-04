@@ -54,10 +54,11 @@ function resolveVersion(): string {
 program.name('insta').description('InstaCloud CLI — manage projects, branches, secrets, deploys').version(resolveVersion())
 
 // ---- auth ----
-program.command('login').description('Log in with email + password, or --oauth <github|google> (browser)')
+program.command('login').description('Log in with email + password, --oauth <github|google> (browser), or --device (headless)')
   .option('--email <email>', 'account email')
   .option('--password <password>', 'account password (else $INSTA_PASSWORD or prompt)')
   .option('--oauth <provider>', 'browser OAuth login: github | google')
+  .option('--device', 'device-code login: approve from a browser on any other machine (VMs, SSH, CI)')
   .option('--api-url <url>', 'control-plane API base URL')
   .option('--env <name>', `deployment environment: ${ENV_NAMES.join(' | ')}`)
   .action(guard((o) => auth.login(o)))

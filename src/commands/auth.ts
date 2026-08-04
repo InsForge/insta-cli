@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
-import { ApiClient, linkedProject } from '../api.js'
+import { ApiClient, ApiError, linkedProject } from '../api.js'
 import { ENVS, ENV_NAMES, envForApiUrl, isEnvName } from '../env.js'
 import { info, die, printJson, promptPassword, openUrl } from '../util.js'
 
@@ -15,12 +15,13 @@ function targetApiUrl(opts: { apiUrl?: string; env?: string }): string | undefin
   return ENVS[want].api
 }
 
-export async function login(opts: { email?: string; password?: string; apiUrl?: string; env?: string; oauth?: string }): Promise<void> {
+export async function login(opts: { email?: string; password?: string; apiUrl?: string; env?: string; oauth?: string; device?: boolean }): Promise<void> {
+  if (opts.device) return loginDevice(opts)
   if (opts.oauth) return loginOauth(opts.oauth, opts)
   const api = await ApiClient.load()
   const target = targetApiUrl(opts)
   if (target) api.setApiUrl(target)
-  if (!opts.email) die('--email is required (or use --oauth <github|google>)')
+  if (!opts.email) die('--email is required (or use --oauth <github|google>; on a headless machine, --device)')
   const password = opts.password ?? process.env.INSTA_PASSWORD ?? (await promptPassword())
   const res = await api.request('POST', '/auth/login', { email: opts.email, password }, { auth: false })
   api.setSession(res, res.user)
@@ -41,6 +42,82 @@ export async function loginOauth(provider: string, opts: { apiUrl?: string; env?
   api.setSession({ accessToken: token, refreshToken: token }, me.user)
   await api.persist()
   info(`logged in as ${me.user.email ?? me.user.id} @ ${api.apiUrl}`)
+}
+
+// RFC 8628 device authorization — login from a machine with no usable browser (VM, SSH box, CI
+// container). The loopback --oauth flow can never work there: its callback targets 127.0.0.1 on
+// THIS machine. Here the roles invert — we mint a code, print a link the human opens on ANY
+// device, and poll the platform until they approve in the console.
+export async function loginDevice(opts: { apiUrl?: string; env?: string }): Promise<void> {
+  const api = await ApiClient.load()
+  const target = targetApiUrl(opts)
+  if (target) api.setApiUrl(target)
+  const token = await deviceGrant((path, body) => api.request('POST', path, body, { auth: false }))
+  api.setSession({ accessToken: token, refreshToken: token })
+  const me = await api.request<{ user: { id: string; email: string | null; name: string | null } }>('GET', '/me')
+  api.setSession({ accessToken: token, refreshToken: token }, me.user)
+  await api.persist()
+  info(`logged in as ${me.user.email ?? me.user.id} @ ${api.apiUrl}`)
+}
+
+// RFC 8628 §3.2: verification_uri_complete and interval are OPTIONAL in the authorization
+// response, so don't trust either arithmetically without a fallback.
+type DeviceStart = {
+  device_code: string; user_code: string; verification_uri: string
+  verification_uri_complete?: string; expires_in: number; interval?: number
+}
+
+export type DevicePoster = (path: string, body: Record<string, unknown>) => Promise<any>
+
+const sleepSeconds = (s: number) => new Promise<void>((r) => setTimeout(r, s * 1000))
+
+// Drives the device grant against the platform's Better Auth mount (/api/auth/device*) and
+// returns the approved session token. Injectable poster + wait keep this testable without a
+// network or real timers. Poll errors arrive as ApiError with the OAuth error code as message.
+export async function deviceGrant(post: DevicePoster, wait: (s: number) => Promise<void> = sleepSeconds): Promise<string> {
+  const start = (await post('/api/auth/device/code', { client_id: 'insta-cli' })) as DeviceStart
+  // A missing/garbage expires_in must fail loudly here — carried into the deadline arithmetic it
+  // becomes NaN, every `Date.now() < deadline` is false, and login dies as a bogus instant expiry.
+  // Cap the lifetime too: a huge-but-finite value (Number.MAX_VALUE) overflows the ms conversion
+  // to Infinity and would otherwise pin the CLI polling forever.
+  const expiresIn = Number(start.expires_in)
+  if (!Number.isFinite(expiresIn) || expiresIn <= 0) {
+    throw new Error('malformed device authorization response (missing expires_in) — is the platform up to date?')
+  }
+  const lifetime = Math.min(expiresIn, 3600) // no device code sensibly outlives an hour
+  info('to log in, open this link in a browser on any device:')
+  info(`  ${start.verification_uri_complete ?? start.verification_uri}`)
+  info(`and check it shows this code: ${start.user_code}`)
+  info(`waiting for approval… (expires in ${Math.round(lifetime / 60)}m, ctrl-c to abort)`)
+  // Absent OR non-finite interval = the RFC 8628 §3.2 default 5s: NaN would fire the timer
+  // instantly and Infinity gets truncated to ~1ms by Node — both hot-poll the token endpoint.
+  const rawInterval = Number(start.interval)
+  let interval = Number.isFinite(rawInterval) ? Math.max(rawInterval, 1) : 5
+  const deadline = Date.now() + lifetime * 1000
+  while (Date.now() < deadline) {
+    await wait(interval)
+    let grant: { access_token?: string } | null = null
+    try {
+      grant = (await post('/api/auth/device/token', {
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        device_code: start.device_code,
+        client_id: 'insta-cli',
+      })) as { access_token?: string }
+    } catch (e) {
+      if (!(e instanceof ApiError)) continue // transport blip (dropped SSH/CI link) — keep polling until deadline
+      const code = e.message
+      if (code === 'authorization_pending') continue
+      if (code === 'slow_down') { interval += 5; continue } // RFC 8628 §3.5: back off by 5s
+      if (code === 'expired_token') break
+      if (code === 'access_denied') throw new Error('login request was denied in the console')
+      throw e // a definite API-level error (invalid_grant, …) — not retryable
+    }
+    // Validated OUTSIDE the try: a 200 without a token is a malformed response that must fail
+    // loudly, not be mistaken for a transport blip and retried into an empty stored session.
+    if (!grant?.access_token) throw new Error('malformed token response (missing access_token)')
+    return grant.access_token
+  }
+  throw new Error('device login expired before it was approved — run `insta login --device` again')
 }
 
 // Start a loopback server, open the browser at the platform bridge, and await the token.
