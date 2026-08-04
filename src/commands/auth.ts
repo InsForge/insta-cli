@@ -78,16 +78,22 @@ export async function deviceGrant(post: DevicePoster, wait: (s: number) => Promi
   const start = (await post('/api/auth/device/code', { client_id: 'insta-cli' })) as DeviceStart
   // A missing/garbage expires_in must fail loudly here — carried into the deadline arithmetic it
   // becomes NaN, every `Date.now() < deadline` is false, and login dies as a bogus instant expiry.
+  // Cap the lifetime too: a huge-but-finite value (Number.MAX_VALUE) overflows the ms conversion
+  // to Infinity and would otherwise pin the CLI polling forever.
   const expiresIn = Number(start.expires_in)
   if (!Number.isFinite(expiresIn) || expiresIn <= 0) {
     throw new Error('malformed device authorization response (missing expires_in) — is the platform up to date?')
   }
+  const lifetime = Math.min(expiresIn, 3600) // no device code sensibly outlives an hour
   info('to log in, open this link in a browser on any device:')
   info(`  ${start.verification_uri_complete ?? start.verification_uri}`)
   info(`and check it shows this code: ${start.user_code}`)
-  info(`waiting for approval… (expires in ${Math.round(expiresIn / 60)}m, ctrl-c to abort)`)
-  let interval = Math.max(Number(start.interval) || 5, 1) // absent interval = 5s (RFC 8628 §3.2)
-  const deadline = Date.now() + expiresIn * 1000
+  info(`waiting for approval… (expires in ${Math.round(lifetime / 60)}m, ctrl-c to abort)`)
+  // Absent OR non-finite interval = the RFC 8628 §3.2 default 5s: NaN would fire the timer
+  // instantly and Infinity gets truncated to ~1ms by Node — both hot-poll the token endpoint.
+  const rawInterval = Number(start.interval)
+  let interval = Number.isFinite(rawInterval) ? Math.max(rawInterval, 1) : 5
+  const deadline = Date.now() + lifetime * 1000
   while (Date.now() < deadline) {
     await wait(interval)
     try {
@@ -95,7 +101,9 @@ export async function deviceGrant(post: DevicePoster, wait: (s: number) => Promi
         grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
         device_code: start.device_code,
         client_id: 'insta-cli',
-      })) as { access_token: string }
+      })) as { access_token?: string }
+      // A 200 without a token must not become an empty stored session.
+      if (!grant?.access_token) throw new Error('malformed token response (missing access_token)')
       return grant.access_token
     } catch (e) {
       const code = e instanceof ApiError ? e.message : ''

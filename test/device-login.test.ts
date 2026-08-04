@@ -85,6 +85,26 @@ describe('deviceGrant', () => {
     expect(waits).toEqual([]) // failed before any poll
   })
 
+  // Non-finite interval (Infinity survives `|| 5`) must also fall back to 5s — Node truncates a
+  // setTimeout(Infinity) to ~1ms, which would hot-poll the token endpoint.
+  it('treats a non-finite interval as the 5s default', async () => {
+    const { post, wait, waits } = fakeFlow(['authorization_pending', 'token:sess-i'], { ...START, interval: Infinity })
+    await expect(deviceGrant(post, wait)).resolves.toBe('sess-i')
+    expect(waits).toEqual([5, 5])
+  })
+
+  // Huge-but-finite expires_in (Number.MAX_VALUE) overflows the ms conversion to Infinity; the
+  // lifetime cap keeps the deadline finite. Grant still resolves normally.
+  it('caps an absurd expires_in instead of polling forever', async () => {
+    const { post, wait } = fakeFlow(['token:sess-h'], { ...START, expires_in: Number.MAX_VALUE })
+    await expect(deviceGrant(post, wait)).resolves.toBe('sess-h')
+  })
+
+  it('rejects a 200 token response missing access_token', async () => {
+    const { post, wait } = fakeFlow(['token:'], START) // fake grants an empty token string
+    await expect(deviceGrant(post, wait)).rejects.toThrow(/missing access_token/)
+  })
+
   // verification_uri_complete is OPTIONAL too — the plain verification_uri is the fallback link.
   it('falls back to verification_uri when the complete variant is absent', async () => {
     const lines: string[] = []
