@@ -21,7 +21,7 @@ export async function login(opts: { email?: string; password?: string; apiUrl?: 
   const api = await ApiClient.load()
   const target = targetApiUrl(opts)
   if (target) api.setApiUrl(target)
-  if (!opts.email) die('--email is required (or use --oauth <github|google>)')
+  if (!opts.email) die('--email is required (or use --oauth <github|google>; on a headless machine, --device)')
   const password = opts.password ?? process.env.INSTA_PASSWORD ?? (await promptPassword())
   const res = await api.request('POST', '/auth/login', { email: opts.email, password }, { auth: false })
   api.setSession(res, res.user)
@@ -60,9 +60,11 @@ export async function loginDevice(opts: { apiUrl?: string; env?: string }): Prom
   info(`logged in as ${me.user.email ?? me.user.id} @ ${api.apiUrl}`)
 }
 
+// RFC 8628 §3.2: verification_uri_complete and interval are OPTIONAL in the authorization
+// response, so don't trust either arithmetically without a fallback.
 type DeviceStart = {
   device_code: string; user_code: string; verification_uri: string
-  verification_uri_complete: string; expires_in: number; interval: number
+  verification_uri_complete?: string; expires_in: number; interval?: number
 }
 
 export type DevicePoster = (path: string, body: Record<string, unknown>) => Promise<any>
@@ -74,12 +76,18 @@ const sleepSeconds = (s: number) => new Promise<void>((r) => setTimeout(r, s * 1
 // network or real timers. Poll errors arrive as ApiError with the OAuth error code as message.
 export async function deviceGrant(post: DevicePoster, wait: (s: number) => Promise<void> = sleepSeconds): Promise<string> {
   const start = (await post('/api/auth/device/code', { client_id: 'insta-cli' })) as DeviceStart
+  // A missing/garbage expires_in must fail loudly here — carried into the deadline arithmetic it
+  // becomes NaN, every `Date.now() < deadline` is false, and login dies as a bogus instant expiry.
+  const expiresIn = Number(start.expires_in)
+  if (!Number.isFinite(expiresIn) || expiresIn <= 0) {
+    throw new Error('malformed device authorization response (missing expires_in) — is the platform up to date?')
+  }
   info('to log in, open this link in a browser on any device:')
-  info(`  ${start.verification_uri_complete}`)
+  info(`  ${start.verification_uri_complete ?? start.verification_uri}`)
   info(`and check it shows this code: ${start.user_code}`)
-  info(`waiting for approval… (expires in ${Math.round(start.expires_in / 60)}m, ctrl-c to abort)`)
-  let interval = Math.max(start.interval, 1)
-  const deadline = Date.now() + start.expires_in * 1000
+  info(`waiting for approval… (expires in ${Math.round(expiresIn / 60)}m, ctrl-c to abort)`)
+  let interval = Math.max(Number(start.interval) || 5, 1) // absent interval = 5s (RFC 8628 §3.2)
+  const deadline = Date.now() + expiresIn * 1000
   while (Date.now() < deadline) {
     await wait(interval)
     try {

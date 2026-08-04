@@ -13,14 +13,14 @@ const START = {
   expires_in: 900, interval: 5,
 }
 
-// A poster that returns START for /device/code, then plays `polls` in order for /device/token —
-// each entry is either an OAuth error code (thrown as ApiError, like the real client does) or a
-// token to grant. Records waits so tests can assert the pacing.
-function fakeFlow(polls: string[]) {
+// A poster that returns `start` (default START) for /device/code, then plays `polls` in order for
+// /device/token — each entry is either an OAuth error code (thrown as ApiError, like the real
+// client does) or a token to grant. Records waits so tests can assert the pacing.
+function fakeFlow(polls: string[], start: Record<string, unknown> = START) {
   const waits: number[] = []
   let sent: unknown = null
   const post: DevicePoster = async (path, body) => {
-    if (path === '/api/auth/device/code') return START
+    if (path === '/api/auth/device/code') return start
     if (path === '/api/auth/device/token') {
       sent = body
       const next = polls.shift()
@@ -65,5 +65,39 @@ describe('deviceGrant', () => {
   it('rethrows unexpected errors instead of polling forever', async () => {
     const { post, wait } = fakeFlow(['invalid_grant'])
     await expect(deviceGrant(post, wait)).rejects.toThrow('invalid_grant')
+  })
+
+  // RFC 8628 §3.2: interval is OPTIONAL — absent must mean the default 5s, not NaN (which would
+  // resolve wait() instantly and hot-poll the token endpoint straight into slow_down).
+  it('defaults the poll interval to 5s when the response omits it', async () => {
+    const { interval: _omitted, ...startWithoutInterval } = START
+    const { post, wait, waits } = fakeFlow(['authorization_pending', 'token:sess-d'], startWithoutInterval)
+    await expect(deviceGrant(post, wait)).resolves.toBe('sess-d')
+    expect(waits).toEqual([5, 5])
+  })
+
+  // A missing expires_in would otherwise become a NaN deadline: the loop never runs and the
+  // failure surfaces as a bogus "expired" — fail loudly at the response instead.
+  it('rejects a malformed authorization response missing expires_in', async () => {
+    const { expires_in: _omitted, ...startWithoutExpiry } = START
+    const { post, wait, waits } = fakeFlow([], startWithoutExpiry)
+    await expect(deviceGrant(post, wait)).rejects.toThrow(/malformed device authorization response/)
+    expect(waits).toEqual([]) // failed before any poll
+  })
+
+  // verification_uri_complete is OPTIONAL too — the plain verification_uri is the fallback link.
+  it('falls back to verification_uri when the complete variant is absent', async () => {
+    const lines: string[] = []
+    const write = process.stdout.write.bind(process.stdout)
+    process.stdout.write = ((s: string) => { lines.push(String(s)); return true }) as typeof process.stdout.write
+    try {
+      const { verification_uri_complete: _omitted, ...startWithoutComplete } = START
+      const { post, wait } = fakeFlow(['token:sess-f'], startWithoutComplete)
+      await expect(deviceGrant(post, wait)).resolves.toBe('sess-f')
+    } finally {
+      process.stdout.write = write
+    }
+    expect(lines.join('')).toContain('https://console.test/device')
+    expect(lines.join('')).not.toContain('undefined')
   })
 })
