@@ -89,3 +89,63 @@ export async function computeAlwaysOn(mode: string, serviceName: string | undefi
   const on = res.body.service?.always_on
   info(`compute ${res.body.service?.name ?? id}: always-on ${on ? 'ENABLED — machines stay warm (no cold starts; idle RAM bills at actual usage)' : 'disabled — scales to zero when idle (default)'}`)
 }
+
+// ---- limits (the resource ceiling; paid plans) ----
+
+// Parse a human memory value into MB: "512", "512mb", "1gb", "2g", "1.5gb".
+// Exported for unit tests — this is the only place a user-typed size becomes a number.
+export function parseMemoryMb(raw: string): number {
+  const m = /^\s*(\d+(?:\.\d+)?)\s*(g|gb|gi|gib|m|mb|mi|mib)?\s*$/i.exec(raw)
+  if (!m) throw new Error(`invalid memory: ${raw} (try 512mb, 1gb, 2gb)`)
+  const n = Number(m[1])
+  const unit = (m[2] ?? 'mb').toLowerCase()
+  const mb = unit.startsWith('g') ? n * 1024 : n
+  if (!(mb > 0)) throw new Error(`invalid memory: ${raw}`)
+  return Math.round(mb)
+}
+
+// Whole and half GB collapse (1536 → "1.5 GB"); anything else stays exact in MB — a display that
+// rounds 1536 to "2 GB" claims a ceiling the API did not set.
+export const fmtMb = (mb: number) => (mb >= 1024 && mb % 512 === 0 ? `${mb / 1024} GB` : `${mb} MB`)
+
+// The --cpu override, through a throwing parser like every other user-typed number in this repo
+// (parseCount, parseMemoryMb). A bare Number() turns a typo into NaN, which JSON.stringify
+// serializes as null — the server then sees {cpu: null} instead of the user seeing an error.
+// Enforces the provider grid the help text advertises: the server would reject 100 anyway, but a
+// value the client KNOWS is invalid should fail locally, matching what --help promises.
+const CPU_SIZES = [1, 2, 4, 6, 8]
+export function parseCpu(raw: string): number {
+  const n = Number(raw)
+  if (!CPU_SIZES.includes(n)) throw new Error(`invalid cpu: ${raw} (provider sizes: ${CPU_SIZES.join(', ')})`)
+  return n
+}
+
+type LimitsOpts = LifeOpts & { cpu?: string; memory?: string }
+
+// Show or set a compute service's ceiling. With no --memory it PRINTS the current limits and the
+// plan cap (so `insta compute limits` is a safe read), which is also what a UI renders as a slider
+// with its plan-limit marker.
+export async function computeLimits(serviceName: string | undefined, opts: LimitsOpts): Promise<void> {
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const branch = opts.branch ?? p.branch
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
+  const id = resolveComputeServiceId(services, serviceName)
+
+  if (!opts.memory && !opts.cpu) {
+    const r = await api.request('GET', `/projects/${p.projectId}/services/${id}/limits`)
+    if (opts.json) return printJson(r)
+    info(`compute ${serviceName ?? id}: ceiling ${r.limits.cpu} vCPU / ${fmtMb(r.limits.memoryMb)}  (plan max ${r.cap.cpu} vCPU / ${fmtMb(r.cap.memoryMb)})`)
+    info('  billing is actual usage — the ceiling caps what the app may burn, it is not a price')
+    return
+  }
+  if (!opts.memory) throw new Error('--memory is required when setting limits (cpu is derived from it; pass --cpu only to override)')
+
+  const body: Record<string, unknown> = { memoryMb: parseMemoryMb(opts.memory) }
+  if (opts.cpu) body.cpu = parseCpu(opts.cpu)
+  const res = await api.rawRequest('PUT', `/projects/${p.projectId}/services/${id}/limits`, body)
+  if (handleApproval(res)) return
+  if (opts.json) return printJson(res.body)
+  const l = res.body.limits
+  info(`compute ${res.body.service?.name ?? id}: ceiling set to ${l.cpu} vCPU / ${fmtMb(l.memoryMb)}`)
+}
