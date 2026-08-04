@@ -96,23 +96,26 @@ export async function deviceGrant(post: DevicePoster, wait: (s: number) => Promi
   const deadline = Date.now() + lifetime * 1000
   while (Date.now() < deadline) {
     await wait(interval)
+    let grant: { access_token?: string } | null = null
     try {
-      const grant = (await post('/api/auth/device/token', {
+      grant = (await post('/api/auth/device/token', {
         grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
         device_code: start.device_code,
         client_id: 'insta-cli',
       })) as { access_token?: string }
-      // A 200 without a token must not become an empty stored session.
-      if (!grant?.access_token) throw new Error('malformed token response (missing access_token)')
-      return grant.access_token
     } catch (e) {
-      const code = e instanceof ApiError ? e.message : ''
+      if (!(e instanceof ApiError)) continue // transport blip (dropped SSH/CI link) — keep polling until deadline
+      const code = e.message
       if (code === 'authorization_pending') continue
       if (code === 'slow_down') { interval += 5; continue } // RFC 8628 §3.5: back off by 5s
       if (code === 'expired_token') break
       if (code === 'access_denied') throw new Error('login request was denied in the console')
-      throw e
+      throw e // a definite API-level error (invalid_grant, …) — not retryable
     }
+    // Validated OUTSIDE the try: a 200 without a token is a malformed response that must fail
+    // loudly, not be mistaken for a transport blip and retried into an empty stored session.
+    if (!grant?.access_token) throw new Error('malformed token response (missing access_token)')
+    return grant.access_token
   }
   throw new Error('device login expired before it was approved — run `insta login --device` again')
 }

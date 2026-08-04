@@ -105,6 +105,24 @@ describe('deviceGrant', () => {
     await expect(deviceGrant(post, wait)).rejects.toThrow(/missing access_token/)
   })
 
+  // RFC 8628 clients tolerate transport failures: a dropped connection mid-wait (the flaky
+  // SSH/CI links this flow exists for) must not abort a 15-minute login that would succeed on
+  // the next poll. Only ApiError (a real server answer) can end the loop.
+  it('keeps polling through transient network errors', async () => {
+    const polls = ['authorization_pending', 'token:sess-net']
+    const waits: number[] = []
+    let dropped = false
+    const post: DevicePoster = async (path) => {
+      if (path === '/api/auth/device/code') return START
+      if (!dropped) { dropped = true; throw new TypeError('fetch failed') } // transport blip, not ApiError
+      const next = polls.shift()!
+      if (next.startsWith('token:')) return { access_token: next.slice('token:'.length) }
+      throw new ApiError(400, next)
+    }
+    await expect(deviceGrant(post, async (s) => { waits.push(s) })).resolves.toBe('sess-net')
+    expect(waits).toEqual([5, 5, 5]) // blip consumed one poll slot, pacing unchanged
+  })
+
   // verification_uri_complete is OPTIONAL too — the plain verification_uri is the fallback link.
   it('falls back to verification_uri when the complete variant is absent', async () => {
     const lines: string[] = []
