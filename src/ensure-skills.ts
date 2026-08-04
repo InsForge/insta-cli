@@ -1,6 +1,7 @@
 // Install the related agent skills into a linked project so the developer's coding agent has
-// context for what InstaCloud provisions — the `insta` CLI itself plus the three services you build
-// directly against (Neon Postgres, Tigris storage, Better Auth). Runs `npx skills add`
+// context for what InstaCloud provisions — the `insta` CLI itself plus the services you build
+// directly against (Tigris storage, Better Auth). Postgres gets no vendor skill: instadb is
+// plain Postgres, and agents talk to it directly via DATABASE_URL. Runs `npx skills add`
 // (vercel-labs/skills) fully non-interactively. Best-effort: a failure (offline, npx missing, a
 // repo moved) prints a manual fallback and never blocks or fails the host command — same contract
 // as the observe-hook install.
@@ -17,8 +18,8 @@ const SKILL_DIRS = ['.claude/skills/', '.agents/skills/', '.github/skills/']
 
 export type Runner = (cmd: string, args: string[], inherit?: boolean) => Promise<{ ok: boolean }>
 
-// `skills` prints a full-screen ASCII banner at the top of every `add`, so our 4 invocations
-// would stack 4 banners. It skips the banner when it detects an agent driving it rather than a
+// `skills` prints a full-screen ASCII banner at the top of every `add`, so our 3 invocations
+// would stack 3 banners. It skips the banner when it detects an agent driving it rather than a
 // human — AI_AGENT is its first-checked signal (any non-empty value ⇒ agent mode). Setting it is
 // honest here (this IS programmatic, not an interactive prompt) and, because we already pin the
 // agents/skills/-y, has no effect on the install beyond quieting the banner. Preserve a caller's
@@ -39,10 +40,9 @@ const AGENT_FLAGS = ['-a', 'claude-code', '-a', 'codex', '-y', '--copy']
 
 // `instaSpec` is the insta skill source for the resolved environment (`owner/repo[@ref]`), so a
 // project created against staging gets the staging skill text. The third-party stack skills are
-// environment-independent — they document Neon/Tigris/Better Auth, not our control plane.
+// environment-independent — they document Tigris/Better Auth, not our control plane.
 const skillTargets = (instaSpec: string): Array<{ label: string; args: string[] }> => [
   { label: 'insta', args: ['skills', 'add', instaSpec, '-s', 'insta', ...AGENT_FLAGS] },
-  { label: 'neon-postgres', args: ['skills', 'add', 'neondatabase/agent-skills', '-s', 'neon-postgres', ...AGENT_FLAGS] },
   { label: 'tigris', args: ['skills', 'add', 'tigrisdata/skills',
     '-s', 'tigris-object-operations', '-s', 'file-storage', '-s', 'tigris-sdk-guide',
     '-s', 'tigris-security-access-control', '-s', 'tigris-image-optimization',
@@ -73,7 +73,7 @@ export async function installSkills(deps: Deps): Promise<void> {
       const { skills } = await resolveEnv()
       targets = skillTargets(skills)
     } catch { /* keep production defaults */ }
-    print('  installing related agent skills (insta, neon-postgres, tigris, better-auth) …')
+    print('  installing related agent skills (insta, tigris, better-auth) …')
     for (const s of targets) {
       // Don't stream: the `skills` tool's clack UI (clone spinner, banners) is noise. Run it
       // silent (stdio 'ignore') and let the per-skill ✓/failed line below be the clean output —

@@ -3,7 +3,7 @@
 // every agent the skills tool knows: the skill is pure product knowledge with brand-gated
 // triggers — no project state in it (the project binding is carried by ./.insta/project.json
 // at command time), so one machine-level copy is strictly better than per-project copies.
-// Stack skills (neon/tigris/better-auth) intentionally stay per-project: their presence in a
+// Stack skills (tigris/better-auth) intentionally stay per-project: their presence in a
 // project doubles as its stack manifest — that install happens on `project create|link`.
 import { spawn } from 'node:child_process'
 import os from 'node:os'

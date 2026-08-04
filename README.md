@@ -79,8 +79,8 @@ plane's address, not the CLI's loopback address.
 ### Services are branch-scoped
 
 A project holds services (`postgres`, `storage`, `compute`) and each branch owns its own
-set. `insta branch create feature-x` forks the parent's services: a Neon branch per
-Postgres, a copy-on-write bucket per storage, a clone of every compute service. From there
+set. `insta branch create feature-x` forks the parent's services: a copy-on-write database
+branch per Postgres, a copy-on-write bucket per storage, a clone of every compute service. From there
 the two branches diverge independently. A project is capped at 10 branches.
 
 ### Credentials come from the secret seam, not a file you maintain
@@ -207,8 +207,9 @@ build never reaches a production installer.
 The `insta` skill and its task guides live in
 [InsForge/insta-skills](https://github.com/InsForge/insta-skills). `insta setup agent`
 installs it user-globally for every coding agent on the machine. `insta project create` and
-`insta project link` additionally install the stack skills (Neon Postgres, Tigris, Better
-Auth) into the project, along with the `insta observe` credential-audit hook.
+`insta project link` additionally install the stack skills (Tigris, Better Auth) into the
+project, along with the `insta observe` credential-audit hook. Postgres needs no stack
+skill — it's plain Postgres, reached directly via `DATABASE_URL`.
 
 ## Contributing
 

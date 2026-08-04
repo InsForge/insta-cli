@@ -10,16 +10,15 @@ function fakeRun() {
   return { calls, run }
 }
 
-test('installSkills adds insta + the three service skills, non-interactively, and gitignores them', async () => {
+test('installSkills adds insta + the service stack skills, non-interactively, and gitignores them', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'insta-'))
   const out: string[] = []
   const { calls, run } = fakeRun()
   await installSkills({ cwd: dir, run, print: (s) => out.push(s) })
 
-  expect(calls.map((c) => c.cmd)).toEqual(['npx', 'npx', 'npx', 'npx'])
+  expect(calls.map((c) => c.cmd)).toEqual(['npx', 'npx', 'npx'])
   expect(calls.map((c) => c.args.join(' '))).toEqual([
     'skills add InsForge/insta-skills -s insta -a claude-code -a codex -y --copy',
-    'skills add neondatabase/agent-skills -s neon-postgres -a claude-code -a codex -y --copy',
     'skills add tigrisdata/skills -s tigris-object-operations -s file-storage -s tigris-sdk-guide -s tigris-security-access-control -s tigris-image-optimization -s tigris-s3-migration -s tigris-static-assets -s tigris-agent-kit -a claude-code -a codex -y --copy',
     'skills add better-auth/skills -s better-auth-best-practices -s email-and-password-best-practices -s better-auth-security-best-practices -a claude-code -a codex -y --copy',
   ])
