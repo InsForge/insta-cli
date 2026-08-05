@@ -1,6 +1,6 @@
 import { ApiClient, requireProject } from '../api.js'
 import { info, printJson, handleApproval } from '../util.js'
-import { resolveComputeServiceId, q } from './services.js'
+import { resolveComputeServiceId, q, parseVolumeGib } from './services.js'
 
 type Opts = { branch?: string; group?: string; json?: boolean }
 
@@ -118,6 +118,48 @@ export function parseCpu(raw: string): number {
   const n = Number(raw)
   if (!CPU_SIZES.includes(n)) throw new Error(`invalid cpu: ${raw} (provider sizes: ${CPU_SIZES.join(', ')})`)
   return n
+}
+
+// ---- volume (the persistent /data disk; attach is create-time only) ----
+
+// Render the volume read. Pure, exported for tests (mirrors serviceListLine). Every plan may view;
+// only growth is paid — that gate is the backend's to enforce, so nothing here pre-blocks.
+export function volumeLines(name: string, volume: { sizeGib: number; mountPath: string } | null, cap: { volumeGib: number }): string[] {
+  if (!volume) return [
+    `compute ${name}: no volume attached (attach is create-time only: \`insta services add compute <name> --volume <gi>\`)`,
+  ]
+  return [
+    `compute ${name}: volume ${volume.sizeGib}Gi at ${volume.mountPath}  (plan max ${cap.volumeGib}Gi)`,
+    '  billing is actual data stored — the size is a cap, not a price; grow with --size (grow-only)',
+  ]
+}
+
+type VolumeOpts = LifeOpts & { size?: string }
+
+// Show or grow a compute service's /data volume. No --size: a safe read (size + mount path + the
+// plan cap). --size: grow via PUT .../volume — paid and grow-only, but both gates belong to the
+// backend, whose 403/400 messages carry the upgrade hints and must reach the user verbatim (the
+// guard prints ApiError messages as-is).
+export async function computeVolume(serviceName: string | undefined, opts: VolumeOpts): Promise<void> {
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const branch = opts.branch ?? p.branch
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
+  const id = resolveComputeServiceId(services, serviceName)
+
+  if (!opts.size) {
+    const r = await api.request('GET', `/projects/${p.projectId}/services/${id}/volume`)
+    if (opts.json) return printJson(r)
+    for (const line of volumeLines(serviceName ?? id, r.volume, r.cap)) info(line)
+    return
+  }
+
+  const sizeGib = parseVolumeGib(opts.size)
+  const res = await api.rawRequest('PUT', `/projects/${p.projectId}/services/${id}/volume`, { sizeGib })
+  if (handleApproval(res)) return
+  if (opts.json) return printJson(res.body)
+  const v = res.body.volume
+  info(`compute ${res.body.service?.name ?? serviceName ?? id}: volume grown to ${v.sizeGib}Gi at ${v.mountPath}  (plan max ${res.body.cap.volumeGib}Gi)`)
 }
 
 type LimitsOpts = LifeOpts & { cpu?: string; memory?: string }
