@@ -15,7 +15,13 @@ function targetApiUrl(opts: { apiUrl?: string; env?: string }): string | undefin
   return ENVS[want].api
 }
 
-export async function login(opts: { email?: string; password?: string; apiUrl?: string; env?: string; oauth?: string; device?: boolean }): Promise<void> {
+export async function login(opts: { email?: string; password?: string; apiUrl?: string; env?: string; oauth?: string; device?: boolean; apiKey?: string }): Promise<void> {
+  // Login modes are exclusive: --api-key stores a durable insta_ token directly, --device / --oauth /
+  // --email each obtain their own credential. Combining them is a mistake worth surfacing loudly.
+  if (opts.apiKey) {
+    if (opts.device || opts.oauth || opts.email) die('choose one login mode: --api-key, --device, --oauth, or --email')
+    return loginApiKey(opts.apiKey, opts)
+  }
   if (opts.device) return loginDevice(opts)
   if (opts.oauth) return loginOauth(opts.oauth, opts)
   const api = await ApiClient.load()
@@ -58,6 +64,46 @@ export async function loginDevice(opts: { apiUrl?: string; env?: string }): Prom
   api.setSession({ accessToken: token, refreshToken: token }, me.user)
   await api.persist()
   info(`logged in as ${me.user.email ?? me.user.id} @ ${api.apiUrl}`)
+}
+
+// Non-interactive login with a durable insta_ API key (minted out-of-band via POST /tokens): the
+// headless path where an agent already holds a credential and just needs the CLI to adopt it. No
+// browser, no polling — store the key and confirm it against /me.
+export async function loginApiKey(key: string, opts: { apiUrl?: string; env?: string }): Promise<void> {
+  const api = await ApiClient.load()
+  const target = targetApiUrl(opts)
+  if (target) api.setApiUrl(target)
+  const user = await applyApiKeyLogin(api, key)
+  await api.persist()
+  info(`logged in as ${user.email ?? user.id} @ ${api.apiUrl}`)
+}
+
+export type AuthedUser = { id: string; email: string | null; name: string | null }
+
+// The client surface applyApiKeyLogin needs — satisfied by ApiClient, faked in tests (repo DI
+// pattern). request() is authed with whatever setApiKey last stored.
+export type ApiKeyClient = {
+  request: (method: string, path: string) => Promise<any>
+  setApiKey: (token: string, user?: AuthedUser) => void
+}
+
+// Verify a durable insta_ key and store it as the standing credential. Sets the key first so the
+// /me probe is authed with the key itself (an insta_ key authenticates exactly like a session
+// bearer), then re-stores it with the resolved user. Injectable client keeps it network-free in
+// tests. A 401 means the key is bad/revoked — say so plainly rather than leaking the raw error.
+export async function applyApiKeyLogin(client: ApiKeyClient, key: string): Promise<AuthedUser> {
+  if (!key.startsWith('insta_')) throw new Error('--api-key expects an insta_ token (mint one with POST /tokens)')
+  client.setApiKey(key)
+  let me: { user?: AuthedUser }
+  try {
+    me = await client.request('GET', '/me')
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) throw new Error('that insta_ API key was rejected (invalid or revoked) — check it or mint a new one')
+    throw e
+  }
+  if (!me?.user) throw new Error('unexpected response while verifying the API key')
+  client.setApiKey(key, me.user)
+  return me.user
 }
 
 // RFC 8628 §3.2: verification_uri_complete and interval are OPTIONAL in the authorization

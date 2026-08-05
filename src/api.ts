@@ -8,6 +8,16 @@ export class ApiError extends Error {
   constructor(public status: number, msg: string) { super(msg); this.name = 'ApiError' }
 }
 
+// Store a durable insta_ API key as the standing credential: set it as the bearer and DROP any
+// refresh token. An insta_ key never rotates, and a leftover session refresh token would be POSTed
+// to /auth/refresh on the first 401 (api.ts's refresh is guarded on cfg.refreshToken) — a
+// cross-credential leak. Exported so the store+drop rule is unit-tested directly.
+export function storeApiKeyCredential(cfg: GlobalConfig, token: string, user?: GlobalConfig['user']): void {
+  cfg.accessToken = token
+  delete cfg.refreshToken
+  if (user) cfg.user = user
+}
+
 type RawResult = { status: number; body: any }
 
 export class ApiClient {
@@ -26,6 +36,12 @@ export class ApiClient {
     this.cfg.accessToken = tokens.accessToken
     this.cfg.refreshToken = tokens.refreshToken
     if (user) this.cfg.user = user
+  }
+
+  // Store a durable insta_ API key as the standing credential (non-interactive `login --api-key`).
+  // Delegates to storeApiKeyCredential so the store+drop-refresh rule has one tested home.
+  setApiKey(token: string, user?: GlobalConfig['user']): void {
+    storeApiKeyCredential(this.cfg, token, user)
   }
 
   clearSession(): void {
