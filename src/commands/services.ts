@@ -28,6 +28,18 @@ export function parseCount(raw: string): number {
   return n
 }
 
+// Parse a volume size in whole Gi: "10" or "10Gi" (suffix case-insensitive — unlike the db
+// quantity strings this is not a provider pass-through; the wire value is an integer). Volumes
+// are provisioned block disks, so fractional and Mi values are rejected locally with an example
+// rather than travelling to the server as junk (the parseCpu lesson: NaN serializes to null).
+export function parseVolumeGib(raw: string): number {
+  const m = /^\s*(\d+)\s*(gi|gib|g)?\s*$/i.exec(raw)
+  if (!m) throw new Error(`invalid volume size: ${raw} (whole Gi — try 1 or 10)`)
+  const n = Number(m[1])
+  if (n < 1) throw new Error(`invalid volume size: ${raw} (whole Gi — try 1 or 10)`)
+  return n
+}
+
 // Resolve a service id from a `services list` result by (type, name).
 export function resolveServiceId(services: Array<{ id: string; type: string; name: string }>, type: string, name: string): string {
   const svc = services.find((s) => s.type === type && s.name === name)
@@ -50,7 +62,7 @@ export function resolveComputeServiceId(services: Array<{ id: string; type: stri
 
 // ---- commands ----
 
-export type ServicesAddOpts = { branch?: string; public?: boolean; image?: string; port?: string; region?: string; alwaysOn?: boolean }
+export type ServicesAddOpts = { branch?: string; public?: boolean; image?: string; port?: string; region?: string; alwaysOn?: boolean; volume?: string }
 
 // Map service-add options to the platform POST body. Pure, so it's unit-tested without a network
 // mock (mirrors deployRequestBody in deploy.ts). Validation (which options are valid for which
@@ -61,6 +73,7 @@ export function servicesAddRequestBody(type: string, name: string, branch: strin
     ...(opts.image ? { image: opts.image } : {}), ...(opts.port ? { port: Number(opts.port) } : {}),
     ...(opts.region ? { region: opts.region } : {}),
     ...(opts.alwaysOn ? { alwaysOn: true } : {}),
+    ...(opts.volume !== undefined ? { volumeGib: parseVolumeGib(opts.volume) } : {}),
   }
 }
 
@@ -71,6 +84,10 @@ export async function servicesAdd(type: string, name: string, opts: ServicesAddO
   if (opts.image && type !== 'compute') throw new Error('--image is only valid for compute services')
   if (opts.port && type !== 'compute') throw new Error('--port is only valid for compute services')
   if (opts.alwaysOn && type !== 'compute') throw new Error('--always-on is only valid for compute services (for postgres, use `insta db always-on on` after creation)')
+  if (opts.volume !== undefined) {
+    if (type !== 'compute') throw new Error('--volume is only valid for compute services (postgres has one by default — grow it with `insta db volume --size`)')
+    parseVolumeGib(opts.volume) // junk fails here, before any config/network access
+  }
   const api = await ApiClient.load()
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
@@ -79,15 +96,16 @@ export async function servicesAdd(type: string, name: string, opts: ServicesAddO
   const svc = res.body.service
   const access = svc.type === 'storage' ? `  [${svc.public ? 'public' : 'private'}]` : ''
   const img = svc.image ? `  running ${svc.image}${svc.port ? `:${svc.port}` : ''}` : ''
-  info(`added ${type} service ${name} on ${branch ?? 'default'} (${svc.id})${access}${svc.region ? `  ${svc.region}` : ''}${img}${svc.domain ? ` — ${svc.domain}` : ''}`)
+  const vol = svc.volume_gib ? `  vol ${svc.volume_gib}Gi at /data` : ''
+  info(`added ${type} service ${name} on ${branch ?? 'default'} (${svc.id})${access}${svc.region ? `  ${svc.region}` : ''}${img}${vol}${svc.domain ? ` — ${svc.domain}` : ''}`)
   renderNextActions(res.body.nextActions)
 }
 
 // Render one `services list` row. Pure, so it's unit-tested without a network mock (mirrors
 // billingLines in billing.ts). Compute rows show the running image when the platform reports one.
-export function serviceListLine(s: { type: string; name: string; status: string; id: string; domain?: string; machine_count?: number; public?: boolean; image?: string; port?: number }): string {
+export function serviceListLine(s: { type: string; name: string; status: string; id: string; domain?: string; machine_count?: number; public?: boolean; image?: string; port?: number; volume_gib?: number | null }): string {
   const extra = s.type === 'compute'
-    ? `  x${s.machine_count}${s.image ? `  running ${s.image}${s.port ? `:${s.port}` : ''}` : ''}`
+    ? `  x${s.machine_count}${s.volume_gib ? `  vol ${s.volume_gib}Gi` : ''}${s.image ? `  running ${s.image}${s.port ? `:${s.port}` : ''}` : ''}`
     : s.type === 'storage' ? `  ${s.public ? 'public' : 'private'}` : ''
   return `${s.type}/${s.name}  [${s.status}]${extra}${s.domain ? `  ${s.domain}` : ''}  ${s.id}`
 }

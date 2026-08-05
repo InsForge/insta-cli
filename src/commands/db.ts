@@ -1,5 +1,6 @@
 import { ApiClient, ApiError, requireProject } from '../api.js'
 import { info, printJson, handleApproval } from '../util.js'
+import { parseVolumeGib } from './services.js'
 
 type Opts = { branch?: string; group?: string; json?: boolean }
 
@@ -115,4 +116,56 @@ export async function dbLimits(opts: Opts & { cpu?: string; memory?: string }): 
   const cpu = typeof res.body?.cpuMilli === 'number' ? `${res.body.cpuMilli / 1000} vCPU` : (opts.cpu ?? 'unchanged')
   const mem = typeof res.body?.memoryMib === 'number' ? fmtMib(res.body.memoryMib) : (opts.memory ?? 'unchanged')
   info(`postgres ${opts.group ?? 'default'}: ceiling set to ${cpu} / ${mem}`)
+}
+
+// Render the instance's volume from a database/instance read. Pure, exported for tests. Reads the
+// CANONICAL volume* names only — storageSize/storageGiB are deprecated aliases the platform drops
+// next release, so depending on them here would be a scheduled breakage.
+export function dbVolumeLines(group: string, body: any): string[] {
+  const gib = typeof body?.volumeGib === 'number' ? `${body.volumeGib}Gi` : (typeof body?.volumeSize === 'string' ? body.volumeSize : undefined)
+  if (gib === undefined) return [`postgres ${group}: provider reported no volume size`]
+  const cap = body?.cap?.volumeGib
+  const region = typeof body?.region === 'string' ? `  ${body.region}` : ''
+  return [
+    `postgres ${group}: volume ${gib}${typeof cap === 'number' ? `  (plan max ${cap}Gi)` : ''}${region}`,
+    '  billing is actual data stored — the size is a cap, not a price; grow with --size (grow-only)',
+  ]
+}
+
+// Show or grow a postgres service's provisioned volume (block disk; insta-db-backed only). Viewing
+// is available on every plan; growth is paid and grow-only — both gates are the backend's to
+// enforce, so nothing here pre-blocks: its 403/400 messages carry the upgrade hints and are wrapped
+// with context but kept verbatim.
+export async function dbVolume(opts: Opts & { size?: string }): Promise<void> {
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const qs = new URLSearchParams()
+  const branch = opts.branch ?? p.branch
+  if (branch) qs.set('branch', branch)
+  if (opts.group) qs.set('group', opts.group)
+  const suffix = qs.toString() ? `?${qs}` : ''
+
+  if (!opts.size) {
+    const read = await fetchDbInstance(api, p.projectId, suffix)
+    if (read.kind === 'no-instance') {
+      info(`postgres ${opts.group ?? 'default'}: no manageable instance (Neon-backed services manage their own storage)`)
+      return
+    }
+    if (opts.json) return printJson(read.body)
+    for (const line of dbVolumeLines(opts.group ?? 'default', read.body)) info(line)
+    return
+  }
+
+  const sizeGib = parseVolumeGib(opts.size)
+  let res
+  try {
+    res = await api.rawRequest('PATCH', `/projects/${p.projectId}/database/settings${suffix}`, { volumeSize: `${sizeGib}Gi` })
+  } catch (e) {
+    if (e instanceof ApiError) throw new Error(`growing the volume failed (${e.status}): ${e.message}`)
+    throw e
+  }
+  if (handleApproval(res)) return
+  if (opts.json) return printJson(res.body)
+  const vg = res.body?.volumeGib
+  info(`postgres ${opts.group ?? 'default'}: volume ${typeof vg === 'number' ? `grown to ${vg}Gi` : `set to ${sizeGib}Gi`}`)
 }
