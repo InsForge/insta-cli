@@ -8,6 +8,13 @@ export class ApiError extends Error {
   constructor(public status: number, msg: string) { super(msg); this.name = 'ApiError' }
 }
 
+// Store a durable insta_ key as the credential: set it as the bearer and drop any refresh token (an insta_ key never rotates; a stale one would leak to /auth/refresh on a 401).
+export function storeApiKeyCredential(cfg: GlobalConfig, token: string, user?: GlobalConfig['user']): void {
+  cfg.accessToken = token
+  delete cfg.refreshToken
+  if (user) cfg.user = user
+}
+
 type RawResult = { status: number; body: any }
 
 export class ApiClient {
@@ -26,6 +33,11 @@ export class ApiClient {
     this.cfg.accessToken = tokens.accessToken
     this.cfg.refreshToken = tokens.refreshToken
     if (user) this.cfg.user = user
+  }
+
+  // Adopt a durable insta_ key as the credential (non-interactive `login --api-key`).
+  setApiKey(token: string, user?: GlobalConfig['user']): void {
+    storeApiKeyCredential(this.cfg, token, user)
   }
 
   clearSession(): void {
