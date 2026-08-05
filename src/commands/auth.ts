@@ -16,8 +16,9 @@ function targetApiUrl(opts: { apiUrl?: string; env?: string }): string | undefin
 }
 
 export async function login(opts: { email?: string; password?: string; apiUrl?: string; env?: string; oauth?: string; device?: boolean; apiKey?: string }): Promise<void> {
-  // Login modes are exclusive — pick one.
-  if (opts.apiKey) {
+  // Login modes are exclusive — pick one. Check presence (not truthiness) so an explicit
+  // empty --api-key= is rejected by validation rather than silently falling through.
+  if (opts.apiKey !== undefined) {
     if (opts.device || opts.oauth || opts.email) die('choose one login mode: --api-key, --device, --oauth, or --email')
     return loginApiKey(opts.apiKey, opts)
   }
@@ -85,6 +86,7 @@ export type ApiKeyClient = {
 
 // Verify an insta_ key and store it: set it first so the /me probe is authed with the key itself, then re-store with the resolved user (401 → bad/revoked).
 export async function applyApiKeyLogin(client: ApiKeyClient, key: string): Promise<AuthedUser> {
+  key = key.trim() // tolerate a trailing newline / stray whitespace from `--api-key "$(cat token)"`
   if (!key.startsWith('insta_')) throw new Error('--api-key expects an insta_ token (mint one with POST /tokens)')
   client.setApiKey(key)
   let me: { user?: AuthedUser }

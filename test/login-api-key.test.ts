@@ -40,6 +40,18 @@ describe('applyApiKeyLogin', () => {
     expect(stored).toEqual([]) // never touched the client
   })
 
+  it('trims surrounding whitespace before checking + storing (`--api-key "$(cat token)"`)', async () => {
+    const { client, stored } = fakeClient({ user: USER })
+    await expect(applyApiKeyLogin(client, '  insta_abc123\n')).resolves.toEqual(USER)
+    expect(stored.every((s) => s.token === 'insta_abc123')).toBe(true) // no stray whitespace stored
+  })
+
+  it('rejects an empty / whitespace-only key with the prefix error', async () => {
+    const { client, stored } = fakeClient({ user: USER })
+    await expect(applyApiKeyLogin(client, '   ')).rejects.toThrow(/expects an insta_ token/)
+    expect(stored).toEqual([]) // never touched the client
+  })
+
   it('turns a 401 from /me into a clear "rejected" error', async () => {
     const { client } = fakeClient(new ApiError(401, 'unauthorized'))
     await expect(applyApiKeyLogin(client, 'insta_bad')).rejects.toThrow(/rejected \(invalid or revoked\)/)
