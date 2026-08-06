@@ -145,7 +145,11 @@ export function dbStatsLines(group: string, body: any): string[] {
   const ratio = body?.cacheHitRatio
   const cache = typeof ratio === 'number' ? `${(ratio * 100).toFixed(1)}%` : '—'
   const size = typeof body?.dbSizeBytes === 'number' ? fmtBytes(body.dbSizeBytes) : '—'
-  const state = typeof body?.state === 'string' ? ` (${body.state})` : ''
+  const bits = [
+    typeof body?.state === 'string' ? body.state : null,
+    typeof body?.serverVersion === 'string' && body.serverVersion ? `PG ${body.serverVersion}` : null,
+  ].filter(Boolean)
+  const state = bits.length ? ` (${bits.join(' · ')})` : ''
   return [
     `postgres ${group}${state}`,
     `  connections  ${conn}`,

@@ -6,11 +6,12 @@ describe('dbStatsLines', () => {
   it('renders the measured block: x / y with active count, cache hit percent, size', () => {
     const lines = dbStatsLines('default', {
       state: 'running',
+      serverVersion: '16.14',
       connections: { active: 2, idle: 3, total: 5, max: 100 },
       cacheHitRatio: 0.992,
       dbSizeBytes: 8_000_000,
     })
-    expect(lines[0]).toBe('postgres default (running)')
+    expect(lines[0]).toBe('postgres default (running · PG 16.14)')
     expect(lines[1]).toBe('  connections  5 / 100 (2 active)')
     expect(lines[2]).toBe('  cache hit    99.2%')
     expect(lines[3]).toBe('  size         7.6 MiB')
