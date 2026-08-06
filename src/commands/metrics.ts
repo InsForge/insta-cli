@@ -8,6 +8,40 @@ function qs(params: Record<string, string | undefined>): string {
   return s ? `?${s}` : ''
 }
 
+// One printed series line. Pure seam so the formatting is testable without a backend.
+//
+// Byte-rate series (compute's egress/ingress) arrive as raw bytes per second, which is unreadable at
+// real traffic volumes — 20480031 bytes/s is 20 MB/s. Percent and vCPU units are already
+// human-sized, so only bytes and byte rates get scaled.
+export function metricLine(s: { name?: string; unit?: string; points?: [number, number][] }): string {
+  const last = s.points?.[s.points.length - 1]
+  const value = last ? formatMetricValue(last[1], s.unit) : 'n/a'
+  const unit = s.unit && !isScaled(s.unit) ? ` (${s.unit})` : ''
+  return `${s.name}${unit}: ${value}  [${s.points?.length ?? 0} points]`
+}
+
+function isScaled(unit: string): boolean {
+  return unit === 'bytes' || unit === 'bytes/s'
+}
+
+function formatMetricValue(v: number, unit?: string): string {
+  if (!Number.isFinite(v)) return 'n/a'
+  if (unit === 'bytes') return humanBytes(v)
+  if (unit === 'bytes/s') return `${humanBytes(v)}/s`
+  return String(v)
+}
+
+function humanBytes(v: number): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = v
+  let i = 0
+  while (Math.abs(value) >= 1024 && i < units.length - 1) {
+    value /= 1024
+    i += 1
+  }
+  return `${i === 0 ? value : value.toFixed(1)} ${units[i]}`
+}
+
 // insta metrics <db|compute> [group]
 export async function metrics(component: string, group: string | undefined, opts: { branch?: string; from?: string; to?: string; step?: string; json?: boolean }): Promise<void> {
   const api = await ApiClient.load()
@@ -16,10 +50,7 @@ export async function metrics(component: string, group: string | undefined, opts
   if (opts.json) return printJson(res)
   if (res.note) info(`note: ${res.note}`)
   if (!res.series?.length) return info('(no series)')
-  for (const s of res.series) {
-    const last = s.points?.[s.points.length - 1]
-    info(`${s.name}${s.unit ? ` (${s.unit})` : ''}: ${last ? last[1] : 'n/a'}  [${s.points?.length ?? 0} points]`)
-  }
+  for (const s of res.series) info(metricLine(s))
 }
 
 // Customer-facing name for each internal billing dimension (the platform stores RAM as `ram`).
