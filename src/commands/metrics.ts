@@ -38,17 +38,20 @@ function isScaled(unit: string): boolean {
 function formatMetricValue(v: number, unit?: string): string {
   if (!Number.isFinite(v)) return 'n/a'
   const scale = scaleOf(unit)
-  if (scale === 'bytes') return humanBytes(v)
-  if (scale === 'bytes/s') return `${humanBytes(v)}/s`
+  // Traffic scales by 1000 because egress is BILLED per decimal GB (`bytes / 1e9`, platform
+  // src/adapters/fly.ts) — a 1024-based "GB/s" would sit ~7% off the invoice. Memory and storage
+  // stay binary: those ceilings are provisioned in GiB. Same split as the console.
+  if (scale === 'bytes') return humanBytes(v, 1024)
+  if (scale === 'bytes/s') return `${humanBytes(v, 1000)}/s`
   return String(v)
 }
 
-function humanBytes(v: number): string {
+function humanBytes(v: number, base: 1000 | 1024): string {
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   let value = v
   let i = 0
-  while (Math.abs(value) >= 1024 && i < units.length - 1) {
-    value /= 1024
+  while (Math.abs(value) >= base && i < units.length - 1) {
+    value /= base
     i += 1
   }
   return `${i === 0 ? value : value.toFixed(1)} ${units[i]}`

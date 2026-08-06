@@ -9,7 +9,7 @@ const pts = (...values: number[]): [number, number][] => values.map((v, i) => [i
 describe('metricLine', () => {
   it('scales a byte rate and keeps the /s', () => {
     expect(metricLine({ name: 'egress_bytes_rate', unit: 'bytes/s', points: pts(1024, 20_480_031) }))
-      .toBe('egress_bytes_rate: 19.5 MB/s  [2 points]')
+      .toBe('egress_bytes_rate: 20.5 MB/s  [2 points]')
   })
 
   it('scales plain bytes without a /s', () => {
@@ -39,16 +39,25 @@ describe('metricLine', () => {
     // be load-bearing
     for (const unit of ['bytes/s', 'Bytes/S', ' bytes/sec ', 'B/s']) {
       expect(metricLine({ name: 'egress_bytes_rate', unit, points: pts(20_480_031) }), unit)
-        .toBe('egress_bytes_rate: 19.5 MB/s  [1 points]')
+        .toBe('egress_bytes_rate: 20.5 MB/s  [1 points]')
     }
     expect(metricLine({ name: 'memory_used_bytes', unit: 'BYTES', points: pts(1.2e9) }))
       .toBe('memory_used_bytes: 1.1 GB  [1 points]')
   })
 
-  it('stays in bytes below the 1024 boundary, without a false decimal', () => {
+  it('stays in bytes below the scale boundary, without a false decimal', () => {
     expect(metricLine({ name: 'egress_bytes_rate', unit: 'bytes/s', points: pts(512) }))
       .toBe('egress_bytes_rate: 512 B/s  [1 points]')
-    expect(metricLine({ name: 'egress_bytes_rate', unit: 'bytes/s', points: pts(1024) }))
+    expect(metricLine({ name: 'egress_bytes_rate', unit: 'bytes/s', points: pts(1000) }))
       .toBe('egress_bytes_rate: 1.0 KB/s  [1 points]')
+  })
+
+  it('scales traffic decimally and memory binarily, matching the console and the invoice', () => {
+    // egress is billed per decimal GB (bytes / 1e9), so 1024-based here would read ~7% low
+    expect(metricLine({ name: 'egress_bytes_rate', unit: 'bytes/s', points: pts(1e9) }))
+      .toBe('egress_bytes_rate: 1.0 GB/s  [1 points]')
+    // provisioned ceilings are GiB, so plain bytes stay binary
+    expect(metricLine({ name: 'memory_used_bytes', unit: 'bytes', points: pts(1.2e9) }))
+      .toBe('memory_used_bytes: 1.1 GB  [1 points]')
   })
 })
