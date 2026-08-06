@@ -8,6 +8,58 @@ function qs(params: Record<string, string | undefined>): string {
   return s ? `?${s}` : ''
 }
 
+// One printed series line. Pure seam so the formatting is testable without a backend.
+//
+// Byte-rate series (compute's egress/ingress) arrive as raw bytes per second, which is unreadable at
+// real traffic volumes — 20480031 bytes/s is 20 MB/s. Percent and vCPU units are already
+// human-sized, so only bytes and byte rates get scaled.
+export function metricLine(s: { name?: string; unit?: string; points?: [number, number][] }): string {
+  const last = s.points?.[s.points.length - 1]
+  const value = last ? formatMetricValue(last[1], s.unit) : 'n/a'
+  const unit = s.unit && !isScaled(s.unit) ? ` (${s.unit})` : ''
+  return `${s.name}${unit}: ${value}  [${s.points?.length ?? 0} points]`
+}
+
+// The platform's unit strings are the contract here (`bytes` for memory/storage, `bytes/s` for
+// egress/ingress — src/adapters/fly.ts and insta-db.ts). Matching them loosely is deliberate: an
+// unrecognised unit fails SILENTLY back to the raw 8-digit number this scaling exists to fix, so a
+// casing or spacing change on the platform side must not be enough to regress it.
+function scaleOf(unit?: string): 'bytes' | 'bytes/s' | undefined {
+  const u = unit?.trim().toLowerCase()
+  if (u === 'bytes' || u === 'byte' || u === 'b') return 'bytes'
+  if (u === 'bytes/s' || u === 'byte/s' || u === 'b/s' || u === 'bytes/sec') return 'bytes/s'
+  return undefined
+}
+
+function isScaled(unit: string): boolean {
+  return scaleOf(unit) !== undefined
+}
+
+function formatMetricValue(v: number, unit?: string): string {
+  if (!Number.isFinite(v)) return 'n/a'
+  const scale = scaleOf(unit)
+  // Traffic scales by 1000 because egress is BILLED per decimal GB (`bytes / 1e9`, platform
+  // src/adapters/fly.ts) — a 1024-based "GB/s" would sit ~7% off the invoice. Memory and storage
+  // stay binary: those ceilings are provisioned in GiB. Same split as the console.
+  if (scale === 'bytes') return humanBytes(v, 1024)
+  if (scale === 'bytes/s') return `${humanBytes(v, 1000)}/s`
+  return String(v)
+}
+
+function humanBytes(v: number, base: 1000 | 1024): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = v
+  let i = 0
+  while (Math.abs(value) >= base && i < units.length - 1) {
+    value /= base
+    i += 1
+  }
+  // Sub-KB values keep their integer form (`512 B`, not `512.0 B`), but a RATE is fractional —
+  // PromQL rate() of a byte counter yields things like 342.857142, which must not print in full.
+  const shown = i === 0 && Number.isInteger(value) ? String(value) : value.toFixed(1)
+  return `${shown} ${units[i]}`
+}
+
 // insta metrics <db|compute> [group]
 export async function metrics(component: string, group: string | undefined, opts: { branch?: string; from?: string; to?: string; step?: string; json?: boolean }): Promise<void> {
   const api = await ApiClient.load()
@@ -16,10 +68,7 @@ export async function metrics(component: string, group: string | undefined, opts
   if (opts.json) return printJson(res)
   if (res.note) info(`note: ${res.note}`)
   if (!res.series?.length) return info('(no series)')
-  for (const s of res.series) {
-    const last = s.points?.[s.points.length - 1]
-    info(`${s.name}${s.unit ? ` (${s.unit})` : ''}: ${last ? last[1] : 'n/a'}  [${s.points?.length ?? 0} points]`)
-  }
+  for (const s of res.series) info(metricLine(s))
 }
 
 // Customer-facing name for each internal billing dimension (the platform stores RAM as `ram`).
