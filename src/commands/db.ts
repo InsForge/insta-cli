@@ -121,6 +121,54 @@ export async function dbLimits(opts: Opts & { cpu?: string; memory?: string }): 
 // Render the instance's volume from a database/instance read. Pure, exported for tests. Reads the
 // CANONICAL volume* names only — storageSize/storageGiB are deprecated aliases the platform drops
 // next release, so depending on them here would be a scheduled breakage.
+// Bytes → human units, one decimal above KiB. Local because the metrics payload is the only
+// bytes-denominated read in this file (fmtMib serves the MiB-denominated resize path).
+export function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  const units = ['KiB', 'MiB', 'GiB', 'TiB']
+  let v = n / 1024
+  let i = 0
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++ }
+  return `${v.toFixed(1)} ${units[i]}`
+}
+
+// Human-readable stats lines from GET /database/metrics. Pure seam for tests. "—" for anything
+// unmeasured (old platform, suspended instance, no cache traffic yet) — never a fake 0: the
+// platform omits cacheHitRatio and sends max 0 in exactly those cases.
+export function dbStatsLines(group: string, body: any): string[] {
+  const c = body?.connections ?? {}
+  const max = typeof c.max === 'number' && c.max > 0 ? c.max : null
+  const total = typeof c.total === 'number' ? c.total : null
+  const conn = total === null ? '—'
+    : (max === null ? String(total) : `${total} / ${max}`)
+      + (typeof c.active === 'number' && max !== null ? ` (${c.active} active)` : '')
+  const ratio = body?.cacheHitRatio
+  const cache = typeof ratio === 'number' ? `${(ratio * 100).toFixed(1)}%` : '—'
+  const size = typeof body?.dbSizeBytes === 'number' ? fmtBytes(body.dbSizeBytes) : '—'
+  const state = typeof body?.state === 'string' ? ` (${body.state})` : ''
+  return [
+    `postgres ${group}${state}`,
+    `  connections  ${conn}`,
+    `  cache hit    ${cache}`,
+    `  size         ${size}`,
+  ]
+}
+
+// Point-in-time stats snapshot for a postgres service: connections vs the server's ceiling, cache
+// hit rate, database size. Read-only and wake-safe — a suspended instance answers from the
+// provider's control plane (shown as "(suspended)" with structural zeros), it is never dialed.
+export async function dbStats(opts: Opts): Promise<void> {
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const qs = new URLSearchParams()
+  const branch = opts.branch ?? p.branch
+  if (branch) qs.set('branch', branch)
+  if (opts.group) qs.set('group', opts.group)
+  const res = await api.rawRequest('GET', `/projects/${p.projectId}/database/metrics${qs.toString() ? `?${qs}` : ''}`)
+  if (opts.json) return printJson(res.body)
+  for (const line of dbStatsLines(opts.group ?? 'default', res.body)) info(line)
+}
+
 export function dbVolumeLines(group: string, body: any): string[] {
   const gib = typeof body?.volumeGib === 'number' ? `${body.volumeGib}Gi` : (typeof body?.volumeSize === 'string' ? body.volumeSize : undefined)
   if (gib === undefined) return [`postgres ${group}: provider reported no volume size`]
