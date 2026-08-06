@@ -26,4 +26,18 @@ describe('metricLine', () => {
     expect(metricLine({ name: 'egress_bytes_rate', unit: 'bytes/s', points: [] }))
       .toBe('egress_bytes_rate: n/a  [0 points]')
   })
+
+  it('reports n/a rather than NaN/Infinity for a non-finite sample', () => {
+    for (const v of [NaN, Infinity]) {
+      expect(metricLine({ name: 'egress_bytes_rate', unit: 'bytes/s', points: pts(v) }), String(v))
+        .toBe('egress_bytes_rate: n/a  [1 points]')
+    }
+  })
+
+  it('stays in bytes below the 1024 boundary, without a false decimal', () => {
+    expect(metricLine({ name: 'egress_bytes_rate', unit: 'bytes/s', points: pts(512) }))
+      .toBe('egress_bytes_rate: 512 B/s  [1 points]')
+    expect(metricLine({ name: 'egress_bytes_rate', unit: 'bytes/s', points: pts(1024) }))
+      .toBe('egress_bytes_rate: 1.0 KB/s  [1 points]')
+  })
 })
