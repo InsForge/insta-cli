@@ -54,7 +54,10 @@ function humanBytes(v: number, base: 1000 | 1024): string {
     value /= base
     i += 1
   }
-  return `${i === 0 ? value : value.toFixed(1)} ${units[i]}`
+  // Sub-KB values keep their integer form (`512 B`, not `512.0 B`), but a RATE is fractional —
+  // PromQL rate() of a byte counter yields things like 342.857142, which must not print in full.
+  const shown = i === 0 && Number.isInteger(value) ? String(value) : value.toFixed(1)
+  return `${shown} ${units[i]}`
 }
 
 // insta metrics <db|compute> [group]

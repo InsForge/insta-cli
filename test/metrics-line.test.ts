@@ -52,6 +52,12 @@ describe('metricLine', () => {
       .toBe('egress_bytes_rate: 1.0 KB/s  [1 points]')
   })
 
+  it('rounds a fractional sub-KB rate instead of printing it in full', () => {
+    // rate() of a byte counter is fractional, and a real idle service sits in this range
+    expect(metricLine({ name: 'egress_bytes_rate', unit: 'bytes/s', points: pts(342.857142) }))
+      .toBe('egress_bytes_rate: 342.9 B/s  [1 points]')
+  })
+
   it('scales traffic decimally and memory binarily, matching the console and the invoice', () => {
     // egress is billed per decimal GB (bytes / 1e9), so 1024-based here would read ~7% low
     expect(metricLine({ name: 'egress_bytes_rate', unit: 'bytes/s', points: pts(1e9) }))
