@@ -155,8 +155,10 @@ export function dbStatsLines(group: string, body: any): string[] {
 }
 
 // Point-in-time stats snapshot for a postgres service: connections vs the server's ceiling, cache
-// hit rate, database size. Read-only and wake-safe — a suspended instance answers from the
-// provider's control plane (shown as "(suspended)" with structural zeros), it is never dialed.
+// hit rate, database size. Read-only. insta-db-backed: a suspended instance answers from the
+// provider's control plane (shown as "(suspended)" with structural zeros), never dialed.
+// Neon-backed: the platform reads over a direct SQL connection, so a one-shot call may wake a
+// suspended endpoint — acceptable for an explicit command, which is why nothing here polls.
 export async function dbStats(opts: Opts): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()

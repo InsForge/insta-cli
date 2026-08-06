@@ -192,7 +192,7 @@ db.command('limits').description("Show or set a postgres service's resource ceil
   .option('--cpu <n>', "vCPU ceiling, e.g. 2 or 2500m").option('--memory <size>', "memory ceiling, e.g. 4Gi")
   .option('--json').option('--branch <branch>', 'branch (default: current)').option('--group <g>', 'postgres service name (default: the sole/default one)')
   .action(guard((o) => dbCmd.dbLimits(o)))
-db.command('stats').description("Postgres stats snapshot: connections vs the server's max (active count), cache hit rate, database size. Wake-safe — never wakes a suspended instance")
+db.command('stats').description("Postgres stats snapshot: connections vs the server's max (active count), cache hit rate, database size. insta-db-backed services answer without waking a suspended instance")
   .option('--json').option('--branch <branch>', 'branch (default: current)').option('--group <g>', 'postgres service name (default: the sole/default one)')
   .action(guard((o) => dbCmd.dbStats(o)))
 db.command('always-on <mode>').description('Set a postgres service always-on (mode: on|off). on = instance stays warm, no cold starts; off = default scale-to-zero (idle instance suspends; first connection cold-starts). insta-db-backed services only')
