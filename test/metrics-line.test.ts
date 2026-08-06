@@ -34,6 +34,17 @@ describe('metricLine', () => {
     }
   })
 
+  it('still scales when the platform spells the unit differently', () => {
+    // an unrecognised unit fails silently back to a raw 8-digit number, so casing/spacing must not
+    // be load-bearing
+    for (const unit of ['bytes/s', 'Bytes/S', ' bytes/sec ', 'B/s']) {
+      expect(metricLine({ name: 'egress_bytes_rate', unit, points: pts(20_480_031) }), unit)
+        .toBe('egress_bytes_rate: 19.5 MB/s  [1 points]')
+    }
+    expect(metricLine({ name: 'memory_used_bytes', unit: 'BYTES', points: pts(1.2e9) }))
+      .toBe('memory_used_bytes: 1.1 GB  [1 points]')
+  })
+
   it('stays in bytes below the 1024 boundary, without a false decimal', () => {
     expect(metricLine({ name: 'egress_bytes_rate', unit: 'bytes/s', points: pts(512) }))
       .toBe('egress_bytes_rate: 512 B/s  [1 points]')

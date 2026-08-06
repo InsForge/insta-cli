@@ -20,14 +20,26 @@ export function metricLine(s: { name?: string; unit?: string; points?: [number, 
   return `${s.name}${unit}: ${value}  [${s.points?.length ?? 0} points]`
 }
 
+// The platform's unit strings are the contract here (`bytes` for memory/storage, `bytes/s` for
+// egress/ingress — src/adapters/fly.ts and insta-db.ts). Matching them loosely is deliberate: an
+// unrecognised unit fails SILENTLY back to the raw 8-digit number this scaling exists to fix, so a
+// casing or spacing change on the platform side must not be enough to regress it.
+function scaleOf(unit?: string): 'bytes' | 'bytes/s' | undefined {
+  const u = unit?.trim().toLowerCase()
+  if (u === 'bytes' || u === 'byte' || u === 'b') return 'bytes'
+  if (u === 'bytes/s' || u === 'byte/s' || u === 'b/s' || u === 'bytes/sec') return 'bytes/s'
+  return undefined
+}
+
 function isScaled(unit: string): boolean {
-  return unit === 'bytes' || unit === 'bytes/s'
+  return scaleOf(unit) !== undefined
 }
 
 function formatMetricValue(v: number, unit?: string): string {
   if (!Number.isFinite(v)) return 'n/a'
-  if (unit === 'bytes') return humanBytes(v)
-  if (unit === 'bytes/s') return `${humanBytes(v)}/s`
+  const scale = scaleOf(unit)
+  if (scale === 'bytes') return humanBytes(v)
+  if (scale === 'bytes/s') return `${humanBytes(v)}/s`
   return String(v)
 }
 
