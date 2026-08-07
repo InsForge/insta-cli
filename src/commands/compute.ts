@@ -120,13 +120,13 @@ export function parseCpu(raw: string): number {
   return n
 }
 
-// ---- volume (the persistent /data disk; attach is create-time only) ----
+// ---- volume (the persistent /data disk; attach any time, grow-only, never detach) ----
 
 // Render the volume read. Pure, exported for tests (mirrors serviceListLine). Every plan may view;
 // only growth is paid — that gate is the backend's to enforce, so nothing here pre-blocks.
 export function volumeLines(name: string, volume: { sizeGib: number; mountPath: string } | null, cap: { volumeGib: number }): string[] {
   if (!volume) return [
-    `compute ${name}: no volume attached (attach is create-time only: \`insta services add compute <name> --volume <gi>\`)`,
+    `compute ${name}: no volume attached (attach one: \`insta compute volume ${name} --size <gi>\` — it mounts at /data on the next deploy)`,
   ]
   return [
     `compute ${name}: volume ${volume.sizeGib}Gi at ${volume.mountPath}  (plan max ${cap.volumeGib}Gi)`,
@@ -134,12 +134,22 @@ export function volumeLines(name: string, volume: { sizeGib: number; mountPath: 
   ]
 }
 
+// Render the PUT result. Pure, exported for tests. `attached` comes from the backend and is what
+// tells a FIRST attach (no disk yet — it mounts on the next deploy) apart from a grow (the live
+// disk was already extended); the wire size is authoritative in both cases.
+export function volumeWriteLine(name: string, body: { volume: { sizeGib: number; mountPath: string }; cap: { volumeGib: number }; attached?: boolean }): string {
+  if (body.attached) {
+    return `compute ${name}: volume ${body.volume.sizeGib}Gi attached — mounts at ${body.volume.mountPath} on the next deploy  (plan max ${body.cap.volumeGib}Gi)`
+  }
+  return `compute ${name}: volume grown to ${body.volume.sizeGib}Gi at ${body.volume.mountPath}  (plan max ${body.cap.volumeGib}Gi)`
+}
+
 type VolumeOpts = LifeOpts & { size?: string }
 
-// Show or grow a compute service's /data volume. No --size: a safe read (size + mount path + the
-// plan cap). --size: grow via PUT .../volume — paid and grow-only, but both gates belong to the
-// backend, whose 403/400 messages carry the upgrade hints and must reach the user verbatim (the
-// guard prints ApiError messages as-is).
+// Show, attach, or grow a compute service's /data volume. No --size: a safe read (size + mount
+// path + the plan cap). --size: PUT .../volume — attaches when no volume exists, grows otherwise.
+// The paid/cap/machine-count gates all belong to the backend, whose 403/400 messages carry the
+// upgrade hints and must reach the user verbatim (the guard prints ApiError messages as-is).
 export async function computeVolume(serviceName: string | undefined, opts: VolumeOpts): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
@@ -158,8 +168,7 @@ export async function computeVolume(serviceName: string | undefined, opts: Volum
   const res = await api.rawRequest('PUT', `/projects/${p.projectId}/services/${id}/volume`, { sizeGib })
   if (handleApproval(res)) return
   if (opts.json) return printJson(res.body)
-  const v = res.body.volume
-  info(`compute ${res.body.service?.name ?? serviceName ?? id}: volume grown to ${v.sizeGib}Gi at ${v.mountPath}  (plan max ${res.body.cap.volumeGib}Gi)`)
+  info(volumeWriteLine(res.body.service?.name ?? serviceName ?? id, res.body))
 }
 
 type LimitsOpts = LifeOpts & { cpu?: string; memory?: string }
