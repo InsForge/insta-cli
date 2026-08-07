@@ -1,12 +1,13 @@
 // Volumes — the persistent disk attached to a service (postgres has one by default; compute
-// opts in at creation). These pin the volume seams: the size parser (the only place a user-typed
+// opts in at creation or attaches later via `compute volume --size`). These pin the volume
+// seams: the size parser (the only place a user-typed
 // Gi becomes a wire integer), the create-body mapping (canonical volumeGib), the free-plan UX rule
 // (viewing and attaching-at-default are never pre-blocked client-side — only the backend's 403
 // speaks for the paid growth gate), and the db read using the CANONICAL volume* names, not the
 // deprecated storage* aliases the platform drops next release.
 import { describe, it, expect } from 'vitest'
 import { parseVolumeGib, servicesAddRequestBody, servicesAdd, serviceListLine } from '../src/commands/services.js'
-import { volumeLines } from '../src/commands/compute.js'
+import { volumeLines, volumeWriteLine } from '../src/commands/compute.js'
 import { dbVolumeLines } from '../src/commands/db.js'
 
 describe('parseVolumeGib', () => {
@@ -67,11 +68,27 @@ describe('volumeLines (compute read display)', () => {
     expect(lines[0]).toBe('compute api: volume 10Gi at /data  (plan max 50Gi)')
     expect(lines[1]).toMatch(/cap, not a price/)
   })
-  it('explains the create-time-only attach when no volume exists', () => {
+  it('points a volumeless service at the attach verb (this command with --size)', () => {
     const lines = volumeLines('api', null, { volumeGib: 50 })
     expect(lines).toHaveLength(1)
     expect(lines[0]).toMatch(/no volume attached/)
-    expect(lines[0]).toMatch(/insta services add compute <name> --volume <gi>/)
+    expect(lines[0]).toMatch(/insta compute volume api --size <gi>/)
+    expect(lines[0]).toMatch(/next deploy/)
+  })
+})
+
+describe('volumeWriteLine (compute PUT result display)', () => {
+  it('a first attach says so, and that the disk mounts on the next deploy', () => {
+    const line = volumeWriteLine('api', { volume: { sizeGib: 3, mountPath: '/data' }, cap: { volumeGib: 10 }, attached: true })
+    expect(line).toBe('compute api: volume 3Gi attached — mounts at /data on the next deploy  (plan max 10Gi)')
+  })
+  it('a grow reads as a grow — attached false and absent alike (older backends omit it)', () => {
+    for (const body of [
+      { volume: { sizeGib: 5, mountPath: '/data' }, cap: { volumeGib: 10 }, attached: false },
+      { volume: { sizeGib: 5, mountPath: '/data' }, cap: { volumeGib: 10 } },
+    ]) {
+      expect(volumeWriteLine('api', body)).toBe('compute api: volume grown to 5Gi at /data  (plan max 10Gi)')
+    }
   })
 })
 

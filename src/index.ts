@@ -123,7 +123,7 @@ svc.command('add <type> <name>').description('Provision a service on demand (ass
   .option('--image <url>', 'compute only: run this container image at creation')
   .option('--port <n>', 'compute only: port the image listens on (default 8080)')
   .option('--always-on', 'compute only: create as always-on — never scales to zero (all plans; billing is actual usage either way)')
-  .option('--volume <gi>', 'compute only: attach a persistent /data volume of this many whole Gi (create-time only; any plan may attach at the default 1; larger sizes are paid and plan-capped). Volume services keep 1 machine and stop (cold wake) instead of suspend when idle')
+  .option('--volume <gi>', 'compute only: attach a persistent /data volume of this many whole Gi (also attachable later: `insta compute volume <name> --size <gi>`; any plan may attach at the default 1; larger sizes are paid and plan-capped). Volume services keep 1 machine and stop (cold wake) instead of suspend when idle')
   .action(guard((type, name, o) => services.servicesAdd(type, name, o)))
 svc.command('list').option('--json').option('--branch <branch>', 'branch (default: current)')
   .action(guard((o) => services.servicesList(o)))
@@ -182,7 +182,7 @@ compute.command('limits [service]').description("Show or set a compute service's
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeLimits(service, o)))
 compute.command('always-on <mode> [service]').description('Set a compute service always-on (mode: on|off). on = machines never scale to zero; off = default scale-to-zero. All plans; billing is actual usage either way')
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((mode, service, o) => computeCmd.computeAlwaysOn(mode, service, o)))
-compute.command('volume [service]').description("Show or grow a compute service's persistent /data volume. No --size: print size, mount path, and the plan cap (any plan). --size grows it (paid plans; grow-only — a provisioned disk cannot shrink). Attach is create-time only: `insta services add compute <name> --volume <gi>`. Billing is actual data stored — the size is a cap, not a price")
+compute.command('volume [service]').description("Show, attach, or grow a compute service's persistent /data volume. No --size: print size, mount path, and the plan cap (any plan). --size on a volumeless service ATTACHES one (any plan at the default 1Gi; larger is paid and plan-capped; the disk mounts at /data on the next deploy); on a volume-bearing one it grows (paid plans; grow-only — a provisioned disk cannot shrink). Billing is actual data stored — the size is a cap, not a price")
   .option('--size <gi>', 'new size in whole Gi, e.g. 10 (must be ≥ the current size)')
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeVolume(service, o)))
 
