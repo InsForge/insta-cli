@@ -85,6 +85,21 @@ export async function ensureFlyctl(): Promise<void> {
       info((await ok('brew', ['install', 'flyctl'], true)) ? 'flyctl installed ✓' : 'flyctl install failed — install manually: https://fly.io/docs/flyctl/install/')
       return
     }
+    if (process.platform === 'linux') {
+      // A fresh Linux machine (CI containers included — insta-e2e run 31284364163) has no flyctl
+      // and no brew; without this branch `insta deploy <dir>` dead-ends on a hand-install of a
+      // third-party CLI. Official installer, pinned into ~/.fly; the current process extends its
+      // own PATH because the installer's shell-profile edit can't reach an already-running process.
+      info('flyctl not found — installing to ~/.fly (one-time)…')
+      const flyHome = `${process.env.HOME ?? '~'}/.fly`
+      const installed = await ok('sh', ['-c', `curl -fsSL https://fly.io/install.sh | FLYCTL_INSTALL="${flyHome}" sh`], true)
+      if (installed) {
+        process.env.PATH = `${process.env.PATH}:${flyHome}/bin`
+        if (await ok('flyctl', ['version'])) { info('flyctl installed ✓'); return }
+      }
+      info('flyctl install failed — install manually: https://fly.io/docs/flyctl/install/')
+      return
+    }
     info('flyctl (fly CLI) not found — install it to deploy from source: https://fly.io/docs/flyctl/install/')
   } catch { /* best-effort convenience */ }
 }
