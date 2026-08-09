@@ -1,4 +1,4 @@
-import { ApiClient, requireProject } from '../api.js'
+import { ApiClient, ApiError, requireProject } from '../api.js'
 import { info, printJson, handleApproval } from '../util.js'
 import { resolveComputeServiceId, q, parseVolumeGib } from './services.js'
 
@@ -120,7 +120,7 @@ export function parseCpu(raw: string): number {
   return n
 }
 
-// ---- volume (the persistent /data disk; attach any time, grow-only, never detach) ----
+// ---- volume (the persistent /data disk; attach any time, grow-only, deletable; never detach) ----
 
 // Render the volume read. Pure, exported for tests (mirrors serviceListLine). Every plan may view;
 // only growth is paid — that gate is the backend's to enforce, so nothing here pre-blocks.
@@ -130,7 +130,7 @@ export function volumeLines(name: string, volume: { sizeGib: number; mountPath: 
   ]
   return [
     `compute ${name}: volume ${volume.sizeGib}Gi at ${volume.mountPath}  (plan max ${cap.volumeGib}Gi)`,
-    '  billing is actual data stored — the size is a cap, not a price; grow with --size (grow-only)',
+    '  billing is actual data stored — the size is a cap, not a price; grow with --size (grow-only), delete with --delete (destroys the data)',
   ]
 }
 
@@ -144,18 +144,46 @@ export function volumeWriteLine(name: string, body: { volume: { sizeGib: number;
   return `compute ${name}: volume grown to ${body.volume.sizeGib}Gi at ${body.volume.mountPath}  (plan max ${body.cap.volumeGib}Gi)`
 }
 
-type VolumeOpts = LifeOpts & { size?: string }
+// Render the DELETE result. Pure, exported for tests. Deleting is the only way off the volume
+// path (there is no detach), so the line says what came back with it: the two constraints the
+// volume imposed.
+export function volumeDeleteLine(name: string): string {
+  return `compute ${name}: volume deleted — the disk and its data are gone; suspend fast-wake and scale-out are back`
+}
 
-// Show, attach, or grow a compute service's /data volume. No --size: a safe read (size + mount
-// path + the plan cap). --size: PUT .../volume — attaches when no volume exists, grows otherwise.
-// The paid/cap/machine-count gates all belong to the backend, whose 403/400 messages carry the
-// upgrade hints and must reach the user verbatim (the guard prints ApiError messages as-is).
+type VolumeOpts = LifeOpts & { size?: string; delete?: boolean }
+
+// Show, attach, grow, or delete a compute service's /data volume. No flag: a safe read (size +
+// mount path + the plan cap). --size: PUT .../volume — attaches when no volume exists, grows
+// otherwise. --delete: DELETE .../volume — destroys the disk and its data immediately (no detach,
+// no undo; billing stops now). The paid/cap/machine-count gates all belong to the backend, whose
+// 403/400 messages carry the upgrade hints and must reach the user verbatim (the guard prints
+// ApiError messages as-is).
 export async function computeVolume(serviceName: string | undefined, opts: VolumeOpts): Promise<void> {
+  if (opts.delete && opts.size) throw new Error('--delete cannot be combined with --size (one changes the volume, the other destroys it)')
   const api = await ApiClient.load()
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
   const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
   const id = resolveComputeServiceId(services, serviceName)
+
+  if (opts.delete) {
+    let res
+    try { res = await api.rawRequest('DELETE', `/projects/${p.projectId}/services/${id}/volume`) }
+    catch (e) {
+      // An older backend has no DELETE route and answers a bare 404 (no error body) — tell the
+      // user what is missing instead of parroting "HTTP 404". A backend that HAS the route says
+      // "this service has no volume" (or names the real problem), and that message flows as-is.
+      if (e instanceof ApiError && e.status === 404 && /^HTTP 404$/.test(e.message)) {
+        throw new Error('this backend does not support volume delete yet — update the platform, or delete the service to remove its volume')
+      }
+      throw e
+    }
+    if (handleApproval(res)) return
+    if (opts.json) return printJson(res.body)
+    info(volumeDeleteLine(res.body.service?.name ?? serviceName ?? id))
+    return
+  }
 
   if (!opts.size) {
     const r = await api.request('GET', `/projects/${p.projectId}/services/${id}/volume`)

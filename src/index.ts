@@ -182,8 +182,9 @@ compute.command('limits [service]').description("Show or set a compute service's
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeLimits(service, o)))
 compute.command('always-on <mode> [service]').description('Set a compute service always-on (mode: on|off). on = machines never scale to zero; off = default scale-to-zero. All plans; billing is actual usage either way')
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((mode, service, o) => computeCmd.computeAlwaysOn(mode, service, o)))
-compute.command('volume [service]').description("Show, attach, or grow a compute service's persistent /data volume. No --size: print size, mount path, and the plan cap (any plan). --size on a volumeless service ATTACHES one (any plan at the default 1Gi; larger is paid and plan-capped; the disk mounts at /data on the next deploy); on a volume-bearing one it grows (paid plans; grow-only — a provisioned disk cannot shrink). Billing is actual data stored — the size is a cap, not a price")
+compute.command('volume [service]').description("Show, attach, grow, or delete a compute service's persistent /data volume. No flag: print size, mount path, and the plan cap (any plan). --size on a volumeless service ATTACHES one (any plan at the default 1Gi; larger is paid and plan-capped; the disk mounts at /data on the next deploy); on a volume-bearing one it grows (paid plans; grow-only — a provisioned disk cannot shrink). --delete DESTROYS the disk and ALL its data immediately (no detach, no undo; billing stops now, and suspend fast-wake + scale-out return). Billing is actual data stored — the size is a cap, not a price")
   .option('--size <gi>', 'new size in whole Gi, e.g. 10 (must be ≥ the current size)')
+  .option('--delete', 'destroy the volume and ALL its data (irreversible; download anything you need first)')
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeVolume(service, o)))
 
 // ---- db (postgres service controls) ----

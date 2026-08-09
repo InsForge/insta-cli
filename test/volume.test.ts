@@ -7,7 +7,7 @@
 // deprecated storage* aliases the platform drops next release.
 import { describe, it, expect } from 'vitest'
 import { parseVolumeGib, servicesAddRequestBody, servicesAdd, serviceListLine } from '../src/commands/services.js'
-import { volumeLines, volumeWriteLine } from '../src/commands/compute.js'
+import { volumeLines, volumeWriteLine, volumeDeleteLine, computeVolume } from '../src/commands/compute.js'
 import { dbVolumeLines } from '../src/commands/db.js'
 
 describe('parseVolumeGib', () => {
@@ -67,6 +67,8 @@ describe('volumeLines (compute read display)', () => {
     const lines = volumeLines('api', { sizeGib: 10, mountPath: '/data' }, { volumeGib: 50 })
     expect(lines[0]).toBe('compute api: volume 10Gi at /data  (plan max 50Gi)')
     expect(lines[1]).toMatch(/cap, not a price/)
+    // The read is where a user learns the way OFF the volume path exists — and what it costs.
+    expect(lines[1]).toMatch(/--delete \(destroys the data\)/)
   })
   it('points a volumeless service at the attach verb (this command with --size)', () => {
     const lines = volumeLines('api', null, { volumeGib: 50 })
@@ -89,6 +91,22 @@ describe('volumeWriteLine (compute PUT result display)', () => {
     ]) {
       expect(volumeWriteLine('api', body)).toBe('compute api: volume grown to 5Gi at /data  (plan max 10Gi)')
     }
+  })
+})
+
+describe('volumeDeleteLine (compute DELETE result display)', () => {
+  // The delete line's job is closure: the data is gone (no detach existed, no undo exists), and
+  // the two constraints the volume imposed — cold stop/start wake and machineCount 1 — left with
+  // it. No cap/size: there is nothing left to size.
+  it('says the disk and data are gone and both constraints are back', () => {
+    const line = volumeDeleteLine('api')
+    expect(line).toBe('compute api: volume deleted — the disk and its data are gone; suspend fast-wake and scale-out are back')
+  })
+})
+
+describe('computeVolume --delete validation (throws before any network/config access)', () => {
+  it('rejects --delete combined with --size — one changes the volume, the other destroys it', async () => {
+    await expect(computeVolume('api', { delete: true, size: '10' })).rejects.toThrow(/--delete cannot be combined with --size/)
   })
 })
 
