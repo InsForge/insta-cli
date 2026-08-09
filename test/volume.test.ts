@@ -114,6 +114,14 @@ describe('volumeDeleteError (older-backend 404 mapping)', () => {
     const out = volumeDeleteError(new ApiError(404, 'HTTP 404')) as Error
     expect(out.message).toMatch(/does not support volume delete yet/)
   })
+  it('maps the REAL older-platform 404: the Fastify default body parses to "Not Found" (r2d2 round 2)', () => {
+    // The exact body an older platform (Fastify, no custom notFound handler) sends for a missing
+    // route, pushed through the same extraction rawRequest applies (`body?.error ?? "HTTP 404"`) —
+    // the fixture derivation r2d2 asked for, so this test breaks if either side's shape drifts.
+    const fastifyDefault404 = { message: 'Route DELETE:/projects/p/services/s/volume not found', error: 'Not Found', statusCode: 404 }
+    const e = new ApiError(404, (fastifyDefault404 as { error?: string }).error ?? 'HTTP 404')
+    expect((volumeDeleteError(e) as Error).message).toMatch(/does not support volume delete yet/)
+  })
   it('passes a 404 WITH a body message through verbatim — that backend has the route', () => {
     const e = new ApiError(404, 'this service has no volume')
     expect(volumeDeleteError(e)).toBe(e)

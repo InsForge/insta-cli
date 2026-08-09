@@ -151,14 +151,17 @@ export function volumeDeleteLine(name: string): string {
   return `compute ${name}: volume deleted — the disk and its data are gone; suspend fast-wake and scale-out are back`
 }
 
-// Map a DELETE .../volume failure. Pure, exported for tests (r2d2 review: this is the close-call
-// branch worth pinning). An older backend has no DELETE route and answers a BARE 404 — no error
-// body, so ApiError's message is the literal "HTTP 404" fallback — and parroting that would send
-// the user hunting a bug that is really a version skew. A backend that HAS the route always names
-// the real problem in an error body ("this service has no volume", …), and that message must flow
-// verbatim, 404 or not.
+// Map a DELETE .../volume failure. Pure, exported for tests (r2d2 review rounds 1+2: this is the
+// close-call branch worth pinning). An older backend has no DELETE route, and what its 404 looks
+// like depends on who answered: the real platform (Fastify, no custom notFound handler) sends its
+// default body {"message":"Route DELETE:/… not found","error":"Not Found"} → ApiError message
+// "Not Found"; a proxy or bodyless 404 leaves ApiError's own "HTTP 404" fallback. BOTH are the
+// generic route-miss shape and mean version skew, not a bug — parroting them would send the user
+// hunting the wrong thing. A backend that HAS the route names the real problem in a DOMAIN
+// message ("this service has no volume", …), which must flow verbatim, 404 or not.
+const GENERIC_404 = /^(HTTP 404|Not Found)$/i
 export function volumeDeleteError(e: unknown): unknown {
-  if (e instanceof ApiError && e.status === 404 && e.message === 'HTTP 404') {
+  if (e instanceof ApiError && e.status === 404 && GENERIC_404.test(e.message.trim())) {
     return new Error('this backend does not support volume delete yet — update the platform, or delete the service to remove its volume')
   }
   return e
