@@ -7,7 +7,8 @@
 // deprecated storage* aliases the platform drops next release.
 import { describe, it, expect } from 'vitest'
 import { parseVolumeGib, servicesAddRequestBody, servicesAdd, serviceListLine } from '../src/commands/services.js'
-import { volumeLines, volumeWriteLine, volumeDeleteLine, computeVolume } from '../src/commands/compute.js'
+import { volumeLines, volumeWriteLine, volumeDeleteLine, volumeDeleteError, computeVolume } from '../src/commands/compute.js'
+import { ApiError } from '../src/api.js'
 import { dbVolumeLines } from '../src/commands/db.js'
 
 describe('parseVolumeGib', () => {
@@ -101,6 +102,26 @@ describe('volumeDeleteLine (compute DELETE result display)', () => {
   it('says the disk and data are gone and both constraints are back', () => {
     const line = volumeDeleteLine('api')
     expect(line).toBe('compute api: volume deleted — the disk and its data are gone; suspend fast-wake and scale-out are back')
+  })
+})
+
+describe('volumeDeleteError (older-backend 404 mapping)', () => {
+  // The close-call branch: a bare route-404 (no error body → ApiError falls back to the literal
+  // "HTTP 404") means the BACKEND is old; any 404 that carries a message came from a backend that
+  // HAS the route and is naming the real problem — verified live against feat/volume-remove
+  // (dev:fake): a volumeless service answers `{"error":"this service has no volume"}`.
+  it('maps a bare route-404 to the version-skew hint', () => {
+    const out = volumeDeleteError(new ApiError(404, 'HTTP 404')) as Error
+    expect(out.message).toMatch(/does not support volume delete yet/)
+  })
+  it('passes a 404 WITH a body message through verbatim — that backend has the route', () => {
+    const e = new ApiError(404, 'this service has no volume')
+    expect(volumeDeleteError(e)).toBe(e)
+  })
+  it('passes every non-404 through untouched (403 governance, 502 provider, plain errors)', () => {
+    for (const e of [new ApiError(403, 'approval required'), new ApiError(502, 'provider failed'), new Error('boom')]) {
+      expect(volumeDeleteError(e)).toBe(e)
+    }
   })
 })
 

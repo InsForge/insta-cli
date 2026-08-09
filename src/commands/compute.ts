@@ -151,6 +151,19 @@ export function volumeDeleteLine(name: string): string {
   return `compute ${name}: volume deleted — the disk and its data are gone; suspend fast-wake and scale-out are back`
 }
 
+// Map a DELETE .../volume failure. Pure, exported for tests (r2d2 review: this is the close-call
+// branch worth pinning). An older backend has no DELETE route and answers a BARE 404 — no error
+// body, so ApiError's message is the literal "HTTP 404" fallback — and parroting that would send
+// the user hunting a bug that is really a version skew. A backend that HAS the route always names
+// the real problem in an error body ("this service has no volume", …), and that message must flow
+// verbatim, 404 or not.
+export function volumeDeleteError(e: unknown): unknown {
+  if (e instanceof ApiError && e.status === 404 && e.message === 'HTTP 404') {
+    return new Error('this backend does not support volume delete yet — update the platform, or delete the service to remove its volume')
+  }
+  return e
+}
+
 type VolumeOpts = LifeOpts & { size?: string; delete?: boolean }
 
 // Show, attach, grow, or delete a compute service's /data volume. No flag: a safe read (size +
@@ -170,15 +183,7 @@ export async function computeVolume(serviceName: string | undefined, opts: Volum
   if (opts.delete) {
     let res
     try { res = await api.rawRequest('DELETE', `/projects/${p.projectId}/services/${id}/volume`) }
-    catch (e) {
-      // An older backend has no DELETE route and answers a bare 404 (no error body) — tell the
-      // user what is missing instead of parroting "HTTP 404". A backend that HAS the route says
-      // "this service has no volume" (or names the real problem), and that message flows as-is.
-      if (e instanceof ApiError && e.status === 404 && /^HTTP 404$/.test(e.message)) {
-        throw new Error('this backend does not support volume delete yet — update the platform, or delete the service to remove its volume')
-      }
-      throw e
-    }
+    catch (e) { throw volumeDeleteError(e) }
     if (handleApproval(res)) return
     if (opts.json) return printJson(res.body)
     info(volumeDeleteLine(res.body.service?.name ?? serviceName ?? id))
