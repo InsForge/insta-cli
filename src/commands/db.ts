@@ -7,8 +7,9 @@ type Opts = { branch?: string; group?: string; json?: boolean }
 // Toggle a postgres service between scale-to-zero (the default: instance suspends when idle,
 // cold-starts on the next connection) and always-on (instance stays warm; idle RAM bills at
 // actual usage). Thin wrapper over PATCH /database/settings {scaleToZero} — insta-db-backed
-// postgres only; Neon-backed services manage their own autosuspend and the platform returns an
-// error for them.
+// postgres only. Legacy Neon path: Neon is no longer used by any environment (postgres is 100%
+// insta-db) and this code is retained, not live — Neon-backed services managed their own
+// autosuspend and the platform returned an error for them.
 export async function dbAlwaysOn(mode: string, opts: Opts): Promise<void> {
   if (mode !== 'on' && mode !== 'off') throw new Error('mode must be on|off')
   const api = await ApiClient.load()
@@ -46,10 +47,12 @@ export function fmtMib(mib: number): string {
 }
 
 // The read outcome, as a seam. rawRequest THROWS ApiError on any status >= 400 (api.ts — it only
-// differs from request in returning {status,body} below 400, for 202 branching), so the Neon case
-// and the friendly wrapping must live in a catch, not in status branching on the return value —
-// branches on res.status >= 400 after rawRequest are unreachable. Takes the client as an argument
-// so tests drive it with a stub, per this repo's pure-seam convention.
+// differs from request in returning {status,body} below 400, for 202 branching), so the soft
+// no-instance case and the friendly wrapping must live in a catch, not in status branching on the
+// return value — branches on res.status >= 400 after rawRequest are unreachable. That soft case is
+// the legacy Neon path: Neon is no longer used by any environment; the handling is retained, not
+// live. Takes the client as an argument so tests drive it with a stub, per this repo's pure-seam
+// convention.
 export type DbInstanceRead = { kind: 'ok'; body: any } | { kind: 'no-instance' }
 
 export async function fetchDbInstance(
@@ -62,7 +65,8 @@ export async function fetchDbInstance(
     return { kind: 'ok', body: res.body }
   } catch (e) {
     // The platform answers a provider-shaped 502 for services with no manageable instance
-    // (Neon-backed): a soft case, not a failure. Everything else stays an error — an expired
+    // (the legacy Neon path — Neon is no longer used by any environment; this branch is retained,
+    // not live): a soft case, not a failure. Everything else stays an error — an expired
     // token must not render as "no ceiling set" — but wrapped so the user sees what failed.
     if (e instanceof ApiError && e.status === 502) return { kind: 'no-instance' }
     if (e instanceof ApiError) throw new Error(`reading the instance failed (${e.status}): ${e.message}`)
@@ -85,7 +89,7 @@ export async function dbLimits(opts: Opts & { cpu?: string; memory?: string }): 
   if (!opts.cpu && !opts.memory) {
     const read = await fetchDbInstance(api, p.projectId, suffix)
     if (read.kind === 'no-instance') {
-      info(`postgres ${opts.group ?? 'default'}: no manageable instance (Neon-backed services manage their own resources)`)
+      info(`postgres ${opts.group ?? 'default'}: no manageable instance (this service manages its own resources)`)
       return
     }
     if (opts.json) return printJson(read.body)
@@ -160,9 +164,11 @@ export function dbStatsLines(group: string, body: any): string[] {
 
 // Point-in-time stats snapshot for a postgres service: connections vs the server's ceiling, cache
 // hit rate, database size. Read-only. insta-db-backed: a suspended instance answers from the
-// provider's control plane (shown as "(suspended)" with structural zeros), never dialed.
-// Neon-backed: the platform reads over a direct SQL connection, so a one-shot call may wake a
-// suspended endpoint — acceptable for an explicit command, which is why nothing here polls.
+// provider's control plane (shown as "(suspended)" with structural zeros), never dialed. That is
+// every environment today — the Neon-backed contrast below is historical: Neon is no longer used
+// anywhere, and the code that handled it is retained, not live. Neon-backed: the platform read
+// over a direct SQL connection, so a one-shot call could wake a suspended endpoint — acceptable
+// for an explicit command, which is why nothing here polls.
 export async function dbStats(opts: Opts): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
@@ -202,7 +208,7 @@ export async function dbVolume(opts: Opts & { size?: string }): Promise<void> {
   if (!opts.size) {
     const read = await fetchDbInstance(api, p.projectId, suffix)
     if (read.kind === 'no-instance') {
-      info(`postgres ${opts.group ?? 'default'}: no manageable instance (Neon-backed services manage their own storage)`)
+      info(`postgres ${opts.group ?? 'default'}: no manageable instance (this service manages its own storage)`)
       return
     }
     if (opts.json) return printJson(read.body)
