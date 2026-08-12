@@ -94,7 +94,8 @@ persisted config, so a local control plane gives you an end-to-end loop without 
 cloud infrastructure.
 
 The platform has a `dev:fake` mode that swaps in fake provider adapters, so it needs no
-Neon, Fly or Tigris credentials:
+Fly or Tigris credentials (nor Neon's — Neon is no longer used by any environment; its
+adapter code is retained, not live):
 
 ```bash
 # 1. Postgres for the control plane itself

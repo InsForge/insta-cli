@@ -79,10 +79,12 @@ describe('fmtMib (display must not claim a ceiling the API did not set)', () => 
   })
 })
 
-// The round-3 Critical: rawRequest THROWS on >=400, so the Neon soft-path must live in a catch —
-// status-branching on its return value was unreachable dead code and a Neon read crashed with a
-// raw ApiError. These drive the seam with a stub client, which is exactly the test that would
-// have caught it (the 502 branch was never taken by any test).
+// The round-3 Critical: rawRequest THROWS on >=400, so the no-instance soft-path must live in a
+// catch — status-branching on its return value was unreachable dead code and the read crashed with
+// a raw ApiError. These drive the seam with a stub client, which is exactly the test that would
+// have caught it (the 502 branch was never taken by any test). That soft path is the legacy Neon
+// path: Neon is no longer used by any environment, so these stay as retained coverage for code
+// that is not live.
 describe('fetchDbInstance (the read seam)', () => {
   const stub = (fn: () => Promise<any>) => ({ rawRequest: fn }) as any
 
@@ -91,7 +93,8 @@ describe('fetchDbInstance (the read seam)', () => {
     expect(read).toEqual({ kind: 'ok', body: { cpuMilli: 4000 } })
   })
 
-  it('maps the provider-shaped 502 (Neon-backed) to the soft no-instance case', async () => {
+  // Legacy Neon path — Neon is no longer used by any environment; this test is retained coverage.
+  it('maps the provider-shaped 502 (legacy Neon-backed) to the soft no-instance case', async () => {
     const read = await fetchDbInstance(stub(async () => { throw new ApiError(502, 'provider request failed') }), 'p1', '')
     expect(read).toEqual({ kind: 'no-instance' })
   })

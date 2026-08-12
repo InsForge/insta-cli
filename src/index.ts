@@ -137,7 +137,7 @@ svc.command('set-access <type> <name> <access>').description('Set a storage serv
   .option('--json').action(guard((type, name, access, o) => services.servicesSetAccess(type, name, access, o)))
 svc.command('scale <type> <name> <number> [region]').description('Set a compute service machine count (paid plans only)')
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((type, name, number, region, o) => services.servicesScale(type, name, number, region, o)))
-svc.command('upgrade <type> <name> <spec>').description('Change a compute/postgres service spec (paid plans only)')
+svc.command('upgrade <type> <name> <spec>').description('Change a compute service spec (paid plans only). Postgres upgrades are rejected by the platform — use `insta db limits` instead')
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((type, name, spec, o) => services.servicesUpgrade(type, name, spec, o)))
 svc.command('secrets <type> <name>').description("List a service's secret names")
   .option('--branch <b>').option('--json').action(guard((type, name, o) => services.servicesSecrets(type, name, o)))
