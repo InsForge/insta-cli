@@ -42,6 +42,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@clack/prompts": "^0.9.1",
     "commander": "^12.1.0"
   },
   "devDependencies": {
