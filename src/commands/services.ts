@@ -28,6 +28,13 @@ export function parseCount(raw: string): number {
   return n
 }
 
+// Parse a TCP port. Junk fails here rather than reaching the API as NaN (the parseCpu lesson).
+export function parsePort(raw: string): number {
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 1 || n > 65535) throw new Error(`port must be an integer between 1 and 65535, got: ${raw}`)
+  return n
+}
+
 // Parse a volume size in whole Gi: "10" or "10Gi" (suffix case-insensitive — unlike the db
 // quantity strings this is not a provider pass-through; the wire value is an integer). Volumes
 // are provisioned block disks, so fractional and Mi values are rejected locally with an example
@@ -70,7 +77,7 @@ export type ServicesAddOpts = { branch?: string; public?: boolean; image?: strin
 export function servicesAddRequestBody(type: string, name: string, branch: string | undefined, opts: ServicesAddOpts): Record<string, unknown> {
   return {
     type, name, ...(branch ? { branch } : {}), public: !!opts.public,
-    ...(opts.image ? { image: opts.image } : {}), ...(opts.port ? { port: Number(opts.port) } : {}),
+    ...(opts.image ? { image: opts.image } : {}), ...(opts.port ? { port: parsePort(opts.port) } : {}),
     ...(opts.region ? { region: opts.region } : {}),
     ...(opts.alwaysOn ? { alwaysOn: true } : {}),
     ...(opts.volume !== undefined ? { volumeGib: parseVolumeGib(opts.volume) } : {}),
@@ -82,7 +89,10 @@ export async function servicesAdd(type: string, name: string, opts: ServicesAddO
   if (opts.public && type !== 'storage') throw new Error('--public is only valid for storage services')
   if (opts.region && type === 'storage') throw new Error('--region is not valid for storage services')
   if (opts.image && type !== 'compute') throw new Error('--image is only valid for compute services')
-  if (opts.port && type !== 'compute') throw new Error('--port is only valid for compute services')
+  if (opts.port) {
+    if (type !== 'compute') throw new Error('--port is only valid for compute services')
+    parsePort(opts.port) // junk fails here, before any config/network access
+  }
   if (opts.alwaysOn && type !== 'compute') throw new Error('--always-on is only valid for compute services (for postgres, use `insta db always-on on` after creation)')
   if (opts.volume !== undefined) {
     if (type !== 'compute') throw new Error('--volume is only valid for compute services (postgres has one by default — grow it with `insta db volume --size`)')

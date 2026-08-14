@@ -16,7 +16,7 @@ import {
   type ServiceArgsDeps,
   type ServiceKind,
 } from '../src/resolve-service.js'
-import { SERVICE_TYPES } from '../src/commands/services.js'
+import { SERVICE_TYPES, assertServiceName } from '../src/commands/services.js'
 
 const kind = (id: string): ServiceKind => SERVICE_KINDS.find((k) => k.id === id)!
 
@@ -119,6 +119,31 @@ test('image refs normalize and suggest the dashboard name', () => {
   expect(suggestServiceName('nginx:latest')).toBe('nginx')
   expect(suggestServiceName('ghcr.io/insforge/postgres-all:latest')).toBe('postgres-all')
   expect(suggestServiceName('registry.io/team/My_App@sha256:abc')).toBe('my-app')
+})
+
+// A suggestion the name rule would reject is worse than none — it can't be accepted unchanged.
+test('a long repo segment is capped at what assertServiceName accepts', () => {
+  const suggested = suggestServiceName(`ghcr.io/org/${'a'.repeat(50)}:latest`)
+  expect(suggested).toHaveLength(39)
+  expect(() => assertServiceName(suggested)).not.toThrow()
+  // Truncation must not leave a trailing hyphen, which the rule also rejects.
+  expect(suggestServiceName(`ghcr.io/org/${'ab-'.repeat(20)}:latest`)).not.toMatch(/-$/)
+})
+
+// --image that normalizes away would otherwise be dropped from the body and quietly build an
+// empty compute service instead of the image the user asked for.
+test('an --image that normalizes to nothing is rejected, not silently dropped', async () => {
+  await expect(resolveServiceArgs(undefined, undefined, deps({
+    selectKind: async () => kind('image'),
+  }), { image: 'https://' })).rejects.toThrow(/image reference is required/)
+})
+
+// A bad --port is a typo in the command; answering three questions first would be wasted work.
+test('an invalid --port fails before any prompt', async () => {
+  await expect(resolveServiceArgs(undefined, undefined, deps(), { port: '70000' }))
+    .rejects.toThrow(/between 1 and 65535/)
+  await expect(resolveServiceArgs(undefined, undefined, deps(), { port: 'abc' }))
+    .rejects.toThrow(/between 1 and 65535/)
 })
 
 // --json promises parseable stdout; a prompt would corrupt it and hang an agent that owns a TTY.

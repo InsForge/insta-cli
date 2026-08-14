@@ -5,7 +5,7 @@
 // picking an image is a different intent rather than a compute flag. An agent gets the same list
 // as an error, because nothing was created and a silent exit 0 would read as success.
 import * as clack from '@clack/prompts'
-import { SERVICE_TYPES, assertServiceName, type ServiceType } from './commands/services.js'
+import { SERVICE_TYPES, assertServiceName, parsePort, type ServiceType } from './commands/services.js'
 
 export type ServiceKind = {
   id: string
@@ -44,7 +44,11 @@ export function normalizeImageRef(raw: string): string {
   return raw.trim().replace(/^https?:\/\//, '')
 }
 
-/** Name from an image ref: last path segment, sans tag/digest, kebab-safe (mirrors the dashboard). */
+/**
+ * Name from an image ref: last path segment, sans tag/digest, kebab-safe (the dashboard's rule).
+ * Also capped at the 39 chars `assertServiceName` allows — a suggestion the user cannot accept
+ * unchanged is worse than none.
+ */
 export function suggestServiceName(ref: string): string {
   const last = ref.split('@')[0]!.split('/').pop() ?? ''
   return last
@@ -52,6 +56,8 @@ export function suggestServiceName(ref: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, '-')
     .replace(/^-+|-+$/g, '')
+    .slice(0, 39)
+    .replace(/-+$/g, '')
 }
 
 /** The non-interactive command for a kind — what an agent should run instead of being asked. */
@@ -87,6 +93,8 @@ export async function resolveServiceArgs(
   if (type && name) return { type, name }
   if (type && !SERVICE_TYPES.includes(type as ServiceType)) return { type, name: name ?? '' }
   if (!deps.tty) throw new Error(missingArgsMessage(type))
+  // A bad --port is a typo in the command, not an answer: fail before asking anything.
+  if (given.port !== undefined) parsePort(given.port)
   const kind = type
     ? SERVICE_KINDS.find((k) => k.type === type && !k.needsImage)
     : await deps.selectKind(SERVICE_KINDS)
@@ -94,7 +102,10 @@ export async function resolveServiceArgs(
   if (!kind.needsImage) {
     return { type: kind.type, name: name ?? (await deps.askName(kind, kind.defaultName ?? '')) }
   }
+  // The prompt validates a typed ref; a --image that normalizes away would slip past it and
+  // provision a plain empty compute instead (servicesAddRequestBody drops a falsy image).
   const image = normalizeImageRef(given.image ?? (await deps.askImage()))
+  if (!image) throw new Error('an image reference is required')
   return {
     type: kind.type,
     name: name ?? (await deps.askName(kind, suggestServiceName(image))),
@@ -145,10 +156,14 @@ export async function promptPort(fallback: string): Promise<string> {
   const answer = await clack.text({
     message: 'Port the image listens on:',
     initialValue: fallback,
-    // Mirrors the dialog's range check, so a typo is caught before the service is provisioned.
+    // The rule the command enforces, so the prompt and a --port can never disagree.
     validate: (v) => {
-      const n = Number(v.trim())
-      return Number.isInteger(n) && n >= 1 && n <= 65535 ? undefined : 'port must be an integer between 1 and 65535'
+      try {
+        parsePort(v.trim())
+        return undefined
+      } catch (e) {
+        return (e as Error).message
+      }
     },
   })
   if (clack.isCancel(answer)) process.exit(0)

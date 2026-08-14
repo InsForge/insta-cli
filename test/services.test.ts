@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  assertType, assertServiceName, parseCount, parseAccess, resolveServiceId, resolveComputeServiceId, SERVICE_TYPES,
+  assertType, assertServiceName, parseCount, parsePort, parseAccess, resolveServiceId, resolveComputeServiceId, SERVICE_TYPES,
   servicesAddRequestBody, servicesAdd, serviceListLine,
 } from '../src/commands/services.js'
 
@@ -28,6 +28,21 @@ describe('parseCount', () => {
     expect(() => parseCount('-2')).toThrow(/positive integer/)
     expect(() => parseCount('2.5')).toThrow(/positive integer/)
     expect(() => parseCount('abc')).toThrow(/positive integer/)
+  })
+})
+
+describe('parsePort', () => {
+  it('parses ports in range', () => {
+    expect(parsePort('8080')).toBe(8080)
+    expect(parsePort('1')).toBe(1)
+    expect(parsePort('65535')).toBe(65535)
+  })
+  // Junk used to reach the API as NaN, which serializes to null.
+  it('rejects out-of-range and non-integer ports', () => {
+    expect(() => parsePort('0')).toThrow(/between 1 and 65535/)
+    expect(() => parsePort('65536')).toThrow(/between 1 and 65535/)
+    expect(() => parsePort('8080.5')).toThrow(/between 1 and 65535/)
+    expect(() => parsePort('abc')).toThrow(/between 1 and 65535/)
   })
 })
 
