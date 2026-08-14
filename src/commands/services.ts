@@ -29,8 +29,11 @@ export function parseCount(raw: string): number {
 }
 
 // Parse a TCP port. Junk fails here rather than reaching the API as NaN (the parseCpu lesson).
+// Decimal digits only, as parseVolumeGib: `Number()` alone would quietly read 0x1f90 as 8080 and
+// 1e3 as 1000, and a port written in hex is a typo worth reporting, not one worth honouring.
 export function parsePort(raw: string): number {
-  const n = Number(raw)
+  const m = /^\s*(\d+)\s*$/.exec(raw)
+  const n = m ? Number(m[1]) : NaN
   if (!Number.isInteger(n) || n < 1 || n > 65535) throw new Error(`port must be an integer between 1 and 65535, got: ${raw}`)
   return n
 }

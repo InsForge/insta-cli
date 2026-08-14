@@ -44,6 +44,17 @@ describe('parsePort', () => {
     expect(() => parsePort('8080.5')).toThrow(/between 1 and 65535/)
     expect(() => parsePort('abc')).toThrow(/between 1 and 65535/)
   })
+  // Number() would read these as 8080 and 1000 — a port in hex is a typo, not a port.
+  it('rejects non-decimal spellings Number() would have accepted', () => {
+    expect(() => parsePort('0x1f90')).toThrow(/between 1 and 65535/)
+    expect(() => parsePort('1e3')).toThrow(/between 1 and 65535/)
+    expect(() => parsePort('0o17620')).toThrow(/between 1 and 65535/)
+    expect(() => parsePort('')).toThrow(/between 1 and 65535/)
+  })
+  // Surrounding whitespace is shell noise, not a typo — parseVolumeGib tolerates it too.
+  it('tolerates surrounding whitespace', () => {
+    expect(parsePort('  8080  ')).toBe(8080)
+  })
 })
 
 describe('assertServiceName', () => {

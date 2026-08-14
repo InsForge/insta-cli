@@ -121,7 +121,8 @@ export async function promptServiceKind(kinds: readonly ServiceKind[]): Promise<
     options: kinds.map((k) => ({ value: k.id, label: k.label, hint: k.hint })),
   })
   if (clack.isCancel(picked)) process.exit(0)
-  return SERVICE_KINDS.find((k) => k.id === picked)!
+  // Resolve against the list that was displayed — a subset must not fall through to the registry.
+  return kinds.find((k) => k.id === picked)!
 }
 
 export async function promptImageRef(): Promise<string> {
