@@ -1,5 +1,8 @@
 // `insta storage` — browse, download, and delete the objects in a storage service's bucket.
-import { writeFile } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
+import { createWriteStream } from 'node:fs'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { ApiClient, requireProject } from '../api.js'
 import { info, printJson, handleApproval } from '../util.js'
 import { q, resolveSoleService } from './services.js'
@@ -58,43 +61,66 @@ export async function storageList(opts: ListOpts): Promise<void> {
   const res = await api.rawRequest('GET', objectsPath(p.projectId, svc.id, { branch, prefix: opts.prefix, cursor: opts.cursor, limit }))
   if (handleApproval(res)) return
   if (opts.json) return printJson(res.body)
-  const objects: Array<{ key: string; size?: number; lastModified?: string }> = res.body.objects ?? []
+  const objects: Array<{ key: string; size?: number; lastModified?: string }> = res.body?.objects ?? []
   if (!objects.length) {
     return info(opts.prefix ? `(no objects under prefix ${opts.prefix} in storage/${svc.name})` : `(storage/${svc.name} is empty)`)
   }
   for (const o of objects) info(objectListLine(o))
-  if (res.body.nextCursor) info(`  (more — next page: insta storage list --cursor ${res.body.nextCursor})`)
+  const next = res.body?.nextCursor
+  if (next) info(`  (more — next page: ${nextPageCommand({ ...opts, limit }, next)})`)
 }
 
-export type GetDeps = { fetchBytes?: (url: string) => Promise<Uint8Array>; writeImpl?: (path: string, data: Uint8Array) => Promise<void> }
+// The continuation command must repeat the filters, or following it lists a different set.
+export function nextPageCommand(opts: { branch?: string; service?: string; prefix?: string; limit?: number }, cursor: string): string {
+  const flags = [
+    opts.service ? `--service ${opts.service}` : '',
+    opts.branch ? `--branch ${opts.branch}` : '',
+    opts.prefix ? `--prefix ${opts.prefix}` : '',
+    opts.limit === undefined ? '' : `--limit ${opts.limit}`,
+    `--cursor ${cursor}`,
+  ].filter(Boolean)
+  return `insta storage list ${flags.join(' ')}`
+}
 
-// pure: where the bytes land. Only the key's LAST segment is used, so no key can escape cwd.
+export type GetDeps = { streamTo?: (url: string, out: string) => Promise<number> }
+
+// pure: where the bytes land. Only the last segment is used, so no key can escape cwd.
 export function outputPath(key: string, output?: string): string {
   if (output) return output
-  const base = key.split('/').pop() ?? ''
+  // Split on `\` too: a key may contain one, and on Windows that is also a separator.
+  const base = key.split(/[\\/]/).pop() ?? ''
   if (!base) throw new Error(`cannot infer a filename from key "${key}" — pass -o <file>`)
   return base
 }
 
-// Pull the bytes from the provider (never through the platform, which only signs the URL).
-export async function fetchPresigned(url: string, fetchImpl: typeof fetch = fetch): Promise<Uint8Array> {
+// Stream from the provider (never through the platform, which only signs) straight to disk, so a
+// multi-gigabyte object never has to fit in memory. Returns the byte count written.
+export async function streamPresignedTo(url: string, out: string, fetchImpl: typeof fetch = fetch): Promise<number> {
   const res = await fetchImpl(url)
-  if (!res.ok) throw new Error(`download failed: HTTP ${res.status} (a presigned URL lives ~60s — re-run to mint a fresh one)`)
-  return new Uint8Array(await res.arrayBuffer())
+  if (!res.ok || !res.body) throw new Error(`download failed: HTTP ${res.status} (a presigned URL lives ~60s — re-run to mint a fresh one)`)
+  let written = 0
+  const counting = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) { written += chunk.byteLength; controller.enqueue(chunk) },
+  })
+  // A failed write must not leave a truncated file passing for a complete download.
+  try {
+    await pipeline(Readable.fromWeb(res.body.pipeThrough(counting) as ReadableStream<Uint8Array>), createWriteStream(out))
+  } catch (e) {
+    await rm(out, { force: true })
+    throw e
+  }
+  return written
 }
 
-// Core, dependency-injected for tests (mirrors runWithSecrets): fetch → write, return byte count.
+// Core, dependency-injected for tests (mirrors runWithSecrets): stream → disk, return byte count.
 export async function saveObject(url: string, out: string, deps: GetDeps = {}): Promise<number> {
-  const bytes = await (deps.fetchBytes ?? fetchPresigned)(url)
-  await (deps.writeImpl ?? writeFile)(out, bytes)
-  return bytes.byteLength
+  return (deps.streamTo ?? streamPresignedTo)(url, out)
 }
 
 type GetOpts = Common & { output?: string }
 
 export async function storageGet(key: string, opts: GetOpts, deps: GetDeps = {}): Promise<void> {
   if (!key) throw new Error('key is required')
-  const out = outputPath(key, opts.output)
   const api = await ApiClient.load()
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
@@ -102,7 +128,10 @@ export async function storageGet(key: string, opts: GetOpts, deps: GetDeps = {})
   const res = await api.rawRequest('GET', objectDownloadPath(p.projectId, svc.id, { branch, key }))
   if (handleApproval(res)) return
   // --json hands over the presigned URL instead of downloading, as `insta secrets --json` does.
+  // Before outputPath, so a key with no filename still works when nothing is written to disk.
   if (opts.json) return printJson(res.body)
+  const out = outputPath(key, opts.output)
+  if (!res.body?.url) throw new Error('the platform returned no download URL')
   const bytes = await saveObject(res.body.url, out, deps)
   info(`wrote ${fmtBytes(bytes)} to ${out} (${key} from storage/${svc.name}, branch ${branch})`)
 }

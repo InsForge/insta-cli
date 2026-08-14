@@ -270,7 +270,7 @@ ob.command('sync').description('Upload findings into the project timeline').acti
 // ---- policy ----
 const pol = program.command('policy').description('Governance policy')
 pol.command('get').option('--json').action(guard((o) => govern.policyGet(o)))
-pol.command('set <action> <decision>').description('action: secrets.read|secrets.write|deploy|project.delete|branch.delete|service.add|service.remove|service.scale|service.upgrade|service.setAccess|storage.read|storage.delete; decision: allow|deny|approve').action(guard((a, d) => govern.policySet(a, d)))
+pol.command('set <action> <decision>').description('action: secrets.read|secrets.write|deploy|project.delete|branch.delete|service.add|service.remove|service.scale|service.upgrade|service.setAccess|storage.read|storage.write|storage.delete; decision: allow|deny|approve').action(guard((a, d) => govern.policySet(a, d)))
 
 // ---- self-update ----
 program.command('upgrade').description('Update the insta CLI to the latest release (binary or npm install)')

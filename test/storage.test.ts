@@ -1,11 +1,11 @@
 // `insta storage` seams — all pure or DI'd, so nothing here reaches a backend.
-import { describe, it, expect } from 'vitest'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   parseObjectLimit, objectsPath, objectDownloadPath, objectListLine,
-  outputPath, fetchPresigned, saveObject,
+  outputPath, streamPresignedTo, saveObject, nextPageCommand,
 } from '../src/commands/storage.js'
 import { resolveSoleService } from '../src/commands/services.js'
 
@@ -76,41 +76,85 @@ describe('outputPath', () => {
     expect(outputPath('../../etc/passwd')).toBe('passwd')
     expect(outputPath('/etc/passwd')).toBe('passwd')
   })
+  // A key may hold a backslash, which is also a separator on Windows.
+  it('treats a backslash as a separator too', () => {
+    expect(outputPath('..\\..\\Windows\\system32\\drivers\\etc\\hosts')).toBe('hosts')
+    expect(outputPath('docs\\q3.pdf')).toBe('q3.pdf')
+  })
   it('asks for -o when the key has no filename', () => {
     expect(() => outputPath('docs/')).toThrow(/pass -o/)
     expect(() => outputPath('')).toThrow(/pass -o/)
   })
 })
 
-describe('fetchPresigned', () => {
-  it('returns the provider bytes on 200', async () => {
-    const fake = (async () => new Response(new Uint8Array([1, 2, 3]))) as unknown as typeof fetch
-    expect(Array.from(await fetchPresigned('https://provider/x', fake))).toEqual([1, 2, 3])
+describe('nextPageCommand', () => {
+  // Following a command that dropped --prefix would page through a different set of objects.
+  it('repeats every filter that shaped the page', () => {
+    expect(nextPageCommand({ branch: 'feat-x', service: 'files', prefix: 'docs/', limit: 25 }, 'tok-2'))
+      .toBe('insta storage list --service files --branch feat-x --prefix docs/ --limit 25 --cursor tok-2')
   })
+  it('omits the flags that were never given', () => {
+    expect(nextPageCommand({}, 'tok-2')).toBe('insta storage list --cursor tok-2')
+  })
+})
+
+describe('streamPresignedTo', () => {
+  let dir: string
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'insta-storage-')) })
+  // mkdtemp leaks a directory per run without this, including every CI pass.
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('streams the provider body to disk and reports the byte count', async () => {
+    const out = join(dir, 'q3.pdf')
+    const fake = (async () => new Response(new Uint8Array([0x25, 0x50, 0x44, 0x46]))) as unknown as typeof fetch
+    expect(await streamPresignedTo('https://provider/q3.pdf', out, fake)).toBe(4)
+    expect(readFileSync(out).toString('latin1')).toBe('%PDF')
+  })
+
+  // The point of streaming: a body larger than memory must still land, chunk by chunk.
+  it('never holds the whole object at once', async () => {
+    const out = join(dir, 'big.bin')
+    const chunk = new Uint8Array(64 * 1024)
+    let queued = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (queued++ >= 200) return controller.close()
+        controller.enqueue(chunk)
+      },
+    })
+    const fake = (async () => new Response(body)) as unknown as typeof fetch
+    expect(await streamPresignedTo('https://provider/big.bin', out, fake)).toBe(200 * chunk.byteLength)
+  })
+
   // A 60s TTL means an expired link is the likely failure, so say what to do about it.
   it('names the expiry as the likely cause when the provider refuses', async () => {
     const fake = (async () => new Response('', { status: 403 })) as unknown as typeof fetch
-    await expect(fetchPresigned('https://provider/x', fake)).rejects.toThrow(/presigned URL lives ~60s/)
+    await expect(streamPresignedTo('https://provider/x', join(dir, 'x'), fake)).rejects.toThrow(/presigned URL lives ~60s/)
+  })
+
+  // A half-written file must not pass for a finished download.
+  it('removes the partial file when the stream fails mid-way', async () => {
+    const out = join(dir, 'partial.bin')
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]))
+        controller.error(new Error('connection reset'))
+      },
+    })
+    const fake = (async () => new Response(body)) as unknown as typeof fetch
+    await expect(streamPresignedTo('https://provider/partial.bin', out, fake)).rejects.toThrow(/connection reset/)
+    expect(existsSync(out)).toBe(false)
   })
 })
 
 describe('saveObject', () => {
-  it('writes the fetched bytes to the given path and reports the size', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'insta-storage-'))
-    const out = join(dir, 'q3.pdf')
-    const n = await saveObject('https://provider/q3.pdf', out, {
-      fetchBytes: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+  it('delegates to the injected streamer and returns its count', async () => {
+    const seen: string[] = []
+    const n = await saveObject('https://provider/q3.pdf', 'out.pdf', {
+      streamTo: async (url, out) => { seen.push(url, out); return 4 },
     })
     expect(n).toBe(4)
-    expect(readFileSync(out).toString('latin1')).toBe('%PDF')
-  })
-  it('writes nothing when the fetch fails', async () => {
-    let wrote = false
-    await expect(saveObject('https://provider/x', 'x', {
-      fetchBytes: async () => { throw new Error('boom') },
-      writeImpl: async () => { wrote = true },
-    })).rejects.toThrow('boom')
-    expect(wrote).toBe(false)
+    expect(seen).toEqual(['https://provider/q3.pdf', 'out.pdf'])
   })
 })
 
