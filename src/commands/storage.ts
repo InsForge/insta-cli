@@ -71,19 +71,23 @@ export async function storageList(opts: ListOpts): Promise<void> {
   if (next) info(`  (more — next page: ${nextPageCommand({ ...opts, limit }, next)})`)
 }
 
-// Single-quote anything a shell would reinterpret; a prefix or cursor may hold spaces, & or $.
-function shellQuote(value: string): string {
-  return /^[\w./:@=+-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`
-}
+// Safe unquoted in every shell we care about — no spaces, quotes, or expansion characters.
+const SHELL_SAFE = /^[\w./:@=+-]+$/
 
-// The continuation command must repeat the filters, or following it lists a different set.
+// The continuation must repeat the filters, or following it lists a different set. Quoting rules
+// differ between sh and PowerShell, so rather than guess the shell, a value that would need quotes
+// gets a sentence instead of syntax that is broken somewhere.
 export function nextPageCommand(opts: { branch?: string; service?: string; prefix?: string; limit?: number }, cursor: string): string {
+  const values = [opts.service, opts.branch, opts.prefix, cursor].filter((v): v is string => !!v)
+  if (!values.every((v) => SHELL_SAFE.test(v))) {
+    return `re-run this command with --cursor set to ${cursor}`
+  }
   const flags = [
-    opts.service ? `--service ${shellQuote(opts.service)}` : '',
-    opts.branch ? `--branch ${shellQuote(opts.branch)}` : '',
-    opts.prefix ? `--prefix ${shellQuote(opts.prefix)}` : '',
+    opts.service ? `--service ${opts.service}` : '',
+    opts.branch ? `--branch ${opts.branch}` : '',
+    opts.prefix ? `--prefix ${opts.prefix}` : '',
     opts.limit === undefined ? '' : `--limit ${opts.limit}`,
-    `--cursor ${shellQuote(cursor)}`,
+    `--cursor ${cursor}`,
   ].filter(Boolean)
   return `insta storage list ${flags.join(' ')}`
 }

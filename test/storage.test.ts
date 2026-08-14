@@ -96,12 +96,19 @@ describe('nextPageCommand', () => {
   it('omits the flags that were never given', () => {
     expect(nextPageCommand({}, 'tok-2')).toBe('insta storage list --cursor tok-2')
   })
-  // An unquoted prefix with a space or & would not survive a paste into a shell.
-  it('quotes values a shell would reinterpret', () => {
-    expect(nextPageCommand({ prefix: 'my docs/a&b' }, 'tok-2'))
-      .toBe("insta storage list --prefix 'my docs/a&b' --cursor tok-2")
+  // Quoting rules differ per shell, so a value needing quotes gets prose, not broken syntax.
+  it('falls back to an instruction when a value would need quoting', () => {
+    expect(nextPageCommand({ prefix: 'my docs/' }, 'tok-2'))
+      .toBe('re-run this command with --cursor set to tok-2')
     expect(nextPageCommand({ prefix: "it's" }, 'tok-2'))
-      .toBe("insta storage list --prefix 'it'\\''s' --cursor tok-2")
+      .toBe('re-run this command with --cursor set to tok-2')
+    expect(nextPageCommand({ prefix: 'a&b' }, 'tok-2'))
+      .toBe('re-run this command with --cursor set to tok-2')
+  })
+  // Base64 cursors carry + / = which are safe unquoted, so the common case stays copy-pasteable.
+  it('still emits a command for a base64 cursor', () => {
+    expect(nextPageCommand({ prefix: 'docs/' }, 'dG9rZW4rMi8=')).
+      toBe('insta storage list --prefix docs/ --cursor dG9rZW4rMi8=')
   })
 })
 
