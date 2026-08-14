@@ -176,7 +176,8 @@ describe('streamPresignedTo', () => {
   })
 
   // The part file is born at the umask default, so replacing a private file would widen it.
-  it('keeps the replaced file as private as it was', async () => {
+  // POSIX-only: Windows chmod just toggles read-only and stat reports 0o666 for any writable file.
+  it.skipIf(process.platform === 'win32')('keeps the replaced file as private as it was', async () => {
     const out = join(dir, 'secret.pem')
     writeFileSync(out, 'OLD', { mode: 0o600 })
     const fake = (async () => new Response(new TextEncoder().encode('NEW'))) as unknown as typeof fetch

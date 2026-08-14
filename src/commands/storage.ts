@@ -111,10 +111,13 @@ export async function streamPresignedTo(url: string, out: string, fetchImpl: typ
   // Write beside the target, then rename: opening `out` directly would truncate an existing file
   // that a failed download then deletes. Same directory keeps the rename atomic.
   const part = `${out}.insta-part-${randomBytes(4).toString('hex')}`
-  // Ctrl-C kills the process without unwinding, so the part file needs a synchronous sweep.
-  const onSignal = () => { rmSync(part, { force: true }); process.exit(130) }
-  process.once('SIGINT', onSignal)
-  process.once('SIGTERM', onSignal)
+  // A signal kills the process without unwinding, so the part file needs a synchronous sweep.
+  // Exit 128+signo, so a supervisor still reads interrupted (130) apart from terminated (143).
+  const sweep = (signo: number) => () => { rmSync(part, { force: true }); process.exit(128 + signo) }
+  const onInt = sweep(2)
+  const onTerm = sweep(15)
+  process.once('SIGINT', onInt)
+  process.once('SIGTERM', onTerm)
   try {
     await pipeline(Readable.fromWeb(res.body.pipeThrough(counting) as ReadableStream<Uint8Array>), createWriteStream(part))
     // Replacing a 0600 file must not widen it to the umask default the part was created with.
@@ -125,8 +128,8 @@ export async function streamPresignedTo(url: string, out: string, fetchImpl: typ
     await rm(part, { force: true })
     throw e
   } finally {
-    process.off('SIGINT', onSignal)
-    process.off('SIGTERM', onSignal)
+    process.off('SIGINT', onInt)
+    process.off('SIGTERM', onTerm)
   }
   return written
 }
