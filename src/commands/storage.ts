@@ -1,6 +1,7 @@
 // `insta storage` — browse, download, and delete the objects in a storage service's bucket.
-import { rm } from 'node:fs/promises'
+import { rename, rm } from 'node:fs/promises'
 import { createWriteStream } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { ApiClient, requireProject } from '../api.js'
@@ -70,14 +71,19 @@ export async function storageList(opts: ListOpts): Promise<void> {
   if (next) info(`  (more — next page: ${nextPageCommand({ ...opts, limit }, next)})`)
 }
 
+// Single-quote anything a shell would reinterpret; a prefix or cursor may hold spaces, & or $.
+function shellQuote(value: string): string {
+  return /^[\w./:@=+-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`
+}
+
 // The continuation command must repeat the filters, or following it lists a different set.
 export function nextPageCommand(opts: { branch?: string; service?: string; prefix?: string; limit?: number }, cursor: string): string {
   const flags = [
-    opts.service ? `--service ${opts.service}` : '',
-    opts.branch ? `--branch ${opts.branch}` : '',
-    opts.prefix ? `--prefix ${opts.prefix}` : '',
+    opts.service ? `--service ${shellQuote(opts.service)}` : '',
+    opts.branch ? `--branch ${shellQuote(opts.branch)}` : '',
+    opts.prefix ? `--prefix ${shellQuote(opts.prefix)}` : '',
     opts.limit === undefined ? '' : `--limit ${opts.limit}`,
-    `--cursor ${cursor}`,
+    `--cursor ${shellQuote(cursor)}`,
   ].filter(Boolean)
   return `insta storage list ${flags.join(' ')}`
 }
@@ -102,11 +108,14 @@ export async function streamPresignedTo(url: string, out: string, fetchImpl: typ
   const counting = new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) { written += chunk.byteLength; controller.enqueue(chunk) },
   })
-  // A failed write must not leave a truncated file passing for a complete download.
+  // Write beside the target, then rename: opening `out` directly would truncate an existing file
+  // that a failed download then deletes. Same directory keeps the rename atomic.
+  const part = `${out}.insta-part-${randomBytes(4).toString('hex')}`
   try {
-    await pipeline(Readable.fromWeb(res.body.pipeThrough(counting) as ReadableStream<Uint8Array>), createWriteStream(out))
+    await pipeline(Readable.fromWeb(res.body.pipeThrough(counting) as ReadableStream<Uint8Array>), createWriteStream(part))
+    await rename(part, out)
   } catch (e) {
-    await rm(out, { force: true })
+    await rm(part, { force: true })
     throw e
   }
   return written

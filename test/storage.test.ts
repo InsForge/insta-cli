@@ -1,6 +1,6 @@
 // `insta storage` seams — all pure or DI'd, so nothing here reaches a backend.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -96,7 +96,23 @@ describe('nextPageCommand', () => {
   it('omits the flags that were never given', () => {
     expect(nextPageCommand({}, 'tok-2')).toBe('insta storage list --cursor tok-2')
   })
+  // An unquoted prefix with a space or & would not survive a paste into a shell.
+  it('quotes values a shell would reinterpret', () => {
+    expect(nextPageCommand({ prefix: 'my docs/a&b' }, 'tok-2'))
+      .toBe("insta storage list --prefix 'my docs/a&b' --cursor tok-2")
+    expect(nextPageCommand({ prefix: "it's" }, 'tok-2'))
+      .toBe("insta storage list --prefix 'it'\\''s' --cursor tok-2")
+  })
 })
+
+// A body that hands over some bytes and then dies, as a dropped connection would.
+const failingBody = () =>
+  new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array([1, 2, 3]))
+      controller.error(new Error('connection reset'))
+    },
+  })
 
 describe('streamPresignedTo', () => {
   let dir: string
@@ -135,15 +151,28 @@ describe('streamPresignedTo', () => {
   // A half-written file must not pass for a finished download.
   it('removes the partial file when the stream fails mid-way', async () => {
     const out = join(dir, 'partial.bin')
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array([1, 2, 3]))
-        controller.error(new Error('connection reset'))
-      },
-    })
-    const fake = (async () => new Response(body)) as unknown as typeof fetch
+    const fake = (async () => new Response(failingBody())) as unknown as typeof fetch
     await expect(streamPresignedTo('https://provider/partial.bin', out, fake)).rejects.toThrow(/connection reset/)
     expect(existsSync(out)).toBe(false)
+  })
+
+  // Opening `out` directly would truncate it, so a failed download used to destroy the old file.
+  it('leaves an existing -o target untouched when the download fails', async () => {
+    const out = join(dir, 'important.pdf')
+    writeFileSync(out, 'ORIGINAL')
+    const fake = (async () => new Response(failingBody())) as unknown as typeof fetch
+    await expect(streamPresignedTo('https://provider/x', out, fake)).rejects.toThrow(/connection reset/)
+    expect(readFileSync(out).toString()).toBe('ORIGINAL')
+    expect(readdirSync(dir)).toEqual(['important.pdf'])
+  })
+
+  it('replaces an existing target once the download completes', async () => {
+    const out = join(dir, 'report.txt')
+    writeFileSync(out, 'OLD')
+    const fake = (async () => new Response(new TextEncoder().encode('NEW'))) as unknown as typeof fetch
+    expect(await streamPresignedTo('https://provider/report.txt', out, fake)).toBe(3)
+    expect(readFileSync(out).toString()).toBe('NEW')
+    expect(readdirSync(dir)).toEqual(['report.txt'])
   })
 })
 
