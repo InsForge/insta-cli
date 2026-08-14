@@ -1,6 +1,6 @@
 // `insta storage` — browse, download, and delete the objects in a storage service's bucket.
-import { rename, rm } from 'node:fs/promises'
-import { createWriteStream } from 'node:fs'
+import { chmod, rename, rm, stat } from 'node:fs/promises'
+import { createWriteStream, rmSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -111,12 +111,22 @@ export async function streamPresignedTo(url: string, out: string, fetchImpl: typ
   // Write beside the target, then rename: opening `out` directly would truncate an existing file
   // that a failed download then deletes. Same directory keeps the rename atomic.
   const part = `${out}.insta-part-${randomBytes(4).toString('hex')}`
+  // Ctrl-C kills the process without unwinding, so the part file needs a synchronous sweep.
+  const onSignal = () => { rmSync(part, { force: true }); process.exit(130) }
+  process.once('SIGINT', onSignal)
+  process.once('SIGTERM', onSignal)
   try {
     await pipeline(Readable.fromWeb(res.body.pipeThrough(counting) as ReadableStream<Uint8Array>), createWriteStream(part))
+    // Replacing a 0600 file must not widen it to the umask default the part was created with.
+    const mode = await stat(out).then((s) => s.mode, () => undefined)
+    if (mode !== undefined) await chmod(part, mode)
     await rename(part, out)
   } catch (e) {
     await rm(part, { force: true })
     throw e
+  } finally {
+    process.off('SIGINT', onSignal)
+    process.off('SIGTERM', onSignal)
   }
   return written
 }

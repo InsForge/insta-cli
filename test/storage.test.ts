@@ -1,6 +1,6 @@
 // `insta storage` seams — all pure or DI'd, so nothing here reaches a backend.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -173,6 +173,15 @@ describe('streamPresignedTo', () => {
     expect(await streamPresignedTo('https://provider/report.txt', out, fake)).toBe(3)
     expect(readFileSync(out).toString()).toBe('NEW')
     expect(readdirSync(dir)).toEqual(['report.txt'])
+  })
+
+  // The part file is born at the umask default, so replacing a private file would widen it.
+  it('keeps the replaced file as private as it was', async () => {
+    const out = join(dir, 'secret.pem')
+    writeFileSync(out, 'OLD', { mode: 0o600 })
+    const fake = (async () => new Response(new TextEncoder().encode('NEW'))) as unknown as typeof fetch
+    await streamPresignedTo('https://provider/secret.pem', out, fake)
+    expect(statSync(out).mode & 0o777).toBe(0o600)
   })
 })
 
