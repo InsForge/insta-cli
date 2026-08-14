@@ -118,7 +118,8 @@ br.command('merge <source>').description('Merge a branch service set into anothe
 // ---- services (opt-in postgres/storage/compute) ----
 const svc = program.command('services').alias('svc').description('Manage project services (postgres|storage|compute)')
 // [type] [name] are optional so the command can answer "what can I add?" — a terminal is walked
-// through the two questions, anything else gets the kind list back as an error (resolve-service.ts).
+// through the dashboard's Add Service kinds, anything else gets that list back as an error
+// (resolve-service.ts). Picking Docker Image also fills in --image/--port from the answers.
 svc.command('add [type] [name]').description('Provision a service on demand (assigns a default domain for postgres/compute); with no type/name, a terminal picks from the service kinds')
   .option('--branch <branch>', 'target branch (default: current)')
   .option('--region <region>', 'region for postgres/compute, e.g. us-east (see `insta regions`)')
@@ -129,8 +130,8 @@ svc.command('add [type] [name]').description('Provision a service on demand (ass
   .option('--volume <gi>', 'compute only: attach a persistent /data volume of this many whole Gi (also attachable later: `insta compute volume <name> --size <gi>`; any plan may attach at the default 1; larger sizes are paid and plan-capped). Volume services keep 1 machine and stop (cold wake) instead of suspend when idle')
   .option('--json')
   .action(guard(async (type, name, o) => {
-    const a = await resolveServiceArgs(type, name, serviceArgsDeps(o.json))
-    return services.servicesAdd(a.type, a.name, o)
+    const a = await resolveServiceArgs(type, name, serviceArgsDeps(o.json), o)
+    return services.servicesAdd(a.type, a.name, { ...o, image: a.image ?? o.image, port: a.port ?? o.port })
   }))
 svc.command('list').option('--json').option('--branch <branch>', 'branch (default: current)')
   .action(guard((o) => services.servicesList(o)))
