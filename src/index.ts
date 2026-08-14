@@ -127,8 +127,9 @@ svc.command('add [type] [name]').description('Provision a service on demand (ass
   .option('--port <n>', 'compute only: port the image listens on (default 8080)')
   .option('--always-on', 'compute only: create as always-on — never scales to zero (all plans; billing is actual usage either way)')
   .option('--volume <gi>', 'compute only: attach a persistent /data volume of this many whole Gi (also attachable later: `insta compute volume <name> --size <gi>`; any plan may attach at the default 1; larger sizes are paid and plan-capped). Volume services keep 1 machine and stop (cold wake) instead of suspend when idle')
+  .option('--json')
   .action(guard(async (type, name, o) => {
-    const a = await resolveServiceArgs(type, name, serviceArgsDeps())
+    const a = await resolveServiceArgs(type, name, serviceArgsDeps(o.json))
     return services.servicesAdd(a.type, a.name, o)
   }))
 svc.command('list').option('--json').option('--branch <branch>', 'branch (default: current)')

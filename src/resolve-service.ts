@@ -80,10 +80,11 @@ export async function promptServiceName(kind: ServiceKind): Promise<string> {
 }
 
 /** Prompts on a real terminal only — an agent's stdin is not one, and must never block. */
-export function serviceArgsDeps(): ServiceArgsDeps {
+export function serviceArgsDeps(json?: boolean): ServiceArgsDeps {
   return {
     selectType: promptServiceType,
     askName: promptServiceName,
-    tty: !!process.stdin.isTTY && !!process.stdout.isTTY,
+    // --json asked for parseable output, so a caller that happens to own a TTY still gets the error.
+    tty: !json && !!process.stdin.isTTY && !!process.stdout.isTTY,
   }
 }

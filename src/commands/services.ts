@@ -62,7 +62,7 @@ export function resolveComputeServiceId(services: Array<{ id: string; type: stri
 
 // ---- commands ----
 
-export type ServicesAddOpts = { branch?: string; public?: boolean; image?: string; port?: string; region?: string; alwaysOn?: boolean; volume?: string }
+export type ServicesAddOpts = { branch?: string; public?: boolean; image?: string; port?: string; region?: string; alwaysOn?: boolean; volume?: string; json?: boolean }
 
 // Map service-add options to the platform POST body. Pure, so it's unit-tested without a network
 // mock (mirrors deployRequestBody in deploy.ts). Validation (which options are valid for which
@@ -93,6 +93,7 @@ export async function servicesAdd(type: string, name: string, opts: ServicesAddO
   const branch = opts.branch ?? p.branch
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/services`, servicesAddRequestBody(type, name, branch, opts))
   if (handleApproval(res)) return
+  if (opts.json) return printJson(res.body.service)
   const svc = res.body.service
   const access = svc.type === 'storage' ? `  [${svc.public ? 'public' : 'private'}]` : ''
   const img = svc.image ? `  running ${svc.image}${svc.port ? `:${svc.port}` : ''}` : ''

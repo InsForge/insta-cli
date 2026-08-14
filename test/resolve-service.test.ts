@@ -8,6 +8,7 @@ import {
   SERVICE_KINDS,
   missingArgsMessage,
   resolveServiceArgs,
+  serviceArgsDeps,
   serviceKindLines,
   type ServiceArgsDeps,
 } from '../src/resolve-service.js'
@@ -58,6 +59,19 @@ test('no TTY with a type: asks for the missing half, not the whole list', () => 
 test('unknown type: passed through for assertType to report, prompts untouched', async () => {
   const r = await resolveServiceArgs('mysql', undefined, deps({ tty: false }))
   expect(r).toEqual({ type: 'mysql', name: '' })
+})
+
+// --json promises parseable stdout; a prompt would corrupt it and hang an agent that owns a TTY.
+test('--json opts out of the prompts even on a terminal', () => {
+  const io = [process.stdin, process.stdout] as Array<{ isTTY?: boolean }>
+  const saved = io.map((s) => s.isTTY)
+  for (const s of io) s.isTTY = true
+  try {
+    expect(serviceArgsDeps().tty).toBe(true)
+    expect(serviceArgsDeps(true).tty).toBe(false)
+  } finally {
+    io.forEach((s, i) => { s.isTTY = saved[i] })
+  }
 })
 
 test('kind lines stay one per type and mention what each is', () => {
