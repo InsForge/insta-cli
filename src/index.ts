@@ -19,6 +19,7 @@ import * as secretsCmd from './commands/secrets.js'
 import { deploy } from './commands/deploy.js'
 import * as computeCmd from './commands/compute.js'
 import * as dbCmd from './commands/db.js'
+import * as storageCmd from './commands/storage.js'
 import { manifest } from './commands/manifest.js'
 import * as govern from './commands/govern.js'
 import * as observe from './commands/observe.js'
@@ -212,6 +213,26 @@ db.command('volume').description("Show or grow a postgres service's provisioned 
   .option('--json').option('--branch <branch>', 'branch (default: current)').option('--group <g>', 'postgres service name (default: the sole/default one)')
   .action(guard((o) => dbCmd.dbVolume(o)))
 
+// ---- storage (bucket objects) ----
+const storage = program.command('storage').description("Browse, download, and delete a storage service's bucket objects")
+storage.command('list').description("List the bucket's objects. S3 filters by prefix only — there is no substring search")
+  .option('--prefix <p>', 'only keys starting with this prefix (applied server-side)')
+  .option('--cursor <c>', 'continue from the nextCursor a previous page printed')
+  .option('--limit <n>', 'page size, 1..1000 (default 100)')
+  .option('--service <name>', 'storage service (default: the sole one on the branch)')
+  .option('--branch <b>', 'branch (default: current)').option('--json')
+  .action(guard((o) => storageCmd.storageList(o)))
+storage.command('get <key>').description('Download one object to disk through a short-lived presigned URL (bytes come straight from the provider)')
+  .option('-o, --output <file>', "output file (default: the key's last segment)")
+  .option('--service <name>', 'storage service (default: the sole one on the branch)')
+  .option('--branch <b>', 'branch (default: current)')
+  .option('--json', 'print the presigned URL + expiry instead of downloading')
+  .action(guard((key, o) => storageCmd.storageGet(key, o)))
+storage.command('delete <key>').description('DELETES one object from the bucket immediately — no undo, and an already-gone key still reports success (gated: storage.delete)')
+  .option('--service <name>', 'storage service (default: the sole one on the branch)')
+  .option('--branch <b>', 'branch (default: current)').option('--json')
+  .action(guard((key, o) => storageCmd.storageDelete(key, o)))
+
 // ---- manifest ----
 program.command('manifest').description('Print an agent-legible view of the project environments').option('--json').action(guard((o) => manifest(o)))
 
@@ -257,7 +278,7 @@ ob.command('sync').description('Upload findings into the project timeline').acti
 // ---- policy ----
 const pol = program.command('policy').description('Governance policy')
 pol.command('get').option('--json').action(guard((o) => govern.policyGet(o)))
-pol.command('set <action> <decision>').description('action: secrets.read|secrets.write|deploy|project.delete|branch.delete|service.add|service.remove|service.scale|service.upgrade|service.setAccess; decision: allow|deny|approve').action(guard((a, d) => govern.policySet(a, d)))
+pol.command('set <action> <decision>').description('action: secrets.read|secrets.write|deploy|project.delete|branch.delete|service.add|service.remove|service.scale|service.upgrade|service.setAccess|storage.read|storage.write|storage.delete; decision: allow|deny|approve').action(guard((a, d) => govern.policySet(a, d)))
 
 // ---- self-update ----
 program.command('upgrade').description('Update the insta CLI to the latest release (binary or npm install)')
