@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  assertType, assertServiceName, parseCount, parseAccess, resolveServiceId, resolveComputeServiceId, SERVICE_TYPES,
+  assertType, assertServiceName, parseCount, parsePort, parseAccess, resolveServiceId, resolveComputeServiceId, SERVICE_TYPES,
   servicesAddRequestBody, servicesAdd, serviceListLine,
 } from '../src/commands/services.js'
 
@@ -28,6 +28,32 @@ describe('parseCount', () => {
     expect(() => parseCount('-2')).toThrow(/positive integer/)
     expect(() => parseCount('2.5')).toThrow(/positive integer/)
     expect(() => parseCount('abc')).toThrow(/positive integer/)
+  })
+})
+
+describe('parsePort', () => {
+  it('parses ports in range', () => {
+    expect(parsePort('8080')).toBe(8080)
+    expect(parsePort('1')).toBe(1)
+    expect(parsePort('65535')).toBe(65535)
+  })
+  // Junk used to reach the API as NaN, which serializes to null.
+  it('rejects out-of-range and non-integer ports', () => {
+    expect(() => parsePort('0')).toThrow(/between 1 and 65535/)
+    expect(() => parsePort('65536')).toThrow(/between 1 and 65535/)
+    expect(() => parsePort('8080.5')).toThrow(/between 1 and 65535/)
+    expect(() => parsePort('abc')).toThrow(/between 1 and 65535/)
+  })
+  // Number() would read these as 8080 and 1000 — a port in hex is a typo, not a port.
+  it('rejects non-decimal spellings Number() would have accepted', () => {
+    expect(() => parsePort('0x1f90')).toThrow(/between 1 and 65535/)
+    expect(() => parsePort('1e3')).toThrow(/between 1 and 65535/)
+    expect(() => parsePort('0o17620')).toThrow(/between 1 and 65535/)
+    expect(() => parsePort('')).toThrow(/between 1 and 65535/)
+  })
+  // Surrounding whitespace is shell noise, not a typo — parseVolumeGib tolerates it too.
+  it('tolerates surrounding whitespace', () => {
+    expect(parsePort('  8080  ')).toBe(8080)
   })
 })
 

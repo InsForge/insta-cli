@@ -13,6 +13,7 @@ import * as org from './commands/org.js'
 import * as project from './commands/project.js'
 import * as branch from './commands/branch.js'
 import * as services from './commands/services.js'
+import { resolveServiceArgs, serviceArgsDeps } from './resolve-service.js'
 import * as regions from './commands/regions.js'
 import * as secretsCmd from './commands/secrets.js'
 import { deploy } from './commands/deploy.js'
@@ -116,7 +117,10 @@ br.command('merge <source>').description('Merge a branch service set into anothe
 
 // ---- services (opt-in postgres/storage/compute) ----
 const svc = program.command('services').alias('svc').description('Manage project services (postgres|storage|compute)')
-svc.command('add <type> <name>').description('Provision a service on demand (assigns a default domain for postgres/compute)')
+// [type] [name] are optional so the command can answer "what can I add?" — a terminal is walked
+// through the dashboard's Add Service kinds, anything else gets that list back as an error
+// (resolve-service.ts). Picking Docker Image also fills in --image/--port from the answers.
+svc.command('add [type] [name]').description('Provision a service on demand (assigns a default domain for postgres/compute); with no type/name, a terminal picks from the service kinds')
   .option('--branch <branch>', 'target branch (default: current)')
   .option('--region <region>', 'region for postgres/compute, e.g. us-east (see `insta regions`)')
   .option('--public', 'storage only: serve the bucket with anonymous public-read (default private)')
@@ -124,7 +128,11 @@ svc.command('add <type> <name>').description('Provision a service on demand (ass
   .option('--port <n>', 'compute only: port the image listens on (default 8080)')
   .option('--always-on', 'compute only: create as always-on — never scales to zero (all plans; billing is actual usage either way)')
   .option('--volume <gi>', 'compute only: attach a persistent /data volume of this many whole Gi (also attachable later: `insta compute volume <name> --size <gi>`; any plan may attach at the default 1; larger sizes are paid and plan-capped). Volume services keep 1 machine and stop (cold wake) instead of suspend when idle')
-  .action(guard((type, name, o) => services.servicesAdd(type, name, o)))
+  .option('--json')
+  .action(guard(async (type, name, o) => {
+    const a = await resolveServiceArgs(type, name, serviceArgsDeps(o.json), o)
+    return services.servicesAdd(a.type, a.name, { ...o, image: a.image ?? o.image, port: a.port ?? o.port })
+  }))
 svc.command('list').option('--json').option('--branch <branch>', 'branch (default: current)')
   .action(guard((o) => services.servicesList(o)))
 svc.command('remove <type> <name>').description('Remove a service and destroy its resources')
