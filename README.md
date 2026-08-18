@@ -184,6 +184,7 @@ build never reaches a production installer.
 | `insta approvals` | `list` · `approve` · `deny` |
 | `insta policy` | `get` · `set <action> <decision>` |
 | `insta observe` | `install` · `uninstall` · `report` · `sync` — local credential audit |
+| `insta feedback` | Report an InstaCloud-side hurdle (bug / feature-request / friction) to the team — never for the app you are building; works logged-out |
 | `insta upgrade` · `autoupdate` | Update the CLI; show or set auto-update |
 
 ## Configuration
