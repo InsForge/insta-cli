@@ -116,14 +116,14 @@ br.command('delete <name>').action(guard((name) => branch.branchDelete(name)))
 br.command('merge <source>').description('Merge a branch service set into another (structural, no data)')
   .option('--into <branch>', 'target branch (default: current)').action(guard((source, o) => branch.branchMerge(source, o)))
 
-// ---- services (opt-in postgres/storage/compute) ----
-const svc = program.command('services').alias('svc').description('Manage project services (postgres|storage|compute)')
+// ---- services (opt-in postgres/storage/compute/redis) ----
+const svc = program.command('services').alias('svc').description('Manage project services (postgres|storage|compute|redis)')
 // [type] [name] are optional so the command can answer "what can I add?" — a terminal is walked
 // through the dashboard's Add Service kinds, anything else gets that list back as an error
 // (resolve-service.ts). Picking Docker Image also fills in --image/--port from the answers.
 svc.command('add [type] [name]').description('Provision a service on demand (assigns a default domain for postgres/compute); with no type/name, a terminal picks from the service kinds')
   .option('--branch <branch>', 'target branch (default: current)')
-  .option('--region <region>', 'region for postgres/compute, e.g. us-east (see `insta regions`)')
+  .option('--region <region>', 'region for postgres/compute/redis, e.g. us-east (see `insta regions`)')
   .option('--public', 'storage only: serve the bucket with anonymous public-read (default private)')
   .option('--image <url>', 'compute only: run this container image at creation')
   .option('--port <n>', 'compute only: port the image listens on (default 8080)')
