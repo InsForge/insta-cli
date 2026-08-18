@@ -140,7 +140,11 @@ export async function buildPayload(
     try {
       // detail is capped at 4000 chars — a file far beyond that is a mistake (wrong path, a log
       // archive, a binary), so refuse before allocating it rather than truncating garbage.
-      const size = statSync(opts.file).size
+      // Regular files only: a FIFO/device node (e.g. /dev/zero) stats as size 0, sails past the
+      // byte ceiling, and then readFileSync reads unbounded.
+      const stat = statSync(opts.file)
+      if (!stat.isFile()) throw new Error(`--file ${opts.file} is not a regular file`)
+      const size = stat.size
       if (size > MAX_FILE_BYTES) {
         throw new Error(`--file ${opts.file} is ${size} bytes — max ${MAX_FILE_BYTES} (detail is capped at ${LIMITS.detail} chars; trim the file first)`)
       }
