@@ -35,7 +35,7 @@ test('every service type is reachable from some kind', () => {
 
 // The dashboard's Add Service lists Docker Image beside Empty Service, not under it.
 test('Docker Image is its own kind, at the same level as Empty Service', () => {
-  expect(SERVICE_KINDS.map((k) => k.label)).toEqual(['Docker Image', 'Postgres', 'Redis', 'Storage', 'Empty Service'])
+  expect(SERVICE_KINDS.map((k) => k.label)).toEqual(['Docker Image', 'Postgres', 'Redis', 'MySQL', 'MongoDB', 'Storage', 'Empty Service'])
   expect(kind('image').needsImage).toBe(true)
   expect(kind('image').type).toBe('compute')
   expect(kind('compute').needsImage).toBeUndefined()
@@ -45,6 +45,8 @@ test('Docker Image is its own kind, at the same level as Empty Service', () => {
 test('default names match the Add Service placeholders', () => {
   expect(kind('postgres').defaultName).toBe('main-db')
   expect(kind('redis').defaultName).toBe('cache')
+  expect(kind('mysql').defaultName).toBe('mysql-db')
+  expect(kind('mongodb').defaultName).toBe('mongo-db')
   expect(kind('storage').defaultName).toBe('assets')
   expect(kind('compute').defaultName).toBe('compute')
   expect(kind('image').defaultName).toBeUndefined()
@@ -97,6 +99,8 @@ test('no TTY: throws, and the message lists every kind with its command', async 
   for (const k of SERVICE_KINDS) expect(msg).toContain(k.label)
   expect(msg).toContain('insta services add postgres main-db')
   expect(msg).toContain('insta services add redis cache')
+  expect(msg).toContain('insta services add mysql mysql-db')
+  expect(msg).toContain('insta services add mongodb mongo-db')
   expect(msg).toContain('--image <ref>')
 })
 
@@ -105,8 +109,8 @@ test('no TTY with a type: asks for the missing half, not the whole list', () => 
 })
 
 test('unknown type: passed through for assertType to report, prompts untouched', async () => {
-  const r = await resolveServiceArgs('mysql', undefined, deps({ tty: false }))
-  expect(r).toEqual({ type: 'mysql', name: '' })
+  const r = await resolveServiceArgs('lambda', undefined, deps({ tty: false }))
+  expect(r).toEqual({ type: 'lambda', name: '' })
 })
 
 test('kind lines stay one per kind and carry a runnable command', () => {
@@ -114,6 +118,8 @@ test('kind lines stay one per kind and carry a runnable command', () => {
   expect(lines).toHaveLength(SERVICE_KINDS.length)
   expect(lines.join('\n')).toContain('insta services add storage assets')
   expect(lines.join('\n')).toContain('insta services add redis cache')
+  expect(lines.join('\n')).toContain('insta services add mysql mysql-db')
+  expect(lines.join('\n')).toContain('insta services add mongodb mongo-db')
 })
 
 // Same rules as the dashboard's helpers, so a ref names the service identically in both.

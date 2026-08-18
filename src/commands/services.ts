@@ -1,8 +1,8 @@
-// `insta services` — manage a project's opt-in services (postgres | storage | compute | redis).
+// `insta services` — manage a project's opt-in services (postgres | storage | compute | redis | mysql | mongodb).
 import { ApiClient, requireProject } from '../api.js'
 import { info, printJson, handleApproval, renderNextActions } from '../util.js'
 
-export const SERVICE_TYPES = ['postgres', 'storage', 'compute', 'redis'] as const
+export const SERVICE_TYPES = ['postgres', 'storage', 'compute', 'redis', 'mysql', 'mongodb'] as const
 export type ServiceType = (typeof SERVICE_TYPES)[number]
 const SERVICE_NAME_RE = /^[a-z0-9][a-z0-9-]{0,38}$/
 
@@ -75,6 +75,10 @@ export function resolveComputeServiceId(services: Array<{ id: string; type: stri
   return resolveSoleService(services, 'compute', name).id
 }
 
+function defaultDatabasePort(type: string): number {
+  return type === 'mysql' ? 3306 : type === 'mongodb' ? 27017 : 6379
+}
+
 // ---- commands ----
 
 export type ServicesAddOpts = { branch?: string; public?: boolean; image?: string; port?: string; region?: string; alwaysOn?: boolean; volume?: string; json?: boolean }
@@ -125,7 +129,7 @@ export async function servicesAdd(type: string, name: string, opts: ServicesAddO
 export function serviceListLine(s: { type: string; name: string; status: string; id: string; domain?: string; machine_count?: number; public?: boolean; image?: string; port?: number; volume_gib?: number | null }): string {
   const extra = s.type === 'compute'
     ? `  x${s.machine_count}${s.volume_gib ? `  vol ${s.volume_gib}Gi` : ''}${s.image ? `  running ${s.image}${s.port ? `:${s.port}` : ''}` : ''}`
-    : s.type === 'redis' ? `  tcp/${s.port ?? 6379}${s.volume_gib ? `  vol ${s.volume_gib}Gi` : ''}`
+    : ['redis', 'mysql', 'mongodb'].includes(s.type) ? `  tcp/${s.port ?? defaultDatabasePort(s.type)}${s.volume_gib ? `  vol ${s.volume_gib}Gi` : ''}`
       : s.type === 'storage' ? `  ${s.public ? 'public' : 'private'}` : ''
   return `${s.type}/${s.name}  [${s.status}]${extra}${s.domain ? `  ${s.domain}` : ''}  ${s.id}`
 }
@@ -136,7 +140,7 @@ export async function servicesList(opts: { json?: boolean; branch?: string }): P
   const branch = opts.branch ?? p.branch
   const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
   if (opts.json) return printJson(services)
-  if (!services.length) return info(`(no services on ${branch ?? 'default'} — add one with \`insta services add <postgres|storage|compute|redis> <name>\`)`)
+  if (!services.length) return info(`(no services on ${branch ?? 'default'} — add one with \`insta services add <postgres|storage|compute|redis|mysql|mongodb> <name>\`)`)
   for (const s of services) info(serviceListLine(s))
 }
 

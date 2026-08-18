@@ -1,5 +1,5 @@
 // `insta services add` with no type (or no name): the kinds are otherwise only discoverable by
-// guessing wrong and reading `type must be postgres|storage|compute|redis`, so missing arguments answer
+// guessing wrong and reading `type must be postgres|storage|compute|redis|mysql|mongodb`, so missing arguments answer
 // "what can I add?" instead. The list mirrors the dashboard's Add Service menu (frontend
 // `add-service-button.tsx`) — Docker Image sits BESIDE Empty Service, not under it, because
 // picking an image is a different intent rather than a compute flag. An agent gets the same list
@@ -23,6 +23,8 @@ export const SERVICE_KINDS: readonly ServiceKind[] = [
   { id: 'image', label: 'Docker Image', type: 'compute', hint: 'run an existing container image', needsImage: true },
   { id: 'postgres', label: 'Postgres', type: 'postgres', hint: 'relational DB, usable as soon as it is added', defaultName: 'main-db' },
   { id: 'redis', label: 'Redis', type: 'redis', hint: 'private Redis-compatible cache', defaultName: 'cache' },
+  { id: 'mysql', label: 'MySQL', type: 'mysql', hint: 'private MySQL database', defaultName: 'mysql-db' },
+  { id: 'mongodb', label: 'MongoDB', type: 'mongodb', hint: 'private MongoDB database', defaultName: 'mongo-db' },
   { id: 'storage', label: 'Storage', type: 'storage', hint: 'S3-compatible bucket, private by default', defaultName: 'assets' },
   { id: 'compute', label: 'Empty Service', type: 'compute', hint: 'an app to deploy code to (empty until `insta deploy`)', defaultName: 'compute' },
 ]
