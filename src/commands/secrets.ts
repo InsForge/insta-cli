@@ -94,6 +94,58 @@ export async function secretsUnset(name: string, opts: { branch?: string }): Pro
   info(`unset ${name} (${opts.branch ? `branch ${opts.branch}` : 'project-wide'})`)
 }
 
+export async function secretsBind(envName: string, source: string, opts: { branch?: string; to?: string; sourceName?: string; json?: boolean }): Promise<void> {
+  if (!opts.to) die('--to <compute/name> is required')
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const branch = opts.branch ?? p.branch
+  const res = await api.rawRequest('PUT', `/projects/${p.projectId}/secret-bindings/${encodeURIComponent(envName)}`, {
+    branch,
+    target: opts.to,
+    source,
+    ...(opts.sourceName ? { sourceName: opts.sourceName } : {}),
+  })
+  if (handleApproval(res)) return
+  if (opts.json) return printJson({ ok: true })
+  info(`bound ${envName} on ${opts.to} to ${source}${opts.sourceName ? `.${opts.sourceName}` : ''} (branch ${branch})`)
+}
+
+export async function secretsUnbind(envName: string, opts: { branch?: string; from?: string; json?: boolean }): Promise<void> {
+  if (!opts.from) die('--from <compute/name> is required')
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const branch = opts.branch ?? p.branch
+  const res = await api.rawRequest('DELETE', `/projects/${p.projectId}/secret-bindings/${encodeURIComponent(envName)}?branch=${encodeURIComponent(branch)}&target=${encodeURIComponent(opts.from)}`)
+  if (handleApproval(res)) return
+  if (opts.json) return printJson({ ok: true })
+  info(`unbound ${envName} from ${opts.from} (branch ${branch})`)
+}
+
+export async function secretsBindings(opts: { branch?: string; target?: string; json?: boolean }): Promise<void> {
+  if (!opts.target) die('--target <compute/name> is required')
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const branch = opts.branch ?? p.branch
+  const res = await api.rawRequest('GET', `/projects/${p.projectId}/secret-bindings?branch=${encodeURIComponent(branch)}&target=${encodeURIComponent(opts.target)}`)
+  if (handleApproval(res)) return
+  const bindings = res.body.bindings ?? []
+  if (opts.json) return printJson(bindings)
+  if (!bindings.length) return info(`(no secret bindings for ${opts.target} on ${branch})`)
+  for (const b of bindings) info(`${b.envName} <- ${b.source.type}/${b.source.name}.${b.sourceName}`)
+}
+
+export async function secretsSources(opts: { branch?: string; json?: boolean }): Promise<void> {
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const branch = opts.branch ?? p.branch
+  const res = await api.rawRequest('GET', `/projects/${p.projectId}/secret-sources?branch=${encodeURIComponent(branch)}`)
+  if (handleApproval(res)) return
+  const sources = res.body.sources ?? []
+  if (opts.json) return printJson(sources)
+  if (!sources.length) return info(`(no credential sources on ${branch})`)
+  for (const s of sources) info(`${s.service.type}/${s.service.name}: ${s.secrets.join(', ')}`)
+}
+
 /** Gitignore the env file we just wrote (git repos only; idempotent). Returns true if added. */
 export function ensureIgnored(cwd: string, name: string): boolean {
   if (!existsSync(join(cwd, '.git'))) return false
