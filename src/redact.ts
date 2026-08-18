@@ -29,6 +29,10 @@ const PATTERNS: Array<[RegExp, string]> = [
 ]
 
 // Public IPv4 only — private/loopback ranges are kept for their debug value.
+// Known asymmetry with the IPv6/phone exemption above: a 4-part version or build string whose
+// octets all fit 0–255 (e.g. "25.2.0.100") gets over-scrubbed. Accepted deliberately — dotted
+// quads in error text are overwhelmingly real addresses, an over-scrub is recoverable noise,
+// and an under-scrub is a leak; anchoring on surrounding context would trade that for misses.
 const IPV4 = /\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b/g
 
 function isPrivateIp(a: number, b: number): boolean {

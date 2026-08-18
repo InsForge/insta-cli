@@ -7,7 +7,7 @@
 // ingest service (InsForge/insta-feedback repo) on a postgres + compute pair. It is NOT the
 // control-plane API on purpose — feedback must work logged-out, unlinked, and from insta-oss,
 // and a control-plane outage is exactly when we most want reports to still arrive.
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import os from 'node:os'
 import * as clack from '@clack/prompts'
 import { readGlobal, readProject } from '../config.js'
@@ -42,6 +42,7 @@ const FEEDBACK_ENDPOINT =
   'https://insta-main-api-cdad9b6c.compute.instacloud.com/v1/feedback'
 const FEEDBACK_INGEST_TOKEN = process.env.INSTA_FEEDBACK_TOKEN || 'insta-feedback-public-v1'
 const FEEDBACK_TIMEOUT_MS = 10_000
+const MAX_FILE_BYTES = 256 * 1024
 
 export type FeedbackOpts = {
   type?: string
@@ -137,9 +138,17 @@ export async function buildPayload(
   let detail = opts.detail
   if (!detail && opts.file) {
     try {
+      // detail is capped at 4000 chars — a file far beyond that is a mistake (wrong path, a log
+      // archive, a binary), so refuse before allocating it rather than truncating garbage.
+      const size = statSync(opts.file).size
+      if (size > MAX_FILE_BYTES) {
+        throw new Error(`--file ${opts.file} is ${size} bytes — max ${MAX_FILE_BYTES} (detail is capped at ${LIMITS.detail} chars; trim the file first)`)
+      }
       detail = readFileSync(opts.file, 'utf8')
+      if (detail.includes('\0')) throw new Error(`--file ${opts.file} looks binary — feedback detail must be text`)
     } catch (e) {
-      throw new Error(`--file ${opts.file}: ${e instanceof Error ? e.message : String(e)}`)
+      const msg = e instanceof Error ? e.message : String(e)
+      throw new Error(msg.startsWith('--file') ? msg : `--file ${opts.file}: ${msg}`)
     }
   }
   const title = clean(opts.title, LIMITS.title)
@@ -211,9 +220,19 @@ export async function feedback(opts: FeedbackOpts, deps: FeedbackDeps = {}): Pro
   const missingRequired = !opts.type || !opts.component || !opts.title || (!opts.detail && !opts.file)
   if (missingRequired && interactive) await promptMissing(opts)
 
-  // Throws on bad/missing input → guard() → exit 1: an agent CAN fix its flags, so that error
-  // must be loud and self-teaching (it lists the exact enum values).
-  const payload = await buildPayload(opts, { cliVersion: deps.cliVersion ?? resolveCliVersion() })
+  // Bad/missing input exits 1 either way — an agent CAN fix its flags, so the error must be loud
+  // and self-teaching (it lists the exact enum values). But it must arrive on the channel the
+  // caller chose: --json gets a machine-readable object on stdout (uniform with the success and
+  // transport-failure shapes) instead of guard()'s plaintext stderr line.
+  let payload: Record<string, unknown>
+  try {
+    payload = await buildPayload(opts, { cliVersion: deps.cliVersion ?? resolveCliVersion() })
+  } catch (e) {
+    if (!opts.json) throw e
+    printJson({ status: 'error', submitted: false, error: e instanceof Error ? e.message : String(e) })
+    process.exitCode = 1
+    return
+  }
 
   const result = await submit(payload, deps.fetchImpl ?? fetch)
 
