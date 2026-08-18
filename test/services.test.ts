@@ -183,4 +183,12 @@ describe('serviceListLine', () => {
     const line = serviceListLine({ type: 'postgres', name: 'db', status: 'active', id: 'svc_3', domain: 'db.example.com' })
     expect(line).toBe('postgres/db  [active]  db.example.com  svc_3')
   })
+  it.each([
+    ['redis', 'cache', 6379],
+    ['mysql', 'mysql-db', 3306],
+    ['mongodb', 'mongo-db', 27017],
+  ])('renders a managed %s row with its default TCP port', (type, name, port) => {
+    const line = serviceListLine({ type, name, status: 'active', id: 'svc_4', volume_gib: 1 })
+    expect(line).toBe(`${type}/${name}  [active]  tcp/${port}  vol 1Gi  svc_4`)
+  })
 })
