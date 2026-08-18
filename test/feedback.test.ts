@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
 import { buildPayload, feedback, submit } from '../src/commands/feedback.js'
 import { clean, redactSensitive, truncateMiddle } from '../src/redact.js'
 
@@ -69,6 +72,26 @@ describe('buildPayload', () => {
     expect(p.error).toContain('insta_storage_download_url')
   })
 
+  it('--file reads text, rejects oversized and binary files', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'insta-feedback-'))
+    const textFile = join(dir, 'detail.txt')
+    writeFileSync(textFile, 'deploy failed with exit 1')
+    const p = await buildPayload({ ...valid, detail: undefined, file: textFile }, { cliVersion: 'x' })
+    expect(p.detail).toBe('deploy failed with exit 1')
+
+    const bigFile = join(dir, 'big.log')
+    writeFileSync(bigFile, 'x'.repeat(300 * 1024))
+    await expect(buildPayload({ ...valid, detail: undefined, file: bigFile }, { cliVersion: 'x' })).rejects.toThrow(
+      /max 262144.*trim the file/,
+    )
+
+    const binFile = join(dir, 'blob.bin')
+    writeFileSync(binFile, Buffer.from([0x50, 0x4b, 0x00, 0x01, 0x02]))
+    await expect(buildPayload({ ...valid, detail: undefined, file: binFile }, { cliVersion: 'x' })).rejects.toThrow(
+      /looks binary/,
+    )
+  })
+
   it('caps over-long fields with middle truncation', async () => {
     const p = await buildPayload({ ...valid, detail: 'a'.repeat(3000) + 'z'.repeat(3000) }, { cliVersion: 'x' })
     const detail = p.detail as string
@@ -114,10 +137,19 @@ describe('submit', () => {
 })
 
 describe('feedback command', () => {
+  afterEach(() => {
+    process.exitCode = 0
+  })
+
   it('non-interactive + missing required flags throws instead of prompting (agents must never hang)', async () => {
     await expect(feedback({ title: 'x' }, { interactive: false, cliVersion: 'x' })).rejects.toThrow(
       /--type must be one of/,
     )
+  })
+
+  it('--json validation errors stay machine-readable: JSON on stdout + exit code 1, no throw', async () => {
+    await expect(feedback({ title: 'x', json: true }, { interactive: false, cliVersion: 'x' })).resolves.toBeUndefined()
+    expect(process.exitCode).toBe(1)
   })
 
   it('a failed submission does not throw — feedback must never fail the main task', async () => {
