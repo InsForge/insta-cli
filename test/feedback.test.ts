@@ -90,6 +90,10 @@ describe('buildPayload', () => {
     await expect(buildPayload({ ...valid, detail: undefined, file: binFile }, { cliVersion: 'x' })).rejects.toThrow(
       /looks binary/,
     )
+
+    await expect(buildPayload({ ...valid, detail: undefined, file: dir }, { cliVersion: 'x' })).rejects.toThrow(
+      /not a regular file/,
+    )
   })
 
   it('caps over-long fields with middle truncation', async () => {
