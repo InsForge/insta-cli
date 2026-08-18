@@ -35,7 +35,7 @@ test('every service type is reachable from some kind', () => {
 
 // The dashboard's Add Service lists Docker Image beside Empty Service, not under it.
 test('Docker Image is its own kind, at the same level as Empty Service', () => {
-  expect(SERVICE_KINDS.map((k) => k.label)).toEqual(['Docker Image', 'Postgres', 'Storage', 'Empty Service'])
+  expect(SERVICE_KINDS.map((k) => k.label)).toEqual(['Docker Image', 'Postgres', 'Redis', 'Storage', 'Empty Service'])
   expect(kind('image').needsImage).toBe(true)
   expect(kind('image').type).toBe('compute')
   expect(kind('compute').needsImage).toBeUndefined()
@@ -44,6 +44,7 @@ test('Docker Image is its own kind, at the same level as Empty Service', () => {
 // Default names are the dashboard dialog's placeholders — they must not drift apart.
 test('default names match the Add Service placeholders', () => {
   expect(kind('postgres').defaultName).toBe('main-db')
+  expect(kind('redis').defaultName).toBe('cache')
   expect(kind('storage').defaultName).toBe('assets')
   expect(kind('compute').defaultName).toBe('compute')
   expect(kind('image').defaultName).toBeUndefined()
@@ -95,6 +96,7 @@ test('no TTY: throws, and the message lists every kind with its command', async 
   const msg = missingArgsMessage()
   for (const k of SERVICE_KINDS) expect(msg).toContain(k.label)
   expect(msg).toContain('insta services add postgres main-db')
+  expect(msg).toContain('insta services add redis cache')
   expect(msg).toContain('--image <ref>')
 })
 
@@ -111,6 +113,7 @@ test('kind lines stay one per kind and carry a runnable command', () => {
   const lines = serviceKindLines()
   expect(lines).toHaveLength(SERVICE_KINDS.length)
   expect(lines.join('\n')).toContain('insta services add storage assets')
+  expect(lines.join('\n')).toContain('insta services add redis cache')
 })
 
 // Same rules as the dashboard's helpers, so a ref names the service identically in both.
