@@ -39,7 +39,7 @@ export const LIMITS = {
 // emergency rotation.
 const FEEDBACK_ENDPOINT =
   process.env.INSTA_FEEDBACK_URL ||
-  'https://insta-main-api-cdad9b6c.compute.instacloud.com/v1/feedback'
+  'https://feedback.instacloud.com/v1/feedback'
 const FEEDBACK_INGEST_TOKEN = process.env.INSTA_FEEDBACK_TOKEN || 'insta-feedback-public-v1'
 const FEEDBACK_TIMEOUT_MS = 10_000
 const MAX_FILE_BYTES = 256 * 1024
