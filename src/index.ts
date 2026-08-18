@@ -26,6 +26,7 @@ import * as observe from './commands/observe.js'
 import * as obs from './commands/metrics.js'
 import { billing, billingUpgrade, billingPortal } from './commands/billing.js'
 import * as selfUpdate from './commands/upgrade.js'
+import * as feedbackCmd from './commands/feedback.js'
 
 function onError(e: unknown): never {
   if (e instanceof ApiError) die(`${e.message} (HTTP ${e.status})`)
@@ -279,6 +280,24 @@ ob.command('sync').description('Upload findings into the project timeline').acti
 const pol = program.command('policy').description('Governance policy')
 pol.command('get').option('--json').action(guard((o) => govern.policyGet(o)))
 pol.command('set <action> <decision>').description('action: secrets.read|secrets.write|deploy|project.delete|branch.delete|service.add|service.remove|service.scale|service.upgrade|service.setAccess|storage.read|storage.write|storage.delete; decision: allow|deny|approve').action(guard((a, d) => govern.policySet(a, d)))
+
+// ---- feedback (agent + human hurdle reports → the InstaCloud team) ----
+program.command('feedback')
+  .description('Report an InstaCloud-side hurdle (bug / missing feature / friction) to the InstaCloud team — about the insta toolkit itself, NEVER about the app you are building. Works logged-out and unlinked.')
+  .option('--type <type>', `what kind of hurdle: ${feedbackCmd.TYPES.join(' | ')}`)
+  .option('--component <component>', `which part of the toolkit: ${feedbackCmd.COMPONENTS.join(' | ')}`)
+  .option('--title <title>', 'one-line summary (≤200 chars)')
+  .option('--detail <text>', 'what happened vs what you expected (≤4000 chars)')
+  .option('--file <path>', 'read the detail from a file instead of --detail')
+  .option('--area <area>', 'product area, free text: deploy, branch, secrets, db, storage, compute, governance, billing, …')
+  .option('--command <cmd>', 'the insta command that hit the issue')
+  .option('--error <text>', 'error output (redacted + truncated locally before sending)')
+  .option('--expected <text>', 'what the docs/skill said should happen')
+  .option('--workaround <text>', 'what you did instead, if anything worked')
+  .option('--doc <ref>', 'doc or skill file that led you here (for stale-instruction reports)')
+  .option('--severity <severity>', `${feedbackCmd.SEVERITIES.join(' | ')} (default: minor)`)
+  .option('--json')
+  .action(guard((o) => feedbackCmd.feedback(o)))
 
 // ---- self-update ----
 program.command('upgrade').description('Update the insta CLI to the latest release (binary or npm install)')
