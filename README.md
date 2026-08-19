@@ -28,9 +28,9 @@ npm install -g insta
 For coding agents. Installs the CLI, the `insta` skill for every agent on the machine, and
 registers the MCP server — one command for macOS, Linux, WSL, and native Windows shells
 (PowerShell/cmd). Needs Node 18+ with a writable npm global prefix (a Node version manager
-qualifies; if the global install can't write, setup continues and prints the
-`npm install -g insta` fallback to run yourself). E2e-validated on macOS/Linux; the Windows
-spawn paths are unit-tested:
+qualifies; if the global install can't write, setup continues and prints the exact
+version-pinned `npm install -g` fallback to run yourself). E2e-validated on macOS/Linux; the
+Windows spawn paths are unit-tested:
 
 ```bash
 npx -y insta setup agent

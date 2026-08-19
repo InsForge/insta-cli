@@ -103,6 +103,27 @@ const isRunnableFile = (p: string, win: boolean): boolean => {
   } catch { return false }
 }
 
+/** Resolve a bare command name to its absolute PATH location (PATHEXT-aware on Windows).
+ *  cmd.exe searches the CURRENT DIRECTORY before PATH for bare names, so handing it a bare
+ *  `claude` would let a claude.cmd planted in the project directory shadow the real CLI —
+ *  the cmd.exe wrapper below only ever passes absolute paths. */
+export function whichOnPath(
+  bin: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  const win = platform === 'win32'
+  const exts = win ? [...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';'), ''] : ['']
+  for (const dir of (env.PATH ?? '').split(win ? ';' : ':')) {
+    if (!dir) continue
+    for (const ext of exts) {
+      const p = join(dir, bin + ext)
+      if (isRunnableFile(p, win)) return p
+    }
+  }
+  return null
+}
+
 export function findDurableOnPath(
   bin: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -173,6 +194,7 @@ export function resolveSpawnable(
   npmExecpath = process.env.npm_execpath,
   execPath = process.execPath,
   platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
 ): { cmd: string; args: string[] } {
   if (cmd !== 'npm' && cmd !== 'npx') {
     // Other CLIs we shell out to (claude) are ALSO .cmd shims on Windows when npm-installed.
@@ -180,6 +202,9 @@ export function resolveSpawnable(
     // documented way to run .cmd files). Guards, in order:
     // - BARE names only: an absolute path or anything .exe (node.exe from a resolved npm/npx
     //   invocation passing back through here) is directly spawnable and must NOT see cmd.exe.
+    // - The name is resolved to its ABSOLUTE PATH location first: cmd.exe searches the current
+    //   directory before PATH, so a bare name would let a shim planted in the project dir
+    //   shadow the real CLI. No PATH hit → pass through (spawn fails; callers degrade).
     // - No manual quoting: libuv already wraps spaced args when building the child command
     //   line — pre-quoting would be quoted AGAIN and arrive as literal quote characters.
     // - That leaves cmd.exe metacharacters unprotectable, so an arg carrying one (e.g. a
@@ -188,7 +213,8 @@ export function resolveSpawnable(
     //   fallback). Never hand metacharacters to a shell.
     const bareShim = !/[\\/]/.test(cmd) && !/\.exe$/i.test(cmd)
     if (platform === 'win32' && bareShim && !args.some((a) => /[&|<>^%"]/.test(a))) {
-      return { cmd: 'cmd.exe', args: ['/d', '/s', '/c', cmd, ...args] }
+      const abs = whichOnPath(cmd, env, platform)
+      if (abs) return { cmd: 'cmd.exe', args: ['/d', '/s', '/c', abs, ...args] }
     }
     return { cmd, args }
   }

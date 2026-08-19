@@ -138,14 +138,23 @@ test('resolveSpawnable re-enters npm/npx as node scripts so Windows .cmd shims a
   expect(resolveSpawnable('npx', ['skills', 'add'], '', winNode, 'win32'))
     .toEqual({ cmd: winNode, args: [winNpx, 'skills', 'add'] })
 
-  // Non-npm commands on Windows (claude is an npm-installed .cmd shim too) go through cmd.exe.
-  // Args stay UNquoted here: libuv quotes spaced args when building the child command line, so
+  // Non-npm commands on Windows (claude is an npm-installed .cmd shim too) go through cmd.exe,
+  // resolved to the shim's ABSOLUTE PATH first — cmd.exe searches the current directory before
+  // PATH, so a bare name would let a claude.cmd planted in the project dir shadow the real CLI.
+  // Args stay UNquoted: libuv quotes spaced args when building the child command line, so
   // pre-quoting would double up and deliver literal quote characters to the target.
-  expect(resolveSpawnable('claude', ['mcp', 'add', '--header', 'Authorization: Bearer x'], npmCli, winNode, 'win32'))
-    .toEqual({ cmd: 'cmd.exe', args: ['/d', '/s', '/c', 'claude', 'mcp', 'add', '--header', 'Authorization: Bearer x'] })
+  const shimBin = mkdtempSync(join(tmpdir(), 'insta-shim-'))
+  const claudeShim = join(shimBin, 'claude.CMD')
+  writeFileSync(claudeShim, '@echo off\n')
+  const winEnv = { PATH: shimBin, PATHEXT: '.COM;.EXE;.BAT;.CMD' }
+  expect(resolveSpawnable('claude', ['mcp', 'add', '--header', 'Authorization: Bearer x'], npmCli, winNode, 'win32', winEnv))
+    .toEqual({ cmd: 'cmd.exe', args: ['/d', '/s', '/c', claudeShim, 'mcp', 'add', '--header', 'Authorization: Bearer x'] })
+  // Not on PATH → passthrough; the bare spawn fails and the probe treats it as not-installed.
+  expect(resolveSpawnable('claude', ['--version'], npmCli, winNode, 'win32', { PATH: '' }))
+    .toEqual({ cmd: 'claude', args: ['--version'] })
   // cmd.exe metacharacters can't be safely quoted through the wrapper (libuv re-quotes) —
   // such args skip it and the callers' best-effort degradation handles the failed bare spawn.
-  expect(resolveSpawnable('claude', ['mcp', 'add', 'x', 'https://mcp.example.com/mcp?a=1&b=2'], npmCli, winNode, 'win32'))
+  expect(resolveSpawnable('claude', ['mcp', 'add', 'x', 'https://mcp.example.com/mcp?a=1&b=2'], npmCli, winNode, 'win32', winEnv))
     .toEqual({ cmd: 'claude', args: ['mcp', 'add', 'x', 'https://mcp.example.com/mcp?a=1&b=2'] })
   // On POSIX, non-npm commands and unresolvable environments pass through untouched.
   expect(resolveSpawnable('claude', ['--version'], npmCli, '/fake/bin/node', 'linux'))
