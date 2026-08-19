@@ -199,7 +199,17 @@ export function resolveSpawnable(
   execPath = process.execPath,
   platform: NodeJS.Platform = process.platform,
 ): { cmd: string; args: string[] } {
-  if (cmd !== 'npm' && cmd !== 'npx') return { cmd, args }
+  if (cmd !== 'npm' && cmd !== 'npx') {
+    // Other CLIs we shell out to (claude) are ALSO .cmd shims on Windows when npm-installed.
+    // Their implementation layout isn't ours to know, so route them through cmd.exe (the
+    // documented way to run .cmd files), quoting only args that need it — every arg we pass is
+    // our own constant or a URL/token, never user input.
+    if (platform === 'win32') {
+      const quoted = args.map((a) => (/[\s&|<>^"]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a))
+      return { cmd: 'cmd.exe', args: ['/d', '/s', '/c', cmd, ...quoted] }
+    }
+    return { cmd, args }
+  }
   if (npmExecpath && /(^|[\\/])np[mx](-cli)?\.[cm]?js$/.test(npmExecpath)) {
     const cli = npmExecpath.replace(/np[mx](-cli)?(\.[cm]?js)$/, `${cmd}$1$2`)
     if (existsSync(cli)) return { cmd: execPath, args: [cli, ...args] }

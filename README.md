@@ -26,18 +26,21 @@ npm install -g insta
 ```
 
 For coding agents. Installs the CLI, the `insta` skill for every agent on the machine, and
-registers the MCP server — one command, every OS and shell (Node 18+ with a writable npm
-global prefix — a Node version manager qualifies; if the global install can't write, the
-setup continues and prints the `npm install -g insta` fallback to run yourself):
+registers the MCP server — one command for macOS, Linux, WSL, and native Windows shells
+(PowerShell/cmd). Needs Node 18+ with a writable npm global prefix (a Node version manager
+qualifies; if the global install can't write, setup continues and prints the
+`npm install -g insta` fallback to run yourself). E2e-validated on macOS/Linux; the Windows
+spawn paths are unit-tested:
 
 ```bash
 npx -y insta setup agent
 ```
 
-On macOS/Linux without Node, the native-binary installer does the same (never run it on
-native Windows — PowerShell's `curl` alias and the WSL `bash` shim break it; use npx above,
-or download `insta-windows-x64.exe` from the
-[releases page](https://github.com/InsForge/insta-cli/releases)):
+On macOS/Linux without Node, the native-binary installer puts the `insta` CLI on PATH (the
+skill + MCP steps it then runs still need Node — the skills tool runs via npx). Never run it
+on native Windows — PowerShell's `curl` alias and the WSL `bash` shim break it; use npx
+above, or download `insta-windows-x64.exe` from the
+[releases page](https://github.com/InsForge/insta-cli/releases):
 
 ```bash
 curl -fsSL agents.instacloud.com | sh
