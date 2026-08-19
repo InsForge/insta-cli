@@ -6,7 +6,7 @@
 // Stack skills (tigris/better-auth) intentionally stay per-project: their presence in a
 // project doubles as its stack manifest — that install happens on `project create|link`.
 import { spawn } from 'node:child_process'
-import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import os from 'node:os'
 import { ApiClient } from '../api.js'
@@ -91,13 +91,15 @@ export type Runner = (cmd: string, args: string[]) => Promise<{ ok: boolean; out
 // durable installs (npm -g bin, nvm/volta/fnm, the native binary's ~/.insta/bin) never sit
 // under one.
 // On POSIX a PATH hit only counts if it would actually run: a plain non-executable file (or a
-// directory) named `insta` must not suppress the self-install. On Windows X_OK is meaningless
-// (execution is extension-driven), so existence is the right check there.
+// directory) named `insta` must not suppress the self-install. Mode bits, not access(X_OK) —
+// access() answers "can THIS process exec it", which for root is always yes, so a root-run
+// setup would wrongly treat a non-executable file as a durable install. On Windows execute
+// permission is extension-driven, so existence of a regular file is the right check.
 const isRunnableFile = (p: string, win: boolean): boolean => {
   try {
-    if (win) return existsSync(p) && statSync(p).isFile()
-    accessSync(p, fsConstants.X_OK)
-    return statSync(p).isFile()
+    const st = statSync(p)
+    if (!st.isFile()) return false
+    return win || (st.mode & 0o111) !== 0
   } catch { return false }
 }
 

@@ -93,23 +93,20 @@ test('ensureCliInstalled installs globally only on the npm channel with no durab
 })
 
 test('ensureCliInstalled only claims success after re-finding insta on PATH', async () => {
-  const captured = (): { out: () => string; restore: () => void } => {
+  const captured = async (fn: () => Promise<void>): Promise<string> => {
     let out = ''
     const spy = vi.spyOn(process.stdout, 'write').mockImplementation((s) => { out += String(s); return true })
-    return { out: () => out, restore: () => spy.mockRestore() }
+    try { await fn() } finally { spy.mockRestore() }
+    return out
   }
   // recheck true → the unqualified success line
-  let cap = captured()
-  await ensureCliInstalled(async () => ({ ok: true, output: '' }), 'npm', false, () => true)
-  cap.restore()
-  expect(cap.out()).toContain('now works in any shell')
+  const okOut = await captured(() => ensureCliInstalled(async () => ({ ok: true, output: '' }), 'npm', false, () => true))
+  expect(okOut).toContain('now works in any shell')
 
   // recheck false (custom npm prefix off PATH) → the add-to-PATH guidance, NOT the success claim
-  cap = captured()
-  await ensureCliInstalled(async () => ({ ok: true, output: '' }), 'npm', false, () => false)
-  cap.restore()
-  expect(cap.out()).toContain('not on PATH')
-  expect(cap.out()).not.toContain('now works in any shell')
+  const missOut = await captured(() => ensureCliInstalled(async () => ({ ok: true, output: '' }), 'npm', false, () => false))
+  expect(missOut).toContain('not on PATH')
+  expect(missOut).not.toContain('now works in any shell')
 })
 
 test('resolveSpawnable re-enters npm/npx as node scripts so Windows .cmd shims are never spawned', () => {
@@ -155,7 +152,7 @@ test('setupAgent self-installs the CLI BEFORE the skill install (the skill point
   expect(runs[0]!.slice(-3)).toEqual(['install', '-g', `insta@${VERSION}`])
   // Shape, not exact args: the skill source varies with the resolved environment, and
   // SETUP_ARGS' content is already asserted in setup-agent.test.ts. This test is about ORDER.
-  expect(runs[1]!.slice(0, 2)).toEqual(SETUP_ARGS.slice(0, 2)) // ['skills', 'add']
+  expect(runs[1]!.slice(0, 2)).toEqual(SETUP_ARGS.slice(0, 2)) // ['-y', 'skills']
   expect(runs[1]!.join(' ')).toContain('-s insta')
 })
 
