@@ -6,7 +6,7 @@ import { resolve, join } from 'node:path'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { info, printJson, die } from '../util.js'
 import { dockerfileExposedPort } from './deploy.js'
-import { nixpacksPlan, nixpacksGeneratedDockerfile, ensureNixpacks, quietRunner, type NixpacksPlan } from '../nixpacks.js'
+import { nixpacksPlan, nixpacksGeneratedDockerfile, nixpacksAvailable, quietRunner, type NixpacksPlan } from '../nixpacks.js'
 import type { BuildRunner } from '../flyctl-build.js'
 
 export type BuildCheck = {
@@ -46,7 +46,11 @@ export function computeVerdict(checks: BuildCheck[]): BuildReport['verdict'] {
 // Port resolution mirrors deploy.ts: an explicit --port wins, else the Dockerfile's EXPOSE. The
 // rationale string is part of the output — every plan line says why (the `fly launch` pattern).
 export function inferPort(flag: string | undefined, dockerfile: string | undefined): { port?: number; rationale: string } {
-  if (flag) return { port: Number(flag), rationale: '--port flag' }
+  if (flag) {
+    const port = /^\d+$/.test(flag.trim()) ? Number(flag.trim()) : NaN
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`--port must be an integer between 1 and 65535, got: ${flag}`)
+    return { port, rationale: '--port flag' }
+  }
   const exposed = dockerfile ? dockerfileExposedPort(dockerfile) : undefined
   if (exposed) return { port: exposed, rationale: `Dockerfile EXPOSE ${exposed}` }
   return { port: undefined, rationale: 'not detected — deploy defaults to 8080' }
@@ -65,11 +69,13 @@ export function envKeysFromDotEnvExample(content: string): string[] {
 }
 
 const CONTEXT_WARN_BYTES = 100 * 1024 * 1024
-const WALK_CAP = 50_000 // entries; beyond this the size is reported as a floor
+const WALK_CAP = 50_000 // entries; hitting it marks the stats truncated (size becomes a floor)
 
-type ContextStats = { totalBytes: number; nodeModulesBytes: number; hasNodeModules: boolean; nodeModulesIgnored: boolean }
+export type ContextStats = { totalBytes: number; nodeModulesBytes: number; hasNodeModules: boolean; nodeModulesIgnored: boolean; truncated: boolean }
 
-function contextStats(dir: string): ContextStats {
+// Sizes what would actually ship: a dockerignored node_modules is skipped, not counted. (Only the
+// node_modules pattern is honored — full .dockerignore glob semantics aren't reimplemented here.)
+export function contextStats(dir: string, cap = WALK_CAP): ContextStats {
   const ignoreFile = join(dir, '.dockerignore')
   const ignoreLines = existsSync(ignoreFile)
     ? readFileSync(ignoreFile, 'utf8').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))
@@ -78,18 +84,22 @@ function contextStats(dir: string): ContextStats {
   let totalBytes = 0
   let nodeModulesBytes = 0
   let hasNodeModules = false
+  let truncated = false
   let seen = 0
   const walk = (d: string, inNodeModules: boolean) => {
     let entries: string[]
     try { entries = readdirSync(d) } catch { return }
     for (const name of entries) {
-      if (seen++ > WALK_CAP) return
+      if (seen++ >= cap) { truncated = true; return }
       if (name === '.git') continue
       const p = join(d, name)
       let st
       try { st = statSync(p) } catch { continue }
+      if (name === 'node_modules' && st.isDirectory()) {
+        hasNodeModules = true
+        if (nodeModulesIgnored) continue // excluded from the context — don't count it
+      }
       const isNm = inNodeModules || name === 'node_modules'
-      if (name === 'node_modules' && st.isDirectory()) hasNodeModules = true
       if (st.isDirectory()) walk(p, isNm)
       else {
         totalBytes += st.size
@@ -98,10 +108,30 @@ function contextStats(dir: string): ContextStats {
     }
   }
   walk(dir, false)
-  return { totalBytes, nodeModulesBytes, hasNodeModules, nodeModulesIgnored }
+  return { totalBytes, nodeModulesBytes, hasNodeModules, nodeModulesIgnored, truncated }
 }
 
 const mb = (bytes: number): string => `${(bytes / 1024 / 1024).toFixed(1)} MB`
+
+export function contextCheck(ctx: ContextStats): BuildCheck {
+  const shipsNodeModules = ctx.hasNodeModules && !ctx.nodeModulesIgnored
+  const tooBig = ctx.totalBytes > CONTEXT_WARN_BYTES
+  const size = `${mb(ctx.totalBytes)}${ctx.truncated ? '+' : ''}`
+  const detail = shipsNodeModules
+    ? `node_modules (${mb(ctx.nodeModulesBytes)}) would ship in the ${size} build context`
+    : ctx.truncated
+      ? `over ${WALK_CAP.toLocaleString('en-US')} files — scan truncated, ${size} is a floor`
+      : `${size}${tooBig ? ' — large contexts make remote builds slow' : ''}`
+  const bad = shipsNodeModules || tooBig || ctx.truncated
+  return {
+    id: 'context',
+    severity: 'warning',
+    status: bad ? 'fail' : 'pass',
+    title: 'build context',
+    detail,
+    ...(bad ? { nextAction: 'add a .dockerignore (node_modules, build artifacts, secrets)' } : {}),
+  }
+}
 
 export async function buildReport(
   dirArg: string,
@@ -182,19 +212,7 @@ export async function buildReport(
     ...(port !== undefined ? {} : { nextAction: 'pass --port <n> (or add EXPOSE <n> to the Dockerfile) — a port mismatch is the #1 deploy mistake' }),
   })
 
-  const ctx = contextStats(dir)
-  const shipsNodeModules = ctx.hasNodeModules && !ctx.nodeModulesIgnored
-  const tooBig = ctx.totalBytes > CONTEXT_WARN_BYTES
-  checks.push({
-    id: 'context',
-    severity: 'warning',
-    status: shipsNodeModules || tooBig ? 'fail' : 'pass',
-    title: 'build context',
-    detail: shipsNodeModules
-      ? `node_modules (${mb(ctx.nodeModulesBytes)}) would ship in the ${mb(ctx.totalBytes)} build context`
-      : `${mb(ctx.totalBytes)}${tooBig ? ' — large contexts make remote builds slow' : ''}`,
-    ...(shipsNodeModules || tooBig ? { nextAction: 'add a .dockerignore (node_modules, build artifacts, secrets)' } : {}),
-  })
+  checks.push(contextCheck(contextStats(dir)))
 
   return {
     dir,
@@ -230,18 +248,20 @@ export function renderReport(r: BuildReport, explain: boolean): string[] {
   return lines
 }
 
+// Dockerfile content is included with --explain; without it the report stays small.
+export function jsonReport(report: BuildReport, explain: boolean): BuildReport {
+  return explain ? report : { ...report, dockerfile: { ...report.dockerfile, content: undefined } }
+}
+
 export async function build(dirArg: string | undefined, opts: { explain?: boolean; json?: boolean; port?: string }): Promise<void> {
   const dir = dirArg ?? '.'
   const abs = resolve(process.cwd(), dir)
-  if (!existsSync(abs)) die(`no such directory: ${abs}`)
-  // Only reach for nixpacks when there is no Dockerfile to verify.
-  const nixpacksAvailable = existsSync(join(abs, 'Dockerfile')) ? false : await ensureNixpacks()
-  const report = await buildReport(dir, opts, { runner: quietRunner, nixpacksAvailable })
-  if (opts.json) {
-    // Dockerfile content is included with --explain; without it the report stays small.
-    printJson(opts.explain ? report : { ...report, dockerfile: { ...report.dockerfile, content: undefined } })
-  } else {
-    for (const line of renderReport(report, !!opts.explain)) info(line)
-  }
+  if (!existsSync(abs) || !statSync(abs).isDirectory()) die(`no such directory: ${abs}`)
+  // Only probe for nixpacks when there is no Dockerfile to verify. The probe is silent and never
+  // installs anything — stdout must stay pure for --json, and a verifier must stay offline.
+  const available = existsSync(join(abs, 'Dockerfile')) ? false : await nixpacksAvailable()
+  const report = await buildReport(dir, opts, { runner: quietRunner, nixpacksAvailable: available })
+  if (opts.json) printJson(jsonReport(report, !!opts.explain))
+  else for (const line of renderReport(report, !!opts.explain)) info(line)
   if (report.verdict === 'failed') process.exitCode = 1
 }

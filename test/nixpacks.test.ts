@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { parseNixpacksPlan, nixpacksPlan, nixpacksGeneratedDockerfile } from '../src/nixpacks.js'
+import { parseNixpacksPlan, nixpacksPlan, nixpacksGeneratedDockerfile, nixpacksAvailable } from '../src/nixpacks.js'
 import type { BuildRunner } from '../src/flyctl-build.js'
 
 // The documented `nixpacks plan` output shape (providers + phases + start).
@@ -67,6 +67,18 @@ describe('nixpacksPlan', () => {
   it('returns null when nixpacks exits non-zero (caller degrades gracefully)', async () => {
     const run: BuildRunner = async () => ({ code: 1, output: 'Error: no providers found' })
     expect(await nixpacksPlan('/some/app', run)).toBeNull()
+  })
+})
+
+describe('nixpacksAvailable', () => {
+  it('probes `nixpacks --version` quietly — true on 0, false otherwise (never installs anything)', async () => {
+    const seen: { cmd?: string; args?: string[] } = {}
+    const up: BuildRunner = async (cmd, args) => { seen.cmd = cmd; seen.args = args; return { code: 0, output: 'nixpacks 1.41.0' } }
+    expect(await nixpacksAvailable(up)).toBe(true)
+    expect(seen.cmd).toBe('nixpacks')
+    expect(seen.args).toEqual(['--version'])
+    const down: BuildRunner = async () => ({ code: -1, output: 'spawn nixpacks ENOENT' })
+    expect(await nixpacksAvailable(down)).toBe(false)
   })
 })
 

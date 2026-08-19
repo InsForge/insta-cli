@@ -5,7 +5,6 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { info } from './util.js'
 import type { BuildRunner } from './flyctl-build.js'
 
 export type NixpacksPlan = {
@@ -69,30 +68,11 @@ export async function nixpacksGeneratedDockerfile(dir: string, run: BuildRunner 
   }
 }
 
-// Best-effort: make the nixpacks CLI available (mirrors ensureFlyctl). Returns availability —
-// `insta build` degrades to Dockerfile-only checks when it stays missing.
-export async function ensureNixpacks(): Promise<boolean> {
-  const ok = (cmd: string, args: string[], inherit = false) =>
-    new Promise<boolean>((resolve) => {
-      const p = spawn(cmd, args, { stdio: inherit ? 'inherit' : 'ignore' })
-      p.on('error', () => resolve(false))
-      p.on('close', (code) => resolve(code === 0))
-    })
-  try {
-    if (await ok('nixpacks', ['--version'])) return true
-    if (process.platform === 'darwin' && (await ok('brew', ['--version']))) {
-      info('nixpacks not found — installing with `brew install nixpacks` (one-time)…')
-      if (await ok('brew', ['install', 'nixpacks'], true)) return ok('nixpacks', ['--version'])
-    }
-    if (process.platform === 'linux') {
-      info('nixpacks not found — installing (one-time)…')
-      if (await ok('sh', ['-c', 'curl -fsSL https://nixpacks.com/install.sh | bash'], true)) {
-        if (await ok('nixpacks', ['--version'])) return true
-      }
-    }
-    info('nixpacks not found — install it for framework detection: https://nixpacks.com/docs/install')
-    return false
-  } catch {
-    return false
-  }
+// Quiet probe — no install, no output. `insta build` advertises itself as local and offline, so
+// unlike deploy's ensureFlyctl it must never download anything or write to stdout (which would
+// corrupt --json); when nixpacks is missing the command degrades to Dockerfile-only checks and
+// the report's nextAction says how to install it.
+export async function nixpacksAvailable(run: BuildRunner = quietRunner): Promise<boolean> {
+  const { code } = await run('nixpacks', ['--version'], { cwd: '.', env: process.env as Record<string, string> })
+  return code === 0
 }

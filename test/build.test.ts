@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import {
   computeVerdict, inferPort, envKeysFromDotEnvExample, buildReport, renderReport,
-  type BuildCheck,
+  contextStats, contextCheck, jsonReport,
+  type BuildCheck, type ContextStats,
 } from '../src/commands/build.js'
 import type { BuildRunner } from '../src/flyctl-build.js'
 
@@ -35,6 +36,75 @@ describe('inferPort', () => {
   })
   it('reports the platform default when nothing declares a port', () => {
     expect(inferPort(undefined, undefined)).toEqual({ port: undefined, rationale: 'not detected — deploy defaults to 8080' })
+  })
+  it('rejects a --port that is not an integer in 1..65535 (a verifier must not bless bad input)', () => {
+    expect(() => inferPort('abc', undefined)).toThrow(/1.*65535/)
+    expect(() => inferPort('0', undefined)).toThrow(/1.*65535/)
+    expect(() => inferPort('70000', undefined)).toThrow(/1.*65535/)
+    expect(() => inferPort('80.5', undefined)).toThrow(/1.*65535/)
+  })
+})
+
+describe('contextStats', () => {
+  it('excludes a dockerignored node_modules from the shipped size', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'insta-ctx-'))
+    writeFileSync(join(dir, '.dockerignore'), 'node_modules\n')
+    writeFileSync(join(dir, 'app.js'), 'x'.repeat(100))
+    mkdirSync(join(dir, 'node_modules'), { recursive: true })
+    writeFileSync(join(dir, 'node_modules', 'big.js'), 'x'.repeat(10_000))
+    const ctx = contextStats(dir)
+    expect(ctx.hasNodeModules).toBe(true)
+    expect(ctx.nodeModulesIgnored).toBe(true)
+    expect(ctx.totalBytes).toBeLessThan(10_000) // the ignored tree does not count
+  })
+
+  it('flags truncation when the walk cap is hit instead of silently undercounting', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'insta-ctx-'))
+    for (const n of ['a', 'b', 'c', 'd']) writeFileSync(join(dir, `${n}.txt`), 'x')
+    expect(contextStats(dir, 2).truncated).toBe(true)
+    expect(contextStats(dir).truncated).toBe(false)
+  })
+})
+
+describe('contextCheck', () => {
+  const base: ContextStats = { totalBytes: 1024, nodeModulesBytes: 0, hasNodeModules: false, nodeModulesIgnored: false, truncated: false }
+  it('passes a small clean context', () => {
+    expect(contextCheck(base).status).toBe('pass')
+  })
+  it('fails when node_modules would ship', () => {
+    const c = contextCheck({ ...base, hasNodeModules: true, nodeModulesBytes: 5_000_000 })
+    expect(c.status).toBe('fail')
+    expect(c.detail).toContain('node_modules')
+  })
+  it('fails an oversized context even without node_modules', () => {
+    const c = contextCheck({ ...base, totalBytes: 200 * 1024 * 1024 })
+    expect(c.status).toBe('fail')
+    expect(c.detail).toContain('slow')
+  })
+  it('fails conservatively when the scan was truncated (size is a floor, not a fact)', () => {
+    const c = contextCheck({ ...base, truncated: true })
+    expect(c.status).toBe('fail')
+    expect(c.detail).toContain('truncated')
+  })
+})
+
+describe('jsonReport', () => {
+  it('strips Dockerfile content without --explain and keeps it with — stdout stays parseable JSON either way', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'insta-build-'))
+    writeFileSync(join(dir, 'package.json'), '{}')
+    const r = await buildReport(dir, {}, { runner: nixpacksFake(PLAN), nixpacksAvailable: true })
+    const bare = JSON.parse(JSON.stringify(jsonReport(r, false)))
+    expect(bare.dockerfile.content).toBeUndefined()
+    expect(bare.dockerfile.source).toBe('nixpacks')
+    const full = JSON.parse(JSON.stringify(jsonReport(r, true)))
+    expect(full.dockerfile.content).toContain('FROM node:18')
+  })
+
+  it('is pure on the nixpacks-missing path too (the agent contract must survive a fresh machine)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'insta-build-'))
+    const runner: BuildRunner = async () => { throw new Error('nixpacks must not be invoked when unavailable') }
+    const r = await buildReport(dir, {}, { runner, nixpacksAvailable: false })
+    expect(JSON.parse(JSON.stringify(jsonReport(r, false))).verdict).toBe('failed')
   })
 })
 
