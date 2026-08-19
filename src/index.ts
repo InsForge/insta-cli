@@ -276,10 +276,10 @@ const tpl = program.command('template').description('Browse and deploy app templ
 tpl.command('list').description('List templates in the platform registry').option('--json').action(guard((o) => template.templateList(o)))
 tpl.command('info <code>').description('Show a template: version, upstream pin, services, and its required/optional variables')
   .option('--json').action(guard((code, o) => template.templateInfo(code, o)))
-tpl.command('deploy <code-or-dir>').description('Deploy a template onto a branch — a registry code, or a local directory containing insta.template.yaml (a path-looking target is always read as a directory). Missing required variables are prompted for on a terminal; generator-backed ones (secret:N / password) are auto-generated')
+tpl.command('deploy <code-or-dir>').description('Deploy a template onto a branch — a registry code, or a local directory containing insta.template.yaml (a path-looking target is always read as a directory). Missing required variables are prompted for on a terminal; generator-backed (secret:N) and defaulted ones are resolved by the platform')
   .option('--branch <b>', 'target branch (default: current)')
   .option('--set <NAME=value>', 'set a template variable (repeatable)', (v: string, prev: string[]) => [...prev, v], [] as string[])
-  .option('-y, --yes', 'non-interactive: accept defaults + auto-generate; missing required variables fail instead of prompting')
+  .option('-y, --yes', 'non-interactive: missing required variables fail with a --set list instead of prompting')
   .option('--json')
   .action(guard((target, o) => template.templateDeploy(target, o)))
 

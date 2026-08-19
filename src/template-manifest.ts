@@ -1,7 +1,10 @@
-// Local insta.template.yaml parsing + validation for `insta template deploy ./dir`. Everything
-// here is pure over the parsed document (unit-tested); only loadTemplateManifest touches disk.
-// The platform revalidates on upload — local checks exist to fail fast with a file/line the
-// author can act on, before anything travels.
+// Local insta.template.yaml parsing + validation for `insta template deploy ./dir` — the CLI
+// twin of the platform's src/provisioning/templateManifest.ts (THE authority; the executor
+// revalidates every manifest). Local checks exist to fail fast with a file the author can act
+// on, before anything travels, so the rules here mirror the server's exactly — plus two
+// authoring lints the server does not enforce: images must be pinned, and required variables
+// need a description unless a generator answers for the user. Everything here is pure over the
+// parsed document (unit-tested); only loadTemplateManifest touches disk.
 import { join, resolve } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import YAML from 'yaml'
@@ -9,33 +12,34 @@ import YAML from 'yaml'
 export const MANIFEST_FILE = 'insta.template.yaml'
 
 // A variable spec as authored: full object, or a bare string shorthand for the description.
-export type VarSpec = { description?: string; default?: string; generate?: string }
+export type VarSpec = { description?: string; default?: string; generate?: string; editable?: boolean }
 
 export type ManifestEnv = {
-  fixed?: Record<string, string>
-  generated?: Record<string, string> // NAME → generator spec, e.g. "secret:32"
+  fixed?: Record<string, unknown>
+  generated?: Record<string, unknown> // ENV_NAME → "${<declared generator>}"
   required?: Record<string, VarSpec | string>
   optional?: Record<string, VarSpec | string>
 }
 
 export type ManifestService = {
-  type?: string
+  type?: string // web | worker
   image?: string
-  build?: unknown
+  build?: string
   port?: number
-  healthcheck?: unknown
+  healthcheck?: string
   volume?: { size?: number }
   env?: ManifestEnv
 }
 
 export type TemplateManifest = {
   code?: string
-  version?: string
+  version?: string | number
   maintainer?: string
-  upstream?: { pinned?: string }
-  generated?: Record<string, string>
+  sourceRepo?: string
+  upstream?: Record<string, unknown>
+  generated?: Record<string, unknown> // declare-once generators: name → spec (secret:N)
   services?: Record<string, ManifestService>
-  constraints?: unknown
+  constraints?: Array<{ oneOf?: string[]; allOf?: string[] }>
   meta?: { name?: string; tagline?: string; category?: string; tags?: string[] }
 }
 
@@ -49,7 +53,11 @@ export type TemplateVar = {
   generate?: string
 }
 
-const CODE_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
+// The platform's own shapes (templateManifest.ts): codes and service names become branch/service
+// names; env vars are user-secret names; the one generator family is secret:N.
+const CODE_RE = /^[a-z0-9][a-z0-9-]{0,38}$/
+export const ENV_NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/
+const GENERATOR_RE = /^secret:([1-9]\d{0,2})$/
 
 // Why an image must carry a pin: a template is a reproducible deploy, and a tagless ref (implicit
 // :latest) or an explicit :latest re-resolves on every deploy — two runs of the same template
@@ -68,26 +76,29 @@ function asVarSpec(v: VarSpec | string | null | undefined): VarSpec {
   return v ?? {}
 }
 
-// Managed service types need no image; anything else (compute, or an omitted type) must say what
-// it runs.
-const MANAGED_TYPES = ['postgres', 'redis', 'mysql', 'mongodb', 'storage']
-
 /** All local validation problems, empty when the manifest is deployable. */
 export function validateManifest(m: TemplateManifest): string[] {
   const problems: string[] = []
   if (!m || typeof m !== 'object') return ['manifest is not a YAML mapping']
   if (!m.code || typeof m.code !== 'string') problems.push('code is required')
-  else if (!CODE_RE.test(m.code)) problems.push(`code must be lower-kebab (a-z, 0-9, -), got: ${m.code}`)
-  if (!m.version || typeof m.version !== 'string') problems.push('version is required')
+  else if (!CODE_RE.test(m.code)) problems.push(`code must be lower-kebab (a-z, 0-9, -, max 39 chars), got: ${m.code}`)
+  if (m.version === undefined || m.version === null || m.version === '') problems.push('version is required')
+
+  const generators = new Set<string>()
+  for (const [name, spec] of Object.entries(m.generated ?? {})) {
+    if (!GENERATOR_RE.test(String(spec))) problems.push(`generated.${name}: unknown generator '${spec}' (the platform knows secret:N, N 1-999)`)
+    generators.add(name)
+  }
+
   const services = m.services ?? {}
   const names = Object.keys(services)
   if (names.length === 0) problems.push('services: at least one service is required')
   for (const name of names) {
     const svc = services[name] ?? {}
     const where = `services.${name}`
-    const type = svc.type ?? 'compute'
+    if (svc.type !== 'web' && svc.type !== 'worker') problems.push(`${where}.type must be web or worker`)
     if (svc.image && svc.build) problems.push(`${where}: image and build are mutually exclusive`)
-    if (!svc.image && !svc.build && !MANAGED_TYPES.includes(type)) problems.push(`${where}: an image or a build is required for ${type} services`)
+    if (!svc.image && !svc.build) problems.push(`${where}: one of image or build is required`)
     if (svc.image) {
       const issue = imageTagIssue(svc.image)
       if (issue) problems.push(`${where}: ${issue}`)
@@ -95,13 +106,27 @@ export function validateManifest(m: TemplateManifest): string[] {
     if (svc.port !== undefined && (!Number.isInteger(svc.port) || svc.port < 1 || svc.port > 65535)) {
       problems.push(`${where}: port must be an integer between 1 and 65535, got: ${svc.port}`)
     }
-    if (svc.volume?.size !== undefined && (!Number.isInteger(svc.volume.size) || svc.volume.size < 1)) {
-      problems.push(`${where}: volume.size must be a whole Gi ≥ 1, got: ${svc.volume.size}`)
+    if (svc.type === 'web' && !svc.healthcheck) problems.push(`${where}: web services must declare a healthcheck path`)
+    if (svc.healthcheck && !String(svc.healthcheck).startsWith('/')) problems.push(`${where}: healthcheck must be an absolute path (start with /)`)
+    if (svc.volume !== undefined && (!Number.isInteger(svc.volume?.size) || (svc.volume!.size as number) < 1)) {
+      problems.push(`${where}: volume.size must be a whole Gi ≥ 1, got: ${svc.volume?.size}`)
     }
-    for (const [varName, raw] of Object.entries(svc.env?.required ?? {})) {
+    const env = svc.env ?? {}
+    for (const group of ['fixed', 'generated', 'required', 'optional'] as const) {
+      for (const varName of Object.keys(env[group] ?? {})) {
+        if (!ENV_NAME_RE.test(varName)) problems.push(`${where}.env.${group}.${varName}: env names must match ^[A-Z][A-Z0-9_]{0,63}$`)
+      }
+    }
+    for (const [varName, ref] of Object.entries(env.generated ?? {})) {
+      const match = /^\$\{([a-zA-Z0-9_-]+)\}$/.exec(String(ref))
+      if (!match) problems.push(`${where}.env.generated.${varName} must reference a declared generator like \${name}`)
+      else if (!generators.has(match[1]!)) problems.push(`${where}.env.generated.${varName} references undeclared generator '${match[1]}'`)
+    }
+    for (const [varName, raw] of Object.entries(env.required ?? {})) {
       const spec = asVarSpec(raw)
+      if (spec.generate && !GENERATOR_RE.test(spec.generate)) problems.push(`${where}.env.required.${varName}: generate must be secret:N (1-999), got: ${spec.generate}`)
       // A required var is a question put to the deployer — without a description (or a generator
-      // that answers it for them) there is nothing to ask with.
+      // that answers it for them) there is nothing to ask with. Authoring lint, CLI-only.
       if (!spec.description && !spec.generate) problems.push(`${where}.env.required.${varName}: a description is required (unless generate is set)`)
     }
   }
@@ -109,18 +134,25 @@ export function validateManifest(m: TemplateManifest): string[] {
 }
 
 /**
- * Flatten the manifest's prompt-relevant variables: every service's env.required and env.optional.
- * env.fixed / env.generated (and top-level `generated`) are filled in by the platform's
- * write-variables step, so they are not deploy-time questions. First mention of a name wins its
- * spec; required anywhere means required.
+ * Flatten the manifest's prompt-relevant variables: every service's env.required and env.optional
+ * merged into the global variable namespace the POST's `variables` map addresses — the same name
+ * declared by two services is ONE variable, required if required anywhere, later mentions
+ * backfilling fields earlier ones left unset (the platform's collectVariables merge). env.fixed /
+ * env.generated (and top-level `generated`) are filled in by the executor, so they are not
+ * deploy-time questions.
  */
 export function collectManifestVariables(m: TemplateManifest): TemplateVar[] {
   const byName = new Map<string, TemplateVar>()
   const add = (name: string, raw: VarSpec | string | null | undefined, required: boolean) => {
     const spec = asVarSpec(raw)
-    const existing = byName.get(name)
-    if (existing) { existing.required = existing.required || required; return }
-    byName.set(name, { name, required, description: spec.description, default: spec.default, generate: spec.generate })
+    const prev = byName.get(name)
+    byName.set(name, {
+      name,
+      description: prev?.description ?? spec.description,
+      required: (prev?.required ?? false) || required,
+      default: prev?.default ?? spec.default,
+      generate: prev?.generate ?? spec.generate,
+    })
   }
   for (const svc of Object.values(m.services ?? {})) {
     for (const [name, spec] of Object.entries(svc.env?.required ?? {})) add(name, spec, true)

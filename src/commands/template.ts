@@ -2,7 +2,6 @@
 // code, or from a local directory carrying insta.template.yaml) onto a branch. The deploy is a
 // platform-side pipeline (create services → write variables → deploy → health check); the CLI
 // submits it and renders progress by polling the deployment resource.
-import { randomBytes } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { existsSync } from 'node:fs'
 import * as clack from '@clack/prompts'
@@ -42,17 +41,16 @@ export function normalizeInfoServices(raw: unknown): InfoService[] {
     return raw.map((s: any) => ({ name: s.name ?? '?', type: s.type, port: s.port, volumeGib: s.volumeGib ?? s.volume?.size }))
   }
   if (raw && typeof raw === 'object') {
-    return Object.entries(raw as Record<string, any>).map(([name, s]) => ({ name, type: s?.type, port: s?.port, volumeGib: s?.volume?.size }))
+    return Object.entries(raw as Record<string, any>).map(([name, s]) => ({ name, type: s?.type, port: s?.port, volumeGib: s?.volumeGib ?? s?.volume?.size }))
   }
   return []
 }
 
-// Variables may arrive as one array with a `required` flag, or pre-grouped {required, optional}.
-// A password-typed variable is generator-backed even without an explicit generate spec.
+// Variables may arrive as one array with a `required` flag, or pre-grouped {required, optional}
+// (the registry detail endpoint's shape).
 export function normalizeInfoVariables(raw: unknown): TemplateVar[] {
   const one = (v: any, required: boolean): TemplateVar => ({
-    name: v.name, required, description: v.description, default: v.default,
-    generate: v.generate ?? (v.type === 'password' ? 'secret:32' : undefined),
+    name: v.name, required, description: v.description, default: v.default, generate: v.generate,
   })
   if (Array.isArray(raw)) return raw.map((v: any) => one(v, !!v.required))
   if (raw && typeof raw === 'object') {
@@ -63,8 +61,9 @@ export function normalizeInfoVariables(raw: unknown): TemplateVar[] {
 }
 
 export type TemplateInfo = {
-  code: string; name?: string; tagline?: string; version?: string; maintainer?: string; license?: string
-  upstream?: { pinned?: string }
+  code: string; name?: string; tagline?: string; version?: string; maintainer?: string
+  source?: string; license?: string
+  upstream?: { pinned?: string; image?: string; repo?: string }
   services?: unknown
   variables?: unknown
 }
@@ -77,8 +76,9 @@ export function templateInfoLines(t: TemplateInfo, bold: (s: string) => string =
   const field = (label: string, value: string | undefined) => { if (value) lines.push(`  ${label.padEnd(11)} ${value}`) }
   field('version', t.version)
   field('maintainer', t.maintainer)
+  field('source', t.source)
   field('license', t.license)
-  field('upstream', t.upstream?.pinned)
+  field('upstream', t.upstream?.pinned ?? t.upstream?.image ?? t.upstream?.repo)
   const services = normalizeInfoServices(t.services)
   if (services.length) {
     const summary = services.map((s) => {
@@ -102,26 +102,17 @@ export function templateInfoLines(t: TemplateInfo, bold: (s: string) => string =
   return lines
 }
 
-// Parse repeated --set K=V flags. Names follow env-var rules; a missing '=' is a typo worth
-// naming. Later occurrences of a name win (shell-override semantics).
+// Parse repeated --set K=V flags. Names must be platform env-var names (the same rule the
+// manifest's env maps live under), so a typo fails here instead of surviving to a server 400.
+// Later occurrences of a name win (shell-override semantics).
 export function parseSetFlags(pairs: string[]): Record<string, string> {
   const values: Record<string, string> = {}
   for (const pair of pairs) {
-    const m = /^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/.exec(pair)
-    if (!m) throw new Error(`--set expects NAME=value, got: ${pair}`)
+    const m = /^([A-Z][A-Z0-9_]{0,63})=([\s\S]*)$/.exec(pair)
+    if (!m) throw new Error(`--set expects NAME=value (NAME matching ^[A-Z][A-Z0-9_]{0,63}$), got: ${pair}`)
     values[m[1]!] = m[2]!
   }
   return values
-}
-
-// Generator specs: `secret:N` (or bare `secret`, N=32) → N hex chars from the CSPRNG. Anything
-// else is a manifest the CLI is too old for — say so rather than inventing a value.
-export function generateValue(spec: string, random: (bytes: number) => Buffer = randomBytes): string {
-  const m = /^secret(?::(\d+))?$/.exec(spec)
-  if (!m) throw new Error(`unknown generator: ${spec} (this CLI knows secret:N — upgrade with \`insta upgrade\`?)`)
-  const n = m[1] ? Number(m[1]) : 32
-  if (n < 1 || n > 256) throw new Error(`generator length out of range: ${spec} (1-256)`)
-  return random(Math.ceil(n / 2)).toString('hex').slice(0, n)
 }
 
 export function missingVariablesMessage(missing: TemplateVar[]): string {
@@ -133,33 +124,26 @@ export function missingVariablesMessage(missing: TemplateVar[]): string {
 }
 
 export type ResolveVarsOpts = {
-  yes?: boolean
   tty?: boolean
   ask?: (v: TemplateVar) => Promise<string>
-  onGenerated?: (name: string, spec: string) => void
+  onAutoResolved?: (v: TemplateVar) => void
 }
 
 /**
- * Decide every deploy-time variable value: --set wins; generator-backed vars are auto-generated
- * (a machine-answerable question is not asked); defaults fill required vars, and optional ones
- * under --yes; remaining required vars are prompted on a TTY and are an error anywhere else.
- * Unknown --set names pass through — the platform's variable set may be newer than local parsing.
+ * Decide which deploy-time variables to SEND. The platform's own resolution order is
+ * provided → generator → default (templateManifest.ts resolveVariables), so anything a generator
+ * or default answers is left OFF the wire — the executor generates secrets itself (they never
+ * transit) and applies defaults. What remains: --set wins; required vars with no machine answer
+ * are prompted on a TTY and are an error anywhere else. Unknown --set names pass through — the
+ * platform's variable set may be newer than local parsing.
  */
 export async function resolveVariables(vars: TemplateVar[], given: Record<string, string>, opts: ResolveVarsOpts = {}): Promise<Record<string, string>> {
   const values: Record<string, string> = { ...given }
   const missing: TemplateVar[] = []
   for (const v of vars) {
     if (values[v.name] !== undefined) continue
-    if (v.generate) {
-      values[v.name] = generateValue(v.generate)
-      opts.onGenerated?.(v.name, v.generate)
-      continue
-    }
-    if (!v.required) {
-      if (opts.yes && v.default !== undefined) values[v.name] = v.default
-      continue
-    }
-    if (v.default !== undefined) { values[v.name] = v.default; continue }
+    if (v.generate || v.default !== undefined) { opts.onAutoResolved?.(v); continue }
+    if (!v.required) continue
     if (opts.tty && opts.ask) { values[v.name] = await opts.ask(v); continue }
     missing.push(v)
   }
@@ -167,16 +151,14 @@ export async function resolveVariables(vars: TemplateVar[], given: Record<string
   return values
 }
 
-// The platform's machine-readable "you forgot these" answer to the POST — turned back into
-// promptable variables. null = some other error, not ours to interpret.
+// The platform's machine-readable "you forgot these" answer to the POST (error=missing_variables,
+// missing: [{name, key, description}] with a missingVariables alias) — turned back into promptable
+// variables. null = some other error, not ours to interpret.
 export function missingVariablesFrom(body: any): TemplateVar[] | null {
   if ((body?.error ?? body?.code) !== 'missing_variables') return null
-  const list = body?.missing ?? body?.variables ?? []
+  const list = body?.missing ?? body?.missingVariables ?? []
   if (!Array.isArray(list)) return []
-  return list.map((v: any) => ({
-    name: String(v.name ?? v), required: true, description: v.description,
-    default: v.default, generate: v.generate ?? (v.type === 'password' ? 'secret:32' : undefined),
-  }))
+  return list.map((v: any) => ({ name: String(v.name ?? v.key ?? v), required: true, description: v.description }))
 }
 
 // A deploy target that reads as a filesystem path must resolve as one — a typo'd directory should
@@ -187,23 +169,20 @@ export function looksLikePath(target: string): boolean {
 
 // ---- deployment progress ----
 
+// The platform pipeline (insta-platform TemplateDeployment): status is running|succeeded|failed|
+// partial, and `step` names where the run is (or stopped) — create_services → write_variables →
+// deploy → health_check.
 export const DEPLOY_STEPS = ['create services', 'write variables', 'deploy', 'health check'] as const
 const STEP_KEYS = ['create_services', 'write_variables', 'deploy', 'health_check']
-const STATUS_STEP: Record<string, number> = {
-  pending: 0, creating_services: 0, writing_variables: 1, deploying: 2, health_check: 3, checking_health: 3,
+
+/** The index of the step a deployment is on, or null when it reports none (or one this CLI does
+ *  not know) — the watcher then holds progress instead of guessing. */
+export function stepIndexFor(step?: string): number | null {
+  const i = STEP_KEYS.indexOf(step ?? '')
+  return i >= 0 ? i : null
 }
 
-/** The index of the step a deployment is currently on (an explicit step field wins), or null when
- *  the status is one this CLI does not know — the watcher then holds progress instead of guessing. */
-export function stepIndexFor(status: string, step?: string): number | null {
-  if (step) {
-    const i = STEP_KEYS.indexOf(step)
-    if (i >= 0) return i
-  }
-  return STATUS_STEP[status] ?? null
-}
-
-/** Success URLs, one line each: bare urls, and per-service `name: url`. */
+/** Success URLs, one line each: per-service `name: url` (plus bare urls, defensively). */
 export function deploymentUrls(dep: any): string[] {
   const lines: string[] = []
   for (const u of dep?.urls ?? []) lines.push(String(u))
@@ -211,12 +190,45 @@ export function deploymentUrls(dep: any): string[] {
   return lines
 }
 
+// One line per service with its terminal state — the anatomy of a partial/failed run.
+export function serviceStateLines(dep: any): string[] {
+  return (dep?.services ?? []).map((s: any) => {
+    const mark = s?.state === 'healthy' ? '✓' : s?.state === 'failed' ? '✗' : '•'
+    return `  ${mark} ${s?.name ?? 'service'}${s?.url ? ` — ${s.url}` : ''}${s?.state && s.state !== 'healthy' ? ` [${s.state}]` : ''}`
+  })
+}
+
+// `partial` is TERMINAL: some services came up healthy, others failed, and the created resources
+// are kept either way — so the message must say what stands and how to move (retry re-running the
+// deploy, or clean up), not just that something went wrong.
+export function partialMessage(dep: any): string {
+  const services: any[] = dep?.services ?? []
+  const healthy = services.filter((s) => s?.state === 'healthy').length
+  return [
+    `template deployment finished partial: ${healthy}/${services.length} services healthy`,
+    ...serviceStateLines(dep),
+    ...(dep?.error ? [`  ${dep.error}`] : []),
+    ...(dep?.logsTail ? ['--- log tail ---', String(dep.logsTail).trimEnd()] : []),
+    'created services are kept — inspect with `insta logs compute <name>`, re-run the deploy to retry, or remove them with `insta services remove <type> <name>`',
+  ].join('\n')
+}
+
+export function failureMessage(dep: any, fallbackStep: number): string {
+  const at = DEPLOY_STEPS[Math.min(stepIndexFor(dep?.step) ?? fallbackStep, DEPLOY_STEPS.length - 1)]
+  return [
+    `template deployment failed during ${at}${dep?.error ? `: ${dep.error}` : ''}`,
+    ...serviceStateLines(dep),
+    ...(dep?.logsTail ? ['--- log tail ---', String(dep.logsTail).trimEnd()] : []),
+  ].join('\n')
+}
+
 const sleepSeconds = (s: number) => new Promise<void>((r) => setTimeout(r, s * 1000))
 
 /**
  * Poll a template deployment until it settles, emitting each step exactly once as it completes
- * (✓) or becomes active (…). Injectable getter/output/wait keep this testable without a network
- * or real timers (the deviceGrant pattern in auth.ts).
+ * (✓) or becomes active (…). Terminal states: succeeded (returns), failed and partial (throw —
+ * partial would otherwise poll forever, the platform never leaves it). Injectable getter/output/
+ * wait keep this testable without a network or real timers (the deviceGrant pattern in auth.ts).
  */
 export async function watchDeployment(
   getDeployment: (id: string) => Promise<any>,
@@ -231,13 +243,11 @@ export async function watchDeployment(
   while (Date.now() < deadline) {
     const dep = await getDeployment(id)
     const status = String(dep?.status ?? '')
-    const idx = stepIndexFor(status, dep?.step)
+    const idx = stepIndexFor(dep?.step)
     const completed = status === 'succeeded' ? DEPLOY_STEPS.length : (idx ?? done)
     for (; done < completed; done++) out(`  ✓ ${DEPLOY_STEPS[done]}`)
-    if (status === 'failed') {
-      const at = DEPLOY_STEPS[Math.min(idx ?? done, DEPLOY_STEPS.length - 1)]
-      throw new Error(`template deployment failed during ${at}${dep?.error ? `: ${dep.error}` : ''}`)
-    }
+    if (status === 'failed') throw new Error(failureMessage(dep, done))
+    if (status === 'partial') throw new Error(partialMessage(dep))
     if (status === 'succeeded') return dep
     const current = Math.min(completed, DEPLOY_STEPS.length - 1)
     if (active !== current) { out(`  … ${DEPLOY_STEPS[current]}`); active = current }
@@ -302,15 +312,12 @@ export async function templateDeploy(target: string, opts: TemplateDeployOpts = 
   // --json asked for parseable output, so a caller that happens to own a TTY still gets the error.
   const tty = !opts.json && !opts.yes && !!process.stdin.isTTY && !!process.stdout.isTTY
   const quiet = !!opts.json
-  const onGenerated = quiet ? undefined : (name: string, spec: string) => info(`  generated ${name} (${spec})`)
-  const variables = await resolveVariables(vars, given, { yes: opts.yes, tty, ask: promptVariable, onGenerated })
+  const onAutoResolved = quiet ? undefined : (v: TemplateVar) =>
+    info(`  ${v.name}: ${v.generate ? `platform-generated (${v.generate})` : `default (${v.default})`}`)
+  const variables = await resolveVariables(vars, given, { tty, ask: promptVariable, onAutoResolved })
 
-  // The pipeline provisions onto a branch by id; resolve the linked/--branch name once, up front.
-  const { branches } = await api.request('GET', `/projects/${p.projectId}/branches`)
-  const branch = branches.find((b: any) => b.name === branchName || b.id === branchName)
-  if (!branch) die(`branch not found: ${branchName}`)
-
-  const body = { ...(manifest ? { manifest } : { templateCode: target }), branchId: branch.id, variables }
+  // The endpoint takes the branch NAME directly (branchId is its uuid alias) — no lookup needed.
+  const body = { ...(manifest ? { manifest } : { templateCode: target }), branch: branchName, variables }
   let res
   try {
     res = await api.rawRequest('POST', `/projects/${p.projectId}/template-deployments`, body)
@@ -319,15 +326,15 @@ export async function templateDeploy(target: string, opts: TemplateDeployOpts = 
     // machine-readable way, prompt from that and retry once instead of parroting an opaque 4xx.
     const missing = e instanceof ApiError ? missingVariablesFrom(e.body) : null
     if (!missing?.length) throw e
-    Object.assign(variables, await resolveVariables(missing, {}, { yes: opts.yes, tty, ask: promptVariable, onGenerated }))
+    Object.assign(variables, await resolveVariables(missing, {}, { tty, ask: promptVariable }))
     res = await api.rawRequest('POST', `/projects/${p.projectId}/template-deployments`, { ...body, variables })
   }
   if (handleApproval(res)) return
 
-  const submitted = res.body.deployment ?? res.body
+  const deploymentId = res.body.deploymentId ?? (res.body.deployment ?? res.body).id
   const codeLabel = manifest?.code ?? target
-  if (!quiet) info(`deploying template ${codeLabel} to branch ${branchName} (${submitted.id})`)
-  const dep = await watchDeployment((id) => api.request('GET', `/template-deployments/${id}`), submitted.id, quiet ? () => {} : info)
+  if (!quiet) info(`deploying template ${codeLabel} to branch ${branchName} (${deploymentId})`)
+  const dep = await watchDeployment((id) => api.request('GET', `/template-deployments/${id}`), deploymentId, quiet ? () => {} : info)
   if (opts.json) return printJson(dep)
   info(`template ${codeLabel} deployed to branch ${branchName}`)
   for (const u of deploymentUrls(dep)) info(`  ${u}`)
