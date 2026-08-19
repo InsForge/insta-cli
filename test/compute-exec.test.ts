@@ -3,8 +3,8 @@
 // pattern used throughout this suite (parseCpu/parseMemoryMb in limits.test.ts, parseVolumeGib in
 // volume.test.ts): the network-touching orchestration itself is untested here, same as
 // computeStart/computeVolume/computeLimits.
-import { describe, it, expect } from 'vitest'
-import { splitExecArgs, parseTimeoutSec, execRequestBody, computeExec } from '../src/commands/compute.js'
+import { describe, it, expect, vi, afterEach, afterAll } from 'vitest'
+import { splitExecArgs, parseTimeoutSec, execRequestBody, computeExec, applyExecResult } from '../src/commands/compute.js'
 
 describe('splitExecArgs', () => {
   it('splits the command out at the first literal -- after `compute exec`', () => {
@@ -44,11 +44,11 @@ describe('splitExecArgs', () => {
 describe('parseTimeoutSec', () => {
   it('accepts the documented bounds', () => {
     expect(parseTimeoutSec('1')).toBe(1)
-    expect(parseTimeoutSec('300')).toBe(300)
+    expect(parseTimeoutSec('180')).toBe(180)
     expect(parseTimeoutSec('30')).toBe(30)
   })
   it('rejects out-of-range and non-integer values locally', () => {
-    for (const raw of ['0', '301', '-1', '1.5', 'abc', '']) {
+    for (const raw of ['0', '181', '301', '-1', '1.5', 'abc', '']) {
       expect(() => parseTimeoutSec(raw), raw).toThrow(/invalid timeout/)
     }
   })
@@ -70,5 +70,58 @@ describe('computeExec validation (throws before any network/config access)', () 
   })
   it('rejects an invalid --timeout', async () => {
     await expect(computeExec('svc', ['echo'], { timeout: '9999' })).rejects.toThrow(/invalid timeout/)
+  })
+})
+
+// applyExecResult takes a plain {status, body} — the same shape handleApproval already takes — so
+// it's unit-testable without a network mock, same pattern as execRequestBody above.
+describe('applyExecResult', () => {
+  const stdout: string[] = []
+  const stderr: string[] = []
+  const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation((c: any) => { stdout.push(String(c)); return true })
+  const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation((c: any) => { stderr.push(String(c)); return true })
+  afterEach(() => { stdout.length = 0; stderr.length = 0; process.exitCode = undefined })
+  afterAll(() => { outSpy.mockRestore(); errSpy.mockRestore() })
+
+  it('202: exits 1 and prints the human approval hint (non-json)', () => {
+    applyExecResult({ status: 202, body: { status: 'approval_required', action: 'deploy', approvalId: 'appr_1' } })
+    expect(process.exitCode).toBe(1)
+    expect(stdout.join('')).toMatch(/approval required for deploy — run: insta approvals approve appr_1/)
+  })
+
+  it('202: exits 1 and prints the raw envelope with --json (not the human hint)', () => {
+    const body = { status: 'approval_required', action: 'deploy', approvalId: 'appr_1', message: 'needs review' }
+    applyExecResult({ status: 202, body }, true)
+    expect(process.exitCode).toBe(1)
+    expect(JSON.parse(stdout.join(''))).toEqual(body)
+    expect(stdout.join('')).not.toMatch(/approval required for/)
+  })
+
+  it('200: passes a normal exit code through untouched', () => {
+    applyExecResult({ status: 200, body: { exitCode: 0, stdout: 'hi\n', stderr: '' } })
+    expect(process.exitCode).toBe(0)
+    expect(stdout.join('')).toBe('hi\n')
+  })
+
+  it('200: passes exit code through with --json too', () => {
+    applyExecResult({ status: 200, body: { exitCode: 7, stdout: '', stderr: 'boom\n' } }, true)
+    expect(process.exitCode).toBe(7)
+  })
+
+  it('200: clamps the -1 unknown-exit sentinel to 1 with a stderr note', () => {
+    applyExecResult({ status: 200, body: { exitCode: -1, stdout: '', stderr: '' } })
+    expect(process.exitCode).toBe(1)
+    expect(stderr.join('')).toMatch(/note: remote exit code -1 out of range — exiting 1/)
+  })
+
+  it('200: clamps an out-of-range positive exit code (256) to 1 with a stderr note', () => {
+    applyExecResult({ status: 200, body: { exitCode: 256, stdout: '', stderr: '' } })
+    expect(process.exitCode).toBe(1)
+    expect(stderr.join('')).toMatch(/note: remote exit code 256 out of range — exiting 1/)
+  })
+
+  it('200: 255 is the top of the valid range and passes through untouched', () => {
+    applyExecResult({ status: 200, body: { exitCode: 255, stdout: '', stderr: '' } })
+    expect(process.exitCode).toBe(255)
   })
 })
