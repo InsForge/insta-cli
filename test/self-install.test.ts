@@ -128,10 +128,11 @@ test('resolveSpawnable re-enters npm/npx as node scripts so Windows .cmd shims a
   expect(resolveSpawnable('npx', ['skills', 'add'], '', winNode, 'win32'))
     .toEqual({ cmd: winNode, args: [winNpx, 'skills', 'add'] })
 
-  // Non-npm commands on Windows (claude is an npm-installed .cmd shim too) go through cmd.exe,
-  // quoting only the args that need it.
+  // Non-npm commands on Windows (claude is an npm-installed .cmd shim too) go through cmd.exe.
+  // Args stay UNquoted here: libuv quotes spaced args when building the child command line, so
+  // pre-quoting would double up and deliver literal quote characters to the target.
   expect(resolveSpawnable('claude', ['mcp', 'add', '--header', 'Authorization: Bearer x'], npmCli, winNode, 'win32'))
-    .toEqual({ cmd: 'cmd.exe', args: ['/d', '/s', '/c', 'claude', 'mcp', 'add', '--header', '"Authorization: Bearer x"'] })
+    .toEqual({ cmd: 'cmd.exe', args: ['/d', '/s', '/c', 'claude', 'mcp', 'add', '--header', 'Authorization: Bearer x'] })
   // On POSIX, non-npm commands and unresolvable environments pass through untouched.
   expect(resolveSpawnable('claude', ['--version'], npmCli, '/fake/bin/node', 'linux'))
     .toEqual({ cmd: 'claude', args: ['--version'] })

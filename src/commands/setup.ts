@@ -204,12 +204,11 @@ export function resolveSpawnable(
   if (cmd !== 'npm' && cmd !== 'npx') {
     // Other CLIs we shell out to (claude) are ALSO .cmd shims on Windows when npm-installed.
     // Their implementation layout isn't ours to know, so route them through cmd.exe (the
-    // documented way to run .cmd files), quoting only args that need it — every arg we pass is
-    // our own constant or a URL/token, never user input.
-    if (platform === 'win32') {
-      const quoted = args.map((a) => (/[\s&|<>^"]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a))
-      return { cmd: 'cmd.exe', args: ['/d', '/s', '/c', cmd, ...quoted] }
-    }
+    // documented way to run .cmd files). No manual quoting: libuv already wraps spaced args in
+    // double quotes when building the child command line, and our args are simple constants /
+    // URLs / tokens (no inner quotes, carets, or percent signs) — pre-quoting here would be
+    // quoted AGAIN by libuv and reach the target with literal quote characters.
+    if (platform === 'win32') return { cmd: 'cmd.exe', args: ['/d', '/s', '/c', cmd, ...args] }
     return { cmd, args }
   }
   if (npmExecpath && /(^|[\\/])np[mx](-cli)?\.[cm]?js$/.test(npmExecpath)) {
