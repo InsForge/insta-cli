@@ -133,6 +133,10 @@ test('resolveSpawnable re-enters npm/npx as node scripts so Windows .cmd shims a
   // pre-quoting would double up and deliver literal quote characters to the target.
   expect(resolveSpawnable('claude', ['mcp', 'add', '--header', 'Authorization: Bearer x'], npmCli, winNode, 'win32'))
     .toEqual({ cmd: 'cmd.exe', args: ['/d', '/s', '/c', 'claude', 'mcp', 'add', '--header', 'Authorization: Bearer x'] })
+  // cmd.exe metacharacters can't be safely quoted through the wrapper (libuv re-quotes) —
+  // such args skip it and the callers' best-effort degradation handles the failed bare spawn.
+  expect(resolveSpawnable('claude', ['mcp', 'add', 'x', 'https://mcp.example.com/mcp?a=1&b=2'], npmCli, winNode, 'win32'))
+    .toEqual({ cmd: 'claude', args: ['mcp', 'add', 'x', 'https://mcp.example.com/mcp?a=1&b=2'] })
   // On POSIX, non-npm commands and unresolvable environments pass through untouched.
   expect(resolveSpawnable('claude', ['--version'], npmCli, '/fake/bin/node', 'linux'))
     .toEqual({ cmd: 'claude', args: ['--version'] })
@@ -160,11 +164,16 @@ test('setupAgent self-installs the CLI BEFORE the skill install (the skill point
 test('ensureCliInstalled is best-effort: a failed install prints the fallback (and the EACCES hint) without an exit code', async () => {
   const prev = process.exitCode
   let out = ''
+  let exitCodeAfter: typeof process.exitCode = 'unset-sentinel' as never
   const spy = vi.spyOn(process.stdout, 'write').mockImplementation((s) => { out += String(s); return true })
-  await ensureCliInstalled(async () => ({ ok: false, output: 'npm ERR! EACCES permission denied' }), 'npm', false, () => false)
-  spy.mockRestore()
+  try {
+    await ensureCliInstalled(async () => ({ ok: false, output: 'npm ERR! EACCES permission denied' }), 'npm', false, () => false)
+    exitCodeAfter = process.exitCode
+  } finally {
+    spy.mockRestore()
+    process.exitCode = prev
+  }
   expect(out).toContain('npm install -g insta') // the manual fallback line
   expect(out).toContain('permission error') // the targeted EACCES hint
-  expect(process.exitCode).toBe(prev)
-  process.exitCode = prev
+  expect(exitCodeAfter).toBe(prev) // best-effort: no exit code was set
 })

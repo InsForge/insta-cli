@@ -205,10 +205,15 @@ export function resolveSpawnable(
     // Other CLIs we shell out to (claude) are ALSO .cmd shims on Windows when npm-installed.
     // Their implementation layout isn't ours to know, so route them through cmd.exe (the
     // documented way to run .cmd files). No manual quoting: libuv already wraps spaced args in
-    // double quotes when building the child command line, and our args are simple constants /
-    // URLs / tokens (no inner quotes, carets, or percent signs) — pre-quoting here would be
-    // quoted AGAIN by libuv and reach the target with literal quote characters.
-    if (platform === 'win32') return { cmd: 'cmd.exe', args: ['/d', '/s', '/c', cmd, ...args] }
+    // double quotes when building the child command line — pre-quoting here would be quoted
+    // AGAIN and reach the target with literal quote characters. That leaves cmd.exe
+    // metacharacters unprotectable, so an arg carrying one (e.g. a custom INSTA_MCP_URL with
+    // `&`) skips the wrapper instead: the bare-shim spawn fails and every caller of these
+    // commands already degrades gracefully (the probe treats it as not-installed; registration
+    // prints the manual-add fallback). Never hand metacharacters to a shell.
+    if (platform === 'win32' && !args.some((a) => /[&|<>^%"]/.test(a))) {
+      return { cmd: 'cmd.exe', args: ['/d', '/s', '/c', cmd, ...args] }
+    }
     return { cmd, args }
   }
   if (npmExecpath && /(^|[\\/])np[mx](-cli)?\.[cm]?js$/.test(npmExecpath)) {
