@@ -46,7 +46,7 @@ export function computeVerdict(checks: BuildCheck[]): BuildReport['verdict'] {
 // Port resolution mirrors deploy.ts: an explicit --port wins, else the Dockerfile's EXPOSE. The
 // rationale string is part of the output — every plan line says why (the `fly launch` pattern).
 export function inferPort(flag: string | undefined, dockerfile: string | undefined): { port?: number; rationale: string } {
-  if (flag) {
+  if (flag !== undefined) {
     const port = /^\d+$/.test(flag.trim()) ? Number(flag.trim()) : NaN
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`--port must be an integer between 1 and 65535, got: ${flag}`)
     return { port, rationale: '--port flag' }
@@ -120,7 +120,7 @@ export function contextCheck(ctx: ContextStats): BuildCheck {
   const detail = shipsNodeModules
     ? `node_modules (${mb(ctx.nodeModulesBytes)}) would ship in the ${size} build context`
     : ctx.truncated
-      ? `over ${WALK_CAP.toLocaleString('en-US')} files — scan truncated, ${size} is a floor`
+      ? `over ${WALK_CAP.toLocaleString('en-US')} entries — scan truncated, ${size} is a floor`
       : `${size}${tooBig ? ' — large contexts make remote builds slow' : ''}`
   const bad = shipsNodeModules || tooBig || ctx.truncated
   return {

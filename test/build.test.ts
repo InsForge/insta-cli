@@ -42,6 +42,7 @@ describe('inferPort', () => {
     expect(() => inferPort('0', undefined)).toThrow(/1.*65535/)
     expect(() => inferPort('70000', undefined)).toThrow(/1.*65535/)
     expect(() => inferPort('80.5', undefined)).toThrow(/1.*65535/)
+    expect(() => inferPort('', undefined)).toThrow(/1.*65535/) // explicit-but-empty is a mistake, not an omission
   })
 })
 
@@ -85,6 +86,7 @@ describe('contextCheck', () => {
     const c = contextCheck({ ...base, truncated: true })
     expect(c.status).toBe('fail')
     expect(c.detail).toContain('truncated')
+    expect(c.detail).toContain('entries') // the cap counts entries (dirs included), not files
   })
 })
 
