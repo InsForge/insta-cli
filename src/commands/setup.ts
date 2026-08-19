@@ -185,13 +185,41 @@ export async function ensureCliInstalled(
   }
 }
 
+// ---- Windows-safe spawning for npm/npx ----
+// On Windows `npm`/`npx` are .cmd shims, which spawn() without a shell refuses (Node docs:
+// spawning .bat/.cmd needs a shell or cmd.exe). Rather than a shell (argument-quoting hazards),
+// re-enter them as node scripts: the CLI script named by npm_execpath (swapped between
+// npm-cli.js and npx-cli.js as needed), else the one shipped beside the running node, else the
+// bare name (POSIX, where PATH shims resolve fine). Same strategy as `selfInstallCmd` below —
+// this one is applied inside the default runner so every `run('npx', …)` call site benefits.
+export function resolveSpawnable(
+  cmd: string,
+  args: string[],
+  npmExecpath = process.env.npm_execpath,
+  execPath = process.execPath,
+  platform: NodeJS.Platform = process.platform,
+): { cmd: string; args: string[] } {
+  if (cmd !== 'npm' && cmd !== 'npx') return { cmd, args }
+  if (npmExecpath && /(^|[\\/])np[mx](-cli)?\.[cm]?js$/.test(npmExecpath)) {
+    const cli = npmExecpath.replace(/np[mx](-cli)?(\.[cm]?js)$/, `${cmd}$1$2`)
+    if (existsSync(cli)) return { cmd: execPath, args: [cli, ...args] }
+  }
+  const nodeDir = dirname(execPath)
+  const besideNode = platform === 'win32'
+    ? join(nodeDir, 'node_modules', 'npm', 'bin', `${cmd}-cli.js`)
+    : join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', `${cmd}-cli.js`)
+  if (existsSync(besideNode)) return { cmd: execPath, args: [besideNode, ...args] }
+  return { cmd, args }
+}
+
 // Capture stdout+stderr silently (don't stream) so we can print our own clean summary.
 // stdin is 'ignore', NOT 'inherit': under the canonical `curl … | sh` install, stdin is the
 // piped install script itself — a child that inherits it (npx/skills reads for keypresses even
 // with -y) consumes the rest of the script, so the shell never runs the trailing "Get started"
 // guidance. Ignoring stdin keeps the installer's own output intact. (-y means no prompt anyway.)
-const defaultRunner: Runner = (cmd, args) =>
+const defaultRunner: Runner = (cmdIn, argsIn) =>
   new Promise((resolve) => {
+    const { cmd, args } = resolveSpawnable(cmdIn, argsIn)
     const env = { ...process.env, AI_AGENT: process.env.AI_AGENT || 'insta', FORCE_COLOR: '0' }
     const p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], env })
     let output = ''

@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test, expect, vi } from 'vitest'
-import { ensureCliInstalled, findDurableOnPath, selfInstallCmd, setupAgent, SETUP_ARGS } from '../src/commands/setup.js'
+import { ensureCliInstalled, findDurableOnPath, resolveSpawnable, selfInstallCmd, setupAgent, SETUP_ARGS } from '../src/commands/setup.js'
 
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version as string
 
@@ -110,6 +110,32 @@ test('ensureCliInstalled only claims success after re-finding insta on PATH', as
   cap.restore()
   expect(cap.out()).toContain('not on PATH')
   expect(cap.out()).not.toContain('now works in any shell')
+})
+
+test('resolveSpawnable re-enters npm/npx as node scripts so Windows .cmd shims are never spawned', () => {
+  // From npm_execpath: an npm-cli.js execpath resolves an `npx` call to its sibling npx-cli.js.
+  const npmBin = mkdtempSync(join(tmpdir(), 'insta-npmbin-'))
+  const npmCli = join(npmBin, 'npm-cli.js')
+  const npxCli = join(npmBin, 'npx-cli.js')
+  writeFileSync(npmCli, '')
+  writeFileSync(npxCli, '')
+  expect(resolveSpawnable('npx', ['skills', 'add'], npmCli, '/fake/bin/node', 'win32'))
+    .toEqual({ cmd: '/fake/bin/node', args: [npxCli, 'skills', 'add'] })
+
+  // Beside the running node (Windows layout), covering the default command path on win32.
+  const winDir = mkdtempSync(join(tmpdir(), 'insta-winnode-'))
+  const winNpx = join(winDir, 'node_modules', 'npm', 'bin', 'npx-cli.js')
+  mkdirSync(dirname(winNpx), { recursive: true })
+  writeFileSync(winNpx, '')
+  const winNode = join(winDir, 'node.exe')
+  expect(resolveSpawnable('npx', ['skills', 'add'], '', winNode, 'win32'))
+    .toEqual({ cmd: winNode, args: [winNpx, 'skills', 'add'] })
+
+  // Non-npm commands and unresolvable environments pass through untouched.
+  expect(resolveSpawnable('claude', ['--version'], npmCli, winNode, 'win32'))
+    .toEqual({ cmd: 'claude', args: ['--version'] })
+  expect(resolveSpawnable('npx', ['skills'], '', '/fake/bin/node', 'linux'))
+    .toEqual({ cmd: 'npx', args: ['skills'] })
 })
 
 test('setupAgent self-installs the CLI BEFORE the skill install (the skill points agents at `insta`)', async () => {
