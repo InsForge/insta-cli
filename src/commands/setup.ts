@@ -129,7 +129,9 @@ export function selfInstallCmd(
   execPath = process.execPath,
 ): { cmd: string; args: string[] } {
   const spec = `insta@${version}`
-  if (npmExecpath && /\.[cm]?js$/.test(npmExecpath)) {
+  // Re-enter ONLY an actual npm/npx CLI script: other launchers also set npm_execpath (yarn
+  // classic → yarn.js), and `node yarn.js install -g` is not a valid invocation of anything.
+  if (npmExecpath && /(^|[\\/])np[mx](-cli)?\.[cm]?js$/.test(npmExecpath)) {
     const npmCli = npmExecpath.replace(/npx(-cli)?(\.[cm]?js)$/, 'npm$1$2')
     return { cmd: execPath, args: [npmCli, 'install', '-g', spec] }
   }
@@ -267,11 +269,14 @@ export async function setupAgent(
   run: Runner = defaultRunner,
   mint?: TokenMinter,
   installConfigs: (agent?: string) => Promise<string[]> = installAgentConfigs,
+  ensure: (run: Runner) => Promise<void> = (r) => ensureCliInstalled(r),
 ): Promise<void> {
   if (!opts.yes && !process.stdout.isTTY) {
     info('non-interactive shell — assuming -y')
   }
-  await ensureCliInstalled(run)
+  // BEFORE the skill install: the skill tells agents to run `insta …`, so a durable CLI must
+  // exist by the time it lands.
+  await ensure(run)
   // One resolve for the whole step, so the skills and the MCP registration below cannot disagree
   // about which environment this machine belongs to.
   const { env, skills } = await resolveEnv()

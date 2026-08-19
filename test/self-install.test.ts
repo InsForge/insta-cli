@@ -1,8 +1,8 @@
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test, expect } from 'vitest'
-import { ensureCliInstalled, findDurableOnPath, selfInstallCmd } from '../src/commands/setup.js'
+import { test, expect, vi } from 'vitest'
+import { ensureCliInstalled, findDurableOnPath, selfInstallCmd, setupAgent, SETUP_ARGS } from '../src/commands/setup.js'
 
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version as string
 
@@ -45,9 +45,14 @@ test('selfInstallCmd re-enters the spawning npm and pins the running version', (
   expect(args).toEqual(['/nvm/v20/lib/node_modules/npm/bin/npm-cli.js', 'install', '-g', 'insta@1.2.3'])
 })
 
-test('selfInstallCmd falls back to plain npm when no npm_execpath is present (or it is not a script)', () => {
-  expect(selfInstallCmd('1.2.3', '')).toEqual({ cmd: 'npm', args: ['install', '-g', 'insta@1.2.3'] })
-  expect(selfInstallCmd('1.2.3', '/usr/local/bin/bun', '/usr/local/bin/bun')).toEqual({ cmd: 'npm', args: ['install', '-g', 'insta@1.2.3'] })
+test('selfInstallCmd falls back to plain npm when npm_execpath is absent or not an npm/npx script', () => {
+  const fallback = { cmd: 'npm', args: ['install', '-g', 'insta@1.2.3'] }
+  expect(selfInstallCmd('1.2.3', '')).toEqual(fallback)
+  expect(selfInstallCmd('1.2.3', '/usr/local/bin/bun', '/usr/local/bin/bun')).toEqual(fallback)
+  // yarn classic sets npm_execpath to yarn.js — `node yarn.js install -g` is not a valid
+  // invocation of anything, so it must NOT be re-entered.
+  expect(selfInstallCmd('1.2.3', '/usr/lib/yarn/bin/yarn.js')).toEqual(fallback)
+  expect(selfInstallCmd('1.2.3', '/usr/lib/pnpm/dist/pnpm.cjs')).toEqual(fallback)
 })
 
 test('ensureCliInstalled installs globally only on the npm channel with no durable insta', async () => {
@@ -66,12 +71,40 @@ test('ensureCliInstalled installs globally only on the npm channel with no durab
 })
 
 test('ensureCliInstalled only claims success after re-finding insta on PATH', async () => {
-  // recheck false (custom npm prefix off PATH) must not throw and must not set an exit code —
-  // the setup continues either way; the distinction is only which guidance line is printed.
-  const prev = process.exitCode
+  const captured = (): { out: () => string; restore: () => void } => {
+    let out = ''
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((s) => { out += String(s); return true })
+    return { out: () => out, restore: () => spy.mockRestore() }
+  }
+  // recheck true → the unqualified success line
+  let cap = captured()
+  await ensureCliInstalled(async () => ({ ok: true, output: '' }), 'npm', false, () => true)
+  cap.restore()
+  expect(cap.out()).toContain('now works in any shell')
+
+  // recheck false (custom npm prefix off PATH) → the add-to-PATH guidance, NOT the success claim
+  cap = captured()
   await ensureCliInstalled(async () => ({ ok: true, output: '' }), 'npm', false, () => false)
-  expect(process.exitCode).toBe(prev)
-  process.exitCode = prev
+  cap.restore()
+  expect(cap.out()).toContain('not on PATH')
+  expect(cap.out()).not.toContain('now works in any shell')
+})
+
+test('setupAgent self-installs the CLI BEFORE the skill install (the skill points agents at `insta`)', async () => {
+  const runs: string[][] = []
+  const runner = async (_cmd: string, args: string[]) => { runs.push(args); return { ok: true, output: '' } }
+  await setupAgent(
+    { yes: true },
+    runner,
+    undefined,
+    async () => [],
+    (r) => ensureCliInstalled(r, 'npm', false, () => true), // force the npx-with-no-durable-insta case
+  )
+  expect(runs[0]!.slice(-3)).toEqual(['install', '-g', `insta@${VERSION}`])
+  // Shape, not exact args: the skill source varies with the resolved environment, and
+  // SETUP_ARGS' content is already asserted in setup-agent.test.ts. This test is about ORDER.
+  expect(runs[1]!.slice(0, 2)).toEqual(SETUP_ARGS.slice(0, 2)) // ['skills', 'add']
+  expect(runs[1]!.join(' ')).toContain('-s insta')
 })
 
 test('ensureCliInstalled is best-effort: a failed global install does not throw or set an exit code', async () => {
