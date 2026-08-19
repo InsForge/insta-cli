@@ -17,6 +17,7 @@ import { resolveServiceArgs, serviceArgsDeps } from './resolve-service.js'
 import * as regions from './commands/regions.js'
 import * as secretsCmd from './commands/secrets.js'
 import { deploy } from './commands/deploy.js'
+import { build } from './commands/build.js'
 import * as computeCmd from './commands/compute.js'
 import * as dbCmd from './commands/db.js'
 import * as storageCmd from './commands/storage.js'
@@ -184,6 +185,13 @@ sec.command('sources').description('List service credential sources available fo
   .action(guard((o) => secretsCmd.secretsSources(o)))
 sec.command('tree').description('Show secrets as project → branch → service → secrets').option('--json')
   .action(guard((o) => secretsCmd.secretsTree(o)))
+
+// ---- build (pre-push verification — local, offline, deploys nothing) ----
+program.command('build [dir]').description('Verify a source directory would build before deploying: detection plan + the Dockerfile that would be used (yours, or nixpacks-generated) + static checks. Local and offline — no login needed, nothing pushed. Exit 1 when the verdict is failed')
+  .option('--explain', 'include the Dockerfile content in the output')
+  .option('--port <p>', 'port the app listens on (else the Dockerfile EXPOSE)')
+  .option('--json')
+  .action(guard((dir, o) => build(dir, o)))
 
 // ---- deploy ----
 program.command('deploy [dir]').description('Deploy a source directory (built remotely on Fly) or a prebuilt --image to a branch compute group')
