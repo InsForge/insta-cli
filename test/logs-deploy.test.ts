@@ -10,6 +10,12 @@ describe('deployEventsPath', () => {
   it('omits undefined/empty params', () => {
     expect(deployEventsPath('p1', {})).toBe('/projects/p1/deploy-events')
   })
+  // Managed Fly databases have machine lifecycle events too; the component scopes the group
+  // lookup to the service's own type. Omitted → the platform defaults to compute.
+  it('carries the component for a managed database', () => {
+    expect(deployEventsPath('p1', { component: 'redis', group: 'cache' }))
+      .toBe('/projects/p1/deploy-events?component=redis&group=cache')
+  })
 })
 
 describe('deployEventLine', () => {

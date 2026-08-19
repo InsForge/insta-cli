@@ -277,11 +277,11 @@ program.command('manifest').description('Print an agent-legible view of the proj
 program.command('regions').description('List regions available for postgres/compute services').option('--json').action(guard((o) => regions.regionsList(o)))
 
 // ---- observability ----
-program.command('metrics <target> [group]').description('Service metrics (target: db|compute)')
+program.command('metrics <target> [group]').description('Service metrics (target: db|compute|redis|mysql|mongodb)')
   .option('--branch <b>').option('--from <unix>').option('--to <unix>').option('--step <s>').option('--json')
   .action(guard((target, group, o) => obs.metrics(target, group, o)))
-program.command('logs <target> [group]').description('Service logs (runtime by default; --deploy = compute deploy events; target: db|compute)')
-  .option('--branch <b>').option('--limit <n>').option('--region <r>').option('--instance <i>').option('--deploy', 'show compute deploy events (machine lifecycle) instead of runtime logs').option('--json')
+program.command('logs <target> [group]').description('Service logs (runtime by default; --deploy = machine lifecycle events; target: db|compute|redis|mysql|mongodb)')
+  .option('--branch <b>').option('--limit <n>').option('--region <r>').option('--instance <i>').option('--deploy', 'show deploy events (machine lifecycle) instead of runtime logs — Fly-backed targets only, not db').option('--json')
   .action(guard((target, group, o) => obs.logs(target, group, o)))
 program.command('usage').description('Usage for the current billing cycle by billing dimension (org by default; --proj for one project)')
   .option('--from <unix>').option('--to <unix>').option('--proj [id]', 'show one project (the linked one, or a given id) instead of the whole org').option('--json')
