@@ -43,7 +43,8 @@
   },
   "dependencies": {
     "@clack/prompts": "^0.9.1",
-    "commander": "^12.1.0"
+    "commander": "^12.1.0",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
