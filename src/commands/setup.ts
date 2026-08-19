@@ -120,37 +120,6 @@ export function findDurableOnPath(
   return false
 }
 
-/** The exact global-install invocation, pinned to THIS version so the one-liner installs what it
- *  ran. Re-enter the npm that spawned us (npm_execpath) rather than whatever `npm` is on PATH:
- *  under a version manager they can differ, and on Windows spawning `npm` without a shell fails
- *  while `node npm-cli.js` works everywhere. npx runs set npm_execpath to npx-cli.js — swap it
- *  for its sibling npm-cli.js. */
-export function selfInstallCmd(
-  version: string,
-  npmExecpath = process.env.npm_execpath,
-  execPath = process.execPath,
-  platform: NodeJS.Platform = process.platform,
-): { cmd: string; args: string[] } {
-  const spec = `insta@${version}`
-  // Re-enter ONLY an actual npm/npx CLI script: other launchers also set npm_execpath (yarn
-  // classic → yarn.js), and `node yarn.js install -g` is not a valid invocation of anything.
-  if (npmExecpath && /(^|[\\/])np[mx](-cli)?\.[cm]?js$/.test(npmExecpath)) {
-    const npmCli = npmExecpath.replace(/npx(-cli)?(\.[cm]?js)$/, 'npm$1$2')
-    return { cmd: execPath, args: [npmCli, 'install', '-g', spec] }
-  }
-  // No usable npm_execpath (bun, yarn, pnpm, none): use the npm that ships beside this node —
-  // bare `npm` is npm.cmd on Windows, which spawn() refuses without a shell defaultRunner
-  // never uses. Layouts: <nodedir>/node_modules/npm (Windows), <nodedir>/../lib/... (POSIX).
-  const nodeDir = dirname(execPath)
-  const besideNode = platform === 'win32'
-    ? join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js')
-    : join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
-  if (existsSync(besideNode)) return { cmd: execPath, args: [besideNode, 'install', '-g', spec] }
-  // Last resort (POSIX shims like nvm/volta resolve `npm` fine; on Windows this whole branch
-  // is best-effort and falls through to the printed manual command on failure).
-  return { cmd: 'npm', args: ['install', '-g', spec] }
-}
-
 const cliVersion = (): string => {
   try {
     return JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version as string
@@ -167,8 +136,12 @@ export async function ensureCliInstalled(
 ): Promise<void> {
   if (channel !== 'npm' || onPath) return
   info('installing the insta CLI globally (npm) …')
-  const { cmd, args } = selfInstallCmd(cliVersion())
-  const res = await run(cmd, args)
+  // Pinned to THIS version so the one-liner installs exactly what it ran. The logical `npm` is
+  // resolved to a spawnable invocation ONCE, inside the default runner (resolveSpawnable) —
+  // handing it a pre-resolved node/npm-cli.js path here would make the runner resolve it a
+  // second time and, on Windows, wrap the real node.exe in cmd.exe.
+  const spec = `insta@${cliVersion()}`
+  const res = await run('npm', ['install', '-g', spec])
   if (res.ok) {
     // A clean `npm i -g` can still land in a bin dir that isn't on PATH (custom npm prefix) —
     // exactly the machines this path exists for. Only claim success after re-finding the shim.
@@ -181,7 +154,7 @@ export async function ensureCliInstalled(
     return
   }
   info('  global CLI install failed — continuing with agent setup; install manually with:')
-  info('    npm install -g insta')
+  info(`    npm install -g ${spec}`)
   if (/EACCES|permission denied/i.test(res.output ?? '')) {
     info('    (permission error: the npm prefix is system-owned — use a Node version manager, or elevate that one command)')
   }
@@ -192,8 +165,8 @@ export async function ensureCliInstalled(
 // spawning .bat/.cmd needs a shell or cmd.exe). Rather than a shell (argument-quoting hazards),
 // re-enter them as node scripts: the CLI script named by npm_execpath (swapped between
 // npm-cli.js and npx-cli.js as needed), else the one shipped beside the running node, else the
-// bare name (POSIX, where PATH shims resolve fine). Same strategy as `selfInstallCmd` below —
-// this one is applied inside the default runner so every `run('npx', …)` call site benefits.
+// bare name (POSIX, where PATH shims resolve fine). Applied ONCE, inside the default runner,
+// so every `run('npm'|'npx', …)` call site benefits and nothing is ever resolved twice.
 export function resolveSpawnable(
   cmd: string,
   args: string[],
@@ -204,14 +177,17 @@ export function resolveSpawnable(
   if (cmd !== 'npm' && cmd !== 'npx') {
     // Other CLIs we shell out to (claude) are ALSO .cmd shims on Windows when npm-installed.
     // Their implementation layout isn't ours to know, so route them through cmd.exe (the
-    // documented way to run .cmd files). No manual quoting: libuv already wraps spaced args in
-    // double quotes when building the child command line — pre-quoting here would be quoted
-    // AGAIN and reach the target with literal quote characters. That leaves cmd.exe
-    // metacharacters unprotectable, so an arg carrying one (e.g. a custom INSTA_MCP_URL with
-    // `&`) skips the wrapper instead: the bare-shim spawn fails and every caller of these
-    // commands already degrades gracefully (the probe treats it as not-installed; registration
-    // prints the manual-add fallback). Never hand metacharacters to a shell.
-    if (platform === 'win32' && !args.some((a) => /[&|<>^%"]/.test(a))) {
+    // documented way to run .cmd files). Guards, in order:
+    // - BARE names only: an absolute path or anything .exe (node.exe from a resolved npm/npx
+    //   invocation passing back through here) is directly spawnable and must NOT see cmd.exe.
+    // - No manual quoting: libuv already wraps spaced args when building the child command
+    //   line — pre-quoting would be quoted AGAIN and arrive as literal quote characters.
+    // - That leaves cmd.exe metacharacters unprotectable, so an arg carrying one (e.g. a
+    //   custom INSTA_MCP_URL with `&`) skips the wrapper: the bare-shim spawn fails and every
+    //   caller degrades gracefully (probe → not-installed; registration → manual-add
+    //   fallback). Never hand metacharacters to a shell.
+    const bareShim = !/[\\/]/.test(cmd) && !/\.exe$/i.test(cmd)
+    if (platform === 'win32' && bareShim && !args.some((a) => /[&|<>^%"]/.test(a))) {
       return { cmd: 'cmd.exe', args: ['/d', '/s', '/c', cmd, ...args] }
     }
     return { cmd, args }

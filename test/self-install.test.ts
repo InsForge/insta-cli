@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test, expect, vi } from 'vitest'
-import { ensureCliInstalled, findDurableOnPath, resolveSpawnable, selfInstallCmd, setupAgent, SETUP_ARGS } from '../src/commands/setup.js'
+import { ensureCliInstalled, findDurableOnPath, resolveSpawnable, setupAgent, SETUP_ARGS } from '../src/commands/setup.js'
 
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version as string
 
@@ -39,32 +39,37 @@ test('findDurableOnPath resolves Windows shims via PATHEXT (insta.cmd) and the e
   expect(findDurableOnPath('insta', { PATH: bin2, PATHEXT: '.COM;.EXE' }, 'win32')).toBe(true)
 })
 
-test('selfInstallCmd re-enters the spawning npm and pins the running version', () => {
-  const { cmd, args } = selfInstallCmd('1.2.3', '/nvm/v20/lib/node_modules/npm/bin/npx-cli.js', '/nvm/v20/bin/node')
-  expect(cmd).toBe('/nvm/v20/bin/node')
-  expect(args).toEqual(['/nvm/v20/lib/node_modules/npm/bin/npm-cli.js', 'install', '-g', 'insta@1.2.3'])
+test('resolveSpawnable resolves a logical npm via npm_execpath (npx-cli.js → sibling npm-cli.js)', () => {
+  const bin = mkdtempSync(join(tmpdir(), 'insta-execpath-'))
+  const npxCli = join(bin, 'npx-cli.js')
+  const npmCli = join(bin, 'npm-cli.js')
+  writeFileSync(npxCli, '')
+  writeFileSync(npmCli, '')
+  expect(resolveSpawnable('npm', ['install', '-g', 'insta@1.2.3'], npxCli, '/nvm/v20/bin/node', 'linux'))
+    .toEqual({ cmd: '/nvm/v20/bin/node', args: [npmCli, 'install', '-g', 'insta@1.2.3'] })
 })
 
-test('selfInstallCmd never re-enters a non-npm launcher (yarn.js, pnpm.cjs, bun, none)', () => {
+test('resolveSpawnable never re-enters a non-npm launcher (yarn.js, pnpm.cjs, bun, none)', () => {
   const fallback = { cmd: 'npm', args: ['install', '-g', 'insta@1.2.3'] }
-  const fakeNode = '/fake/prefix/bin/node' // no npm beside it → bare-npm last resort
-  expect(selfInstallCmd('1.2.3', '', fakeNode, 'linux')).toEqual(fallback)
-  expect(selfInstallCmd('1.2.3', '/fake/tools/bun', '/fake/tools/bun', 'linux')).toEqual(fallback)
+  const fakeNode = '/fake/prefix/bin/node' // no npm beside it → bare-npm last resort (POSIX)
+  expect(resolveSpawnable('npm', fallback.args, '', fakeNode, 'linux')).toEqual(fallback)
+  expect(resolveSpawnable('npm', fallback.args, '/fake/tools/bun', '/fake/tools/bun', 'linux')).toEqual(fallback)
   // yarn classic sets npm_execpath to yarn.js — `node yarn.js install -g` is not a valid
   // invocation of anything, so it must NOT be re-entered.
-  expect(selfInstallCmd('1.2.3', '/usr/lib/yarn/bin/yarn.js', fakeNode, 'linux')).toEqual(fallback)
-  expect(selfInstallCmd('1.2.3', '/usr/lib/pnpm/dist/pnpm.cjs', fakeNode, 'linux')).toEqual(fallback)
+  expect(resolveSpawnable('npm', fallback.args, '/usr/lib/yarn/bin/yarn.js', fakeNode, 'linux')).toEqual(fallback)
+  expect(resolveSpawnable('npm', fallback.args, '/usr/lib/pnpm/dist/pnpm.cjs', fakeNode, 'linux')).toEqual(fallback)
 })
 
-test('selfInstallCmd without npm_execpath uses the npm shipped beside the running node (spawnable on Windows)', () => {
+test('resolveSpawnable without npm_execpath uses the npm shipped beside the running node (spawnable on Windows)', () => {
+  const ARGS = ['install', '-g', 'insta@1.2.3']
   // POSIX layout: <prefix>/bin/node + <prefix>/lib/node_modules/npm/bin/npm-cli.js
   const posixPrefix = mkdtempSync(join(tmpdir(), 'insta-node-'))
   const posixNpm = join(posixPrefix, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
   mkdirSync(dirname(posixNpm), { recursive: true })
   writeFileSync(posixNpm, '')
   const posixNode = join(posixPrefix, 'bin', 'node')
-  expect(selfInstallCmd('1.2.3', '', posixNode, 'linux'))
-    .toEqual({ cmd: posixNode, args: [posixNpm, 'install', '-g', 'insta@1.2.3'] })
+  expect(resolveSpawnable('npm', ARGS, '', posixNode, 'linux'))
+    .toEqual({ cmd: posixNode, args: [posixNpm, ...ARGS] })
 
   // Windows layout: <dir>\node.exe + <dir>\node_modules\npm\bin\npm-cli.js — bare `npm` would
   // be npm.cmd, which spawn() without a shell refuses.
@@ -73,8 +78,13 @@ test('selfInstallCmd without npm_execpath uses the npm shipped beside the runnin
   mkdirSync(dirname(winNpm), { recursive: true })
   writeFileSync(winNpm, '')
   const winNode = join(winDir, 'node.exe')
-  expect(selfInstallCmd('1.2.3', '', winNode, 'win32'))
-    .toEqual({ cmd: winNode, args: [winNpm, 'install', '-g', 'insta@1.2.3'] })
+  expect(resolveSpawnable('npm', ARGS, '', winNode, 'win32'))
+    .toEqual({ cmd: winNode, args: [winNpm, ...ARGS] })
+
+  // An ALREADY-RESOLVED node.exe invocation passing back through must NOT be cmd.exe-wrapped —
+  // absolute paths and .exe targets are directly spawnable (the win32 wrapper is for bare shims).
+  expect(resolveSpawnable(winNode, [winNpm, ...ARGS], '', winNode, 'win32'))
+    .toEqual({ cmd: winNode, args: [winNpm, ...ARGS] })
 })
 
 test('ensureCliInstalled installs globally only on the npm channel with no durable insta', async () => {
