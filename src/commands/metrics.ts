@@ -60,7 +60,7 @@ function humanBytes(v: number, base: 1000 | 1024): string {
   return `${shown} ${units[i]}`
 }
 
-// insta metrics <db|compute> [group]
+// insta metrics <db|compute|redis|mysql|mongodb> [group]
 export async function metrics(component: string, group: string | undefined, opts: { branch?: string; from?: string; to?: string; step?: string; json?: boolean }): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
@@ -129,9 +129,11 @@ export async function usage(opts: { from?: string; to?: string; json?: boolean; 
   }
 }
 
-// pure: platform path for a compute deploy-events request (used by `insta logs --deploy`).
-export function deployEventsPath(projectId: string, opts: { group?: string; branch?: string; limit?: string; instance?: string }): string {
-  return `/projects/${projectId}/deploy-events${qs({ group: opts.group, branch: opts.branch, limit: opts.limit, instance: opts.instance })}`
+// pure: platform path for a deploy-events request (used by `insta logs --deploy`). Any Fly-backed
+// component (compute or a managed database) has machine lifecycle events; omitted → the platform
+// defaults to compute.
+export function deployEventsPath(projectId: string, opts: { component?: string; group?: string; branch?: string; limit?: string; instance?: string }): string {
+  return `/projects/${projectId}/deploy-events${qs({ component: opts.component, group: opts.group, branch: opts.branch, limit: opts.limit, instance: opts.instance })}`
 }
 
 // pure: render one deploy event as a log-style line.
@@ -140,13 +142,14 @@ export function deployEventLine(ev: { ts?: string; origin?: string; type?: strin
   return `${ev.ts ?? ''}  [${ev.origin ?? ''}] ${ev.type ?? ''}: ${ev.status ?? ''}${inst}`
 }
 
-// insta logs <db|compute> [group]
+// insta logs <db|compute|redis|mysql|mongodb> [group]
 export async function logs(component: string, group: string | undefined, opts: { branch?: string; limit?: string; region?: string; instance?: string; json?: boolean; deploy?: boolean }): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
   if (opts.deploy) {
-    if (component !== 'compute') return info('deploy events are only available for compute')
-    const res = await api.request('GET', deployEventsPath(p.projectId, { group, branch: opts.branch ?? p.branch, limit: opts.limit, instance: opts.instance }))
+    // Machine lifecycle events exist for every Fly-backed component; 'db' (postgres) has no machines.
+    if (component === 'db') return info('deploy events are not available for db — use compute, redis, mysql or mongodb')
+    const res = await api.request('GET', deployEventsPath(p.projectId, { component, group, branch: opts.branch ?? p.branch, limit: opts.limit, instance: opts.instance }))
     if (opts.json) return printJson(res)
     if (res.note) info(`note: ${res.note}`)
     if (!res.events?.length) return info('(no deploy events)')
