@@ -6,12 +6,15 @@
 // Stack skills (tigris/better-auth) intentionally stay per-project: their presence in a
 // project doubles as its stack manifest — that install happens on `project create|link`.
 import { spawn } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import os from 'node:os'
 import { ApiClient } from '../api.js'
 import { resolveEnv } from '../config.js'
 import { DEFAULT_ENV, ENVS, mcpServerName } from '../env.js'
 import { info } from '../util.js'
 import { installAgentConfigs } from './mcp.js'
+import { detectChannel, type Channel } from './upgrade.js'
 
 // The `skills` tool we shell out to prints a clack UI: a frame-by-frame clone spinner, an
 // "Installing to all N agents" banner, a full N-line install-path box, and a third-party
@@ -77,6 +80,78 @@ export function summarizeInstall(output: string): string {
 }
 
 export type Runner = (cmd: string, args: string[]) => Promise<{ ok: boolean; output?: string }>
+
+// ---- CLI self-install (makes `npx -y insta setup agent` a complete one-liner) ----
+
+// Under npx the CLI runs from the npm cache and vanishes when the process exits — but the skill
+// installed below tells every agent to run `insta …`, which then wouldn't exist. So when this
+// process came from the npm channel and no DURABLE `insta` is on PATH, install ourselves
+// globally first. The scan must ignore any PATH entry under a node_modules directory: npx
+// prepends its cache's node_modules/.bin (where this very process's `insta` shim lives), while
+// durable installs (npm -g bin, nvm/volta/fnm, the native binary's ~/.insta/bin) never sit
+// under one.
+export function findDurableOnPath(
+  bin: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const win = platform === 'win32'
+  const dirs = (env.PATH ?? '').split(win ? ';' : ':')
+  // npm on Windows writes insta.cmd/insta.ps1 plus an extensionless sh shim; PATHEXT covers the
+  // former, the bare name the latter.
+  const exts = win ? [...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';'), ''] : ['']
+  for (const dir of dirs) {
+    if (!dir || dir.includes('node_modules')) continue
+    for (const ext of exts) if (existsSync(join(dir, bin + ext))) return true
+  }
+  return false
+}
+
+/** The exact global-install invocation, pinned to THIS version so the one-liner installs what it
+ *  ran. Re-enter the npm that spawned us (npm_execpath) rather than whatever `npm` is on PATH:
+ *  under a version manager they can differ, and on Windows spawning `npm` without a shell fails
+ *  while `node npm-cli.js` works everywhere. npx runs set npm_execpath to npx-cli.js — swap it
+ *  for its sibling npm-cli.js. */
+export function selfInstallCmd(
+  version: string,
+  npmExecpath = process.env.npm_execpath,
+  execPath = process.execPath,
+): { cmd: string; args: string[] } {
+  const spec = `insta@${version}`
+  if (npmExecpath && /\.[cm]?js$/.test(npmExecpath)) {
+    const npmCli = npmExecpath.replace(/npx(-cli)?(\.[cm]?js)$/, 'npm$1$2')
+    return { cmd: execPath, args: [npmCli, 'install', '-g', spec] }
+  }
+  return { cmd: 'npm', args: ['install', '-g', spec] }
+}
+
+const cliVersion = (): string => {
+  try {
+    return JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version as string
+  } catch { return 'latest' }
+}
+
+/** Best-effort: a failed global install must not block the skill/MCP setup below — the npx run
+ *  itself still completes the agent onboarding, and the manual fallback is one line. */
+export async function ensureCliInstalled(
+  run: Runner,
+  channel: Channel = detectChannel(),
+  onPath = findDurableOnPath('insta'),
+): Promise<void> {
+  if (channel !== 'npm' || onPath) return
+  info('installing the insta CLI globally (npm) …')
+  const { cmd, args } = selfInstallCmd(cliVersion())
+  const res = await run(cmd, args)
+  if (res.ok) {
+    info('✓ insta CLI — installed globally (`insta` now works in any shell)')
+    return
+  }
+  info('  global CLI install failed — continuing with agent setup; install manually with:')
+  info('    npm install -g insta')
+  if (/EACCES|permission denied/i.test(res.output ?? '')) {
+    info('    (permission error: the npm prefix is system-owned — use a Node version manager, or elevate that one command)')
+  }
+}
 
 // Capture stdout+stderr silently (don't stream) so we can print our own clean summary.
 // stdin is 'ignore', NOT 'inherit': under the canonical `curl … | sh` install, stdin is the
@@ -177,6 +252,7 @@ export async function setupAgent(
   if (!opts.yes && !process.stdout.isTTY) {
     info('non-interactive shell — assuming -y')
   }
+  await ensureCliInstalled(run)
   // One resolve for the whole step, so the skills and the MCP registration below cannot disagree
   // about which environment this machine belongs to.
   const { env, skills } = await resolveEnv()
