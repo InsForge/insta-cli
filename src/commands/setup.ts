@@ -6,7 +6,7 @@
 // Stack skills (tigris/better-auth) intentionally stay per-project: their presence in a
 // project doubles as its stack manifest — that install happens on `project create|link`.
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import os from 'node:os'
 import { ApiClient } from '../api.js'
@@ -90,6 +90,17 @@ export type Runner = (cmd: string, args: string[]) => Promise<{ ok: boolean; out
 // prepends its cache's node_modules/.bin (where this very process's `insta` shim lives), while
 // durable installs (npm -g bin, nvm/volta/fnm, the native binary's ~/.insta/bin) never sit
 // under one.
+// On POSIX a PATH hit only counts if it would actually run: a plain non-executable file (or a
+// directory) named `insta` must not suppress the self-install. On Windows X_OK is meaningless
+// (execution is extension-driven), so existence is the right check there.
+const isRunnableFile = (p: string, win: boolean): boolean => {
+  try {
+    if (win) return existsSync(p) && statSync(p).isFile()
+    accessSync(p, fsConstants.X_OK)
+    return statSync(p).isFile()
+  } catch { return false }
+}
+
 export function findDurableOnPath(
   bin: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -102,7 +113,7 @@ export function findDurableOnPath(
   const exts = win ? [...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';'), ''] : ['']
   for (const dir of dirs) {
     if (!dir || dir.includes('node_modules')) continue
-    for (const ext of exts) if (existsSync(join(dir, bin + ext))) return true
+    for (const ext of exts) if (isRunnableFile(join(dir, bin + ext), win)) return true
   }
   return false
 }
@@ -137,13 +148,21 @@ export async function ensureCliInstalled(
   run: Runner,
   channel: Channel = detectChannel(),
   onPath = findDurableOnPath('insta'),
+  recheck: () => boolean = () => findDurableOnPath('insta'),
 ): Promise<void> {
   if (channel !== 'npm' || onPath) return
   info('installing the insta CLI globally (npm) …')
   const { cmd, args } = selfInstallCmd(cliVersion())
   const res = await run(cmd, args)
   if (res.ok) {
-    info('✓ insta CLI — installed globally (`insta` now works in any shell)')
+    // A clean `npm i -g` can still land in a bin dir that isn't on PATH (custom npm prefix) —
+    // exactly the machines this path exists for. Only claim success after re-finding the shim.
+    if (recheck()) {
+      info('✓ insta CLI — installed globally (`insta` now works in any shell)')
+    } else {
+      info('✓ insta CLI — installed globally, but npm\'s global bin dir is not on PATH')
+      info('    add it to PATH (POSIX: `$(npm prefix -g)/bin`; Windows: the dir `npm prefix -g` prints), then verify with `insta --version`')
+    }
     return
   }
   info('  global CLI install failed — continuing with agent setup; install manually with:')

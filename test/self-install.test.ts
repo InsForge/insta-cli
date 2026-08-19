@@ -10,13 +10,22 @@ test('findDurableOnPath finds a real global shim and ignores npx cache entries',
   const globalBin = mkdtempSync(join(tmpdir(), 'insta-bin-'))
   const npxBin = join(mkdtempSync(join(tmpdir(), 'insta-npx-')), 'node_modules', '.bin')
   mkdirSync(npxBin, { recursive: true })
-  writeFileSync(join(npxBin, 'insta'), '#!/bin/sh\n')
+  writeFileSync(join(npxBin, 'insta'), '#!/bin/sh\n', { mode: 0o755 })
 
   // Only the npx cache shim exists — the durable scan must NOT count it.
   expect(findDurableOnPath('insta', { PATH: `${npxBin}:${globalBin}` }, 'linux')).toBe(false)
-  // A shim in a real bin dir does count.
-  writeFileSync(join(globalBin, 'insta'), '#!/bin/sh\n')
+  // An executable shim in a real bin dir does count.
+  writeFileSync(join(globalBin, 'insta'), '#!/bin/sh\n', { mode: 0o755 })
   expect(findDurableOnPath('insta', { PATH: `${npxBin}:${globalBin}` }, 'linux')).toBe(true)
+})
+
+test('findDurableOnPath rejects POSIX PATH hits that could not actually run', () => {
+  const bin = mkdtempSync(join(tmpdir(), 'insta-noexec-'))
+  writeFileSync(join(bin, 'insta'), 'not a program\n', { mode: 0o644 }) // no exec bit
+  expect(findDurableOnPath('insta', { PATH: bin }, 'linux')).toBe(false)
+  const bin2 = mkdtempSync(join(tmpdir(), 'insta-dir-'))
+  mkdirSync(join(bin2, 'insta')) // a DIRECTORY named insta
+  expect(findDurableOnPath('insta', { PATH: bin2 }, 'linux')).toBe(false)
 })
 
 test('findDurableOnPath resolves Windows shims via PATHEXT (insta.cmd) and the extensionless sh shim', () => {
@@ -45,7 +54,7 @@ test('ensureCliInstalled installs globally only on the npm channel with no durab
   const runs: string[][] = []
   const runner = async (_cmd: string, args: string[]) => { runs.push(args); return { ok: true, output: '' } }
 
-  await ensureCliInstalled(runner, 'npm', false)
+  await ensureCliInstalled(runner, 'npm', false, () => true)
   expect(runs).toHaveLength(1)
   expect(runs[0]!.slice(-3)).toEqual(['install', '-g', `insta@${VERSION}`]) // pinned to the running version
 
@@ -56,9 +65,18 @@ test('ensureCliInstalled installs globally only on the npm channel with no durab
   expect(runs).toHaveLength(0)
 })
 
+test('ensureCliInstalled only claims success after re-finding insta on PATH', async () => {
+  // recheck false (custom npm prefix off PATH) must not throw and must not set an exit code —
+  // the setup continues either way; the distinction is only which guidance line is printed.
+  const prev = process.exitCode
+  await ensureCliInstalled(async () => ({ ok: true, output: '' }), 'npm', false, () => false)
+  expect(process.exitCode).toBe(prev)
+  process.exitCode = prev
+})
+
 test('ensureCliInstalled is best-effort: a failed global install does not throw or set an exit code', async () => {
   const prev = process.exitCode
-  await ensureCliInstalled(async () => ({ ok: false, output: 'npm ERR! EACCES permission denied' }), 'npm', false)
+  await ensureCliInstalled(async () => ({ ok: false, output: 'npm ERR! EACCES permission denied' }), 'npm', false, () => false)
   expect(process.exitCode).toBe(prev)
   process.exitCode = prev
 })
