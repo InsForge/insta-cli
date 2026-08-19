@@ -42,7 +42,7 @@ test('a failed skill add still continues to the rest and reports the failure', a
   const out: string[] = []
   const run = async (_cmd: string, args: string[]) => ({ ok: !args.includes('tigrisdata/skills') })
   await installSkills({ cwd: dir, run, print: (s) => out.push(s) })
-  expect(out.join('\n')).toMatch(/tigris failed — add manually: npx skills add tigrisdata\/skills/)
+  expect(out.join('\n')).toMatch(/tigris failed — add manually: npx -y skills add tigrisdata\/skills/)
   expect(out.join('\n')).toMatch(/better-auth ✓/) // reached the skill after the failure
 })
 

@@ -221,6 +221,13 @@ const defaultRunner: Runner = (cmdIn, argsIn) =>
   new Promise((resolve) => {
     const { cmd, args } = resolveSpawnable(cmdIn, argsIn)
     const env = { ...process.env, AI_AGENT: process.env.AI_AGENT || 'insta', FORCE_COLOR: '0' }
+    // When THIS process was launched by npx, npx exports its flags as npm_config_* env vars.
+    // npm_config_package pins package resolution for every nested npm/npx child — the inner
+    // `npx -y skills …` would then resolve `skills` against the insta package and degrade to
+    // `sh: skills: command not found`. Scrub the resolution-pinning vars; keep prefix/registry
+    // (deliberate user configuration).
+    delete env.npm_config_package
+    delete env.npm_config_call
     const p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], env })
     let output = ''
     const grab = (chunk: Buffer) => { output += chunk.toString() }
@@ -230,12 +237,15 @@ const defaultRunner: Runner = (cmdIn, argsIn) =>
     p.on('close', (code) => resolve({ ok: code === 0, output }))
   })
 
+// Leading -y is npx's OWN flag: on a machine where the `skills` package isn't already in the
+// npx cache, non-TTY `npx skills …` refuses to auto-install and degrades to a shell lookup
+// (`sh: skills: command not found`) — the trailing -y only answers the skills TOOL's prompt.
 // -g = user-level (machine-global); -a '*' = every agent dir the skills tool supports
 // (Claude Code, Codex, Cursor, OpenCode, Copilot, …); --copy = real files, not cache symlinks.
 // `spec` is the skill source for the resolved environment (`owner/repo` or `owner/repo@ref`), so a
 // staging install reads the staging skill text rather than what's published on main.
 export const setupArgs = (spec: string): string[] =>
-  ['skills', 'add', spec, '-s', 'insta', '-a', '*', '-g', '-y', '--copy']
+  ['-y', 'skills', 'add', spec, '-s', 'insta', '-a', '*', '-g', '-y', '--copy']
 
 /** Production's args. Kept as a named export because it is the installed-base default and is
  *  asserted directly by tests; runtime goes through `setupArgs(resolveEnv().skills)`. */

@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { resolveEnv } from './config.js'
+import { resolveSpawnable } from './commands/setup.js'
 import { DEFAULT_ENV, ENVS } from './env.js'
 
 // Where `npx skills add` drops skills for the agents we pin below: Claude Code → .claude/skills/,
@@ -24,9 +25,16 @@ export type Runner = (cmd: string, args: string[], inherit?: boolean) => Promise
 // honest here (this IS programmatic, not an interactive prompt) and, because we already pin the
 // agents/skills/-y, has no effect on the install beyond quieting the banner. Preserve a caller's
 // existing AI_AGENT (e.g. running inside another agent) rather than clobbering it.
-const defaultRunner: Runner = (cmd, args, inherit = false) =>
+const defaultRunner: Runner = (cmdIn, argsIn, inherit = false) =>
   new Promise((resolve) => {
-    const env = { ...process.env, AI_AGENT: process.env.AI_AGENT || 'insta' }
+    // resolveSpawnable: on Windows `npx` is a .cmd shim spawn() refuses without a shell —
+    // re-enter npm's CLI script via node instead (same treatment as `insta setup agent`).
+    const { cmd, args } = resolveSpawnable(cmdIn, argsIn)
+    const env: NodeJS.ProcessEnv = { ...process.env, AI_AGENT: process.env.AI_AGENT || 'insta' }
+    // npx exports its flags as npm_config_* to children; npm_config_package would pin the inner
+    // `npx -y skills …` to whatever package launched this CLI (see setup.ts defaultRunner).
+    delete env.npm_config_package
+    delete env.npm_config_call
     const p = spawn(cmd, args, { stdio: inherit ? 'inherit' : 'ignore', env })
     p.on('error', () => resolve({ ok: false })) // e.g. npx not on PATH
     p.on('close', (code) => resolve({ ok: code === 0 }))
@@ -38,17 +46,22 @@ const defaultRunner: Runner = (cmd, args, inherit = false) =>
 // --copy to write real files (not symlinks into a transient npx cache).
 const AGENT_FLAGS = ['-a', 'claude-code', '-a', 'codex', '-y', '--copy']
 
+// npx's OWN -y, distinct from the skills tool's -y above: without it, a machine whose npx cache
+// lacks the `skills` package refuses the auto-install in non-TTY runs and the whole command
+// degrades to `sh: skills: command not found`.
+const NPX_YES = ['-y']
+
 // `instaSpec` is the insta skill source for the resolved environment (`owner/repo[@ref]`), so a
 // project created against staging gets the staging skill text. The third-party stack skills are
 // environment-independent — they document Tigris/Better Auth, not our control plane.
 const skillTargets = (instaSpec: string): Array<{ label: string; args: string[] }> => [
-  { label: 'insta', args: ['skills', 'add', instaSpec, '-s', 'insta', ...AGENT_FLAGS] },
-  { label: 'tigris', args: ['skills', 'add', 'tigrisdata/skills',
+  { label: 'insta', args: [...NPX_YES, 'skills', 'add', instaSpec, '-s', 'insta', ...AGENT_FLAGS] },
+  { label: 'tigris', args: [...NPX_YES, 'skills', 'add', 'tigrisdata/skills',
     '-s', 'tigris-object-operations', '-s', 'file-storage', '-s', 'tigris-sdk-guide',
     '-s', 'tigris-security-access-control', '-s', 'tigris-image-optimization',
     '-s', 'tigris-s3-migration', '-s', 'tigris-static-assets', '-s', 'tigris-agent-kit',
     ...AGENT_FLAGS] },
-  { label: 'better-auth', args: ['skills', 'add', 'better-auth/skills',
+  { label: 'better-auth', args: [...NPX_YES, 'skills', 'add', 'better-auth/skills',
     '-s', 'better-auth-best-practices', '-s', 'email-and-password-best-practices',
     '-s', 'better-auth-security-best-practices', ...AGENT_FLAGS] },
 ]
