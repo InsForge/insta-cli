@@ -74,6 +74,95 @@ export async function computeStatus(serviceName: string | undefined, opts: LifeO
   info(`compute ${serviceName ?? id}: desired=${r.desiredState}  live=${r.state}`)
 }
 
+// ---- exec (one-shot command; no interactive shell/PTY) ----
+
+// `insta compute exec [service] -- <command> [args…]`: the command must reach the platform
+// byte-for-byte and can itself contain dashes or another `--`, so it can't be a normal commander
+// positional — with `service` optional, commander flattens everything past the literal `--` into
+// one operand list and has no way to tell "no service, command starts here" apart from "service IS
+// the first command token". Splitting argv on the first literal `--` after `compute exec`
+// ourselves, before commander ever parses it, removes the ambiguity; this is the only place in the
+// whole CLI a bare `--` has this meaning, so nothing else is affected. Exported for a direct,
+// network-free unit test — this split is the seam most likely to regress.
+export function splitExecArgs(argv: string[]): { argv: string[]; command?: string[] } {
+  const i = argv.findIndex((a, idx) => a === 'compute' && argv[idx + 1] === 'exec')
+  if (i === -1) return { argv }
+  const dash = argv.indexOf('--', i + 2)
+  if (dash === -1) return { argv }
+  return { argv: argv.slice(0, dash), command: argv.slice(dash + 1) }
+}
+
+// The --timeout override, through a throwing parser like every other user-typed number in this
+// repo (parseCpu, parseCount, parsePort): junk must fail locally instead of reaching the server as
+// NaN, and the bounds mirror what the platform enforces (1-180s; server default 30 when omitted).
+export function parseTimeoutSec(raw: string): number {
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 1 || n > 180) throw new Error(`invalid timeout: ${raw} (1-180 seconds)`)
+  return n
+}
+
+// Map exec inputs to the platform POST body. Pure, unit-tested without a network mock (mirrors
+// deployRequestBody / servicesAddRequestBody). timeoutSec is omitted when not given so the server
+// applies its own default (30s) rather than the client picking one on the wire.
+export function execRequestBody(command: string[], timeoutSec?: number): Record<string, unknown> {
+  return { command, ...(timeoutSec !== undefined ? { timeoutSec } : {}) }
+}
+
+type ExecOpts = LifeOpts & { timeout?: string }
+
+// Renders the exec response and sets process.exitCode — split out of computeExec as a pure function
+// of (res, json) so it's unit-testable without a network mock, same as handleApproval's own
+// {status, body} shape.
+//
+// A 202 means the command has NOT run: unlike every other gated command (where "nothing happened"
+// is the safe default), a caller chaining `insta compute exec … && next` must not see exit 0 here,
+// or `next` runs believing the command succeeded. --json prints the raw envelope (so a scripted
+// caller can inspect approvalId/action) instead of the human hint; either way exit 1.
+export function applyExecResult(res: { status: number; body: any }, json?: boolean): void {
+  if (res.status === 202 && res.body?.status === 'approval_required') {
+    if (json) printJson(res.body)
+    else handleApproval(res)
+    process.exitCode = 1
+    return
+  }
+  const { exitCode, stdout, stderr, truncated } = res.body
+  if (json) {
+    printJson(res.body)
+  } else {
+    process.stdout.write(stdout)
+    process.stderr.write(stderr)
+    if (truncated) process.stderr.write('note: output truncated — the platform caps stdout/stderr at 1 MiB each\n')
+  }
+  // The platform sends -1 as an "unknown exit" sentinel, and nothing outside 0-255 is a valid POSIX
+  // exit code. Assigning it straight to process.exitCode risks Node's own DEP0164 (a negative code
+  // silently exits 255) — clamp out-of-range codes to 1 instead, with a one-line note so the cause is
+  // visible. Normal codes pass through untouched.
+  if (exitCode < 0 || exitCode > 255) {
+    process.stderr.write(`note: remote exit code ${exitCode} out of range — exiting 1\n`)
+    process.exitCode = 1
+  } else {
+    process.exitCode = exitCode
+  }
+}
+
+// One HTTP round trip, not a shell session: no PTY, no interactivity, stdout/stderr come back as
+// two whole strings (each capped at 1 MiB server-side) rather than a stream. They're written to
+// this process's own stdout/stderr verbatim — no prefixes, no added newline — and the remote exit
+// code becomes this process's own exit code (--json still passes it through, it just skips the
+// split-stream output), since agents scripting this rely on it. Waking a scaled-to-zero machine is
+// expected — it adds latency and bills as uptime, it is not an error.
+export async function computeExec(serviceName: string | undefined, command: string[] | undefined, opts: ExecOpts): Promise<void> {
+  if (!command || command.length === 0) throw new Error('usage: insta compute exec [service] -- <command> [args…] (see --help)')
+  const timeoutSec = opts.timeout !== undefined ? parseTimeoutSec(opts.timeout) : undefined
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const branch = opts.branch ?? p.branch
+  const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
+  const id = resolveComputeServiceId(services, serviceName)
+  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/exec`, execRequestBody(command, timeoutSec))
+  applyExecResult(res, opts.json)
+}
+
 // ---- always-on (opt out of scale-to-zero; all plans; billing is actual usage either way) ----
 
 export async function computeAlwaysOn(mode: string, serviceName: string | undefined, opts: LifeOpts): Promise<void> {
