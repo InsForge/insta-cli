@@ -220,7 +220,7 @@ export function resolveSpawnable(
 const defaultRunner: Runner = (cmdIn, argsIn) =>
   new Promise((resolve) => {
     const { cmd, args } = resolveSpawnable(cmdIn, argsIn)
-    const env = { ...process.env, AI_AGENT: process.env.AI_AGENT || 'insta', FORCE_COLOR: '0' }
+    const env: NodeJS.ProcessEnv = { ...process.env, AI_AGENT: process.env.AI_AGENT || 'insta', FORCE_COLOR: '0' }
     // When THIS process was launched by npx, npx exports its flags as npm_config_* env vars.
     // npm_config_package pins package resolution for every nested npm/npx child — the inner
     // `npx -y skills …` would then resolve `skills` against the insta package and degrade to
