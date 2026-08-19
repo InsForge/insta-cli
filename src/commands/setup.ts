@@ -7,7 +7,7 @@
 // project doubles as its stack manifest — that install happens on `project create|link`.
 import { spawn } from 'node:child_process'
 import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import os from 'node:os'
 import { ApiClient } from '../api.js'
 import { resolveEnv } from '../config.js'
@@ -127,6 +127,7 @@ export function selfInstallCmd(
   version: string,
   npmExecpath = process.env.npm_execpath,
   execPath = process.execPath,
+  platform: NodeJS.Platform = process.platform,
 ): { cmd: string; args: string[] } {
   const spec = `insta@${version}`
   // Re-enter ONLY an actual npm/npx CLI script: other launchers also set npm_execpath (yarn
@@ -135,6 +136,16 @@ export function selfInstallCmd(
     const npmCli = npmExecpath.replace(/npx(-cli)?(\.[cm]?js)$/, 'npm$1$2')
     return { cmd: execPath, args: [npmCli, 'install', '-g', spec] }
   }
+  // No usable npm_execpath (bun, yarn, pnpm, none): use the npm that ships beside this node —
+  // bare `npm` is npm.cmd on Windows, which spawn() refuses without a shell defaultRunner
+  // never uses. Layouts: <nodedir>/node_modules/npm (Windows), <nodedir>/../lib/... (POSIX).
+  const nodeDir = dirname(execPath)
+  const besideNode = platform === 'win32'
+    ? join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    : join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  if (existsSync(besideNode)) return { cmd: execPath, args: [besideNode, 'install', '-g', spec] }
+  // Last resort (POSIX shims like nvm/volta resolve `npm` fine; on Windows this whole branch
+  // is best-effort and falls through to the printed manual command on failure).
   return { cmd: 'npm', args: ['install', '-g', spec] }
 }
 

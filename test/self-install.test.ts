@@ -1,6 +1,6 @@
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { test, expect, vi } from 'vitest'
 import { ensureCliInstalled, findDurableOnPath, selfInstallCmd, setupAgent, SETUP_ARGS } from '../src/commands/setup.js'
 
@@ -45,14 +45,36 @@ test('selfInstallCmd re-enters the spawning npm and pins the running version', (
   expect(args).toEqual(['/nvm/v20/lib/node_modules/npm/bin/npm-cli.js', 'install', '-g', 'insta@1.2.3'])
 })
 
-test('selfInstallCmd falls back to plain npm when npm_execpath is absent or not an npm/npx script', () => {
+test('selfInstallCmd never re-enters a non-npm launcher (yarn.js, pnpm.cjs, bun, none)', () => {
   const fallback = { cmd: 'npm', args: ['install', '-g', 'insta@1.2.3'] }
-  expect(selfInstallCmd('1.2.3', '')).toEqual(fallback)
-  expect(selfInstallCmd('1.2.3', '/usr/local/bin/bun', '/usr/local/bin/bun')).toEqual(fallback)
+  const fakeNode = '/fake/prefix/bin/node' // no npm beside it → bare-npm last resort
+  expect(selfInstallCmd('1.2.3', '', fakeNode, 'linux')).toEqual(fallback)
+  expect(selfInstallCmd('1.2.3', '/fake/tools/bun', '/fake/tools/bun', 'linux')).toEqual(fallback)
   // yarn classic sets npm_execpath to yarn.js — `node yarn.js install -g` is not a valid
   // invocation of anything, so it must NOT be re-entered.
-  expect(selfInstallCmd('1.2.3', '/usr/lib/yarn/bin/yarn.js')).toEqual(fallback)
-  expect(selfInstallCmd('1.2.3', '/usr/lib/pnpm/dist/pnpm.cjs')).toEqual(fallback)
+  expect(selfInstallCmd('1.2.3', '/usr/lib/yarn/bin/yarn.js', fakeNode, 'linux')).toEqual(fallback)
+  expect(selfInstallCmd('1.2.3', '/usr/lib/pnpm/dist/pnpm.cjs', fakeNode, 'linux')).toEqual(fallback)
+})
+
+test('selfInstallCmd without npm_execpath uses the npm shipped beside the running node (spawnable on Windows)', () => {
+  // POSIX layout: <prefix>/bin/node + <prefix>/lib/node_modules/npm/bin/npm-cli.js
+  const posixPrefix = mkdtempSync(join(tmpdir(), 'insta-node-'))
+  const posixNpm = join(posixPrefix, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  mkdirSync(dirname(posixNpm), { recursive: true })
+  writeFileSync(posixNpm, '')
+  const posixNode = join(posixPrefix, 'bin', 'node')
+  expect(selfInstallCmd('1.2.3', '', posixNode, 'linux'))
+    .toEqual({ cmd: posixNode, args: [posixNpm, 'install', '-g', 'insta@1.2.3'] })
+
+  // Windows layout: <dir>\node.exe + <dir>\node_modules\npm\bin\npm-cli.js — bare `npm` would
+  // be npm.cmd, which spawn() without a shell refuses.
+  const winDir = mkdtempSync(join(tmpdir(), 'insta-nodew-'))
+  const winNpm = join(winDir, 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  mkdirSync(dirname(winNpm), { recursive: true })
+  writeFileSync(winNpm, '')
+  const winNode = join(winDir, 'node.exe')
+  expect(selfInstallCmd('1.2.3', '', winNode, 'win32'))
+    .toEqual({ cmd: winNode, args: [winNpm, 'install', '-g', 'insta@1.2.3'] })
 })
 
 test('ensureCliInstalled installs globally only on the npm channel with no durable insta', async () => {
@@ -107,9 +129,14 @@ test('setupAgent self-installs the CLI BEFORE the skill install (the skill point
   expect(runs[1]!.join(' ')).toContain('-s insta')
 })
 
-test('ensureCliInstalled is best-effort: a failed global install does not throw or set an exit code', async () => {
+test('ensureCliInstalled is best-effort: a failed install prints the fallback (and the EACCES hint) without an exit code', async () => {
   const prev = process.exitCode
+  let out = ''
+  const spy = vi.spyOn(process.stdout, 'write').mockImplementation((s) => { out += String(s); return true })
   await ensureCliInstalled(async () => ({ ok: false, output: 'npm ERR! EACCES permission denied' }), 'npm', false, () => false)
+  spy.mockRestore()
+  expect(out).toContain('npm install -g insta') // the manual fallback line
+  expect(out).toContain('permission error') // the targeted EACCES hint
   expect(process.exitCode).toBe(prev)
   process.exitCode = prev
 })
