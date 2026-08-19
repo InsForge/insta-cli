@@ -1,0 +1,247 @@
+// `insta build` — pre-push verification of a source directory: the detection plan (what would
+// build), the Dockerfile that would be used (yours, or nixpacks-generated), and static checks.
+// Entirely local and offline: no login, no project link, nothing pushed or deployed. Phase 1 is
+// static-only — no Docker daemon involved.
+import { resolve, join } from 'node:path'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { info, printJson, die } from '../util.js'
+import { dockerfileExposedPort } from './deploy.js'
+import { nixpacksPlan, nixpacksGeneratedDockerfile, ensureNixpacks, quietRunner, type NixpacksPlan } from '../nixpacks.js'
+import type { BuildRunner } from '../flyctl-build.js'
+
+export type BuildCheck = {
+  id: string
+  severity: 'critical' | 'warning' | 'info'
+  status: 'pass' | 'fail' | 'skip'
+  title: string
+  detail?: string
+  nextAction?: string
+}
+
+export type BuildReport = {
+  dir: string
+  plan: {
+    builder: 'dockerfile' | 'nixpacks' | null
+    providers: string[]
+    installCommand?: string
+    buildCommand?: string
+    startCommand?: string
+    port?: number
+    portRationale: string
+    envKeys: string[]
+  }
+  dockerfile: { source: 'user' | 'nixpacks' | null; path?: string; content?: string }
+  checks: BuildCheck[]
+  verdict: 'deployable' | 'needs-attention' | 'failed'
+}
+
+// A failed critical sinks the build; a failed warning deserves attention; skips are not failures.
+export function computeVerdict(checks: BuildCheck[]): BuildReport['verdict'] {
+  const failed = checks.filter((c) => c.status === 'fail')
+  if (failed.some((c) => c.severity === 'critical')) return 'failed'
+  if (failed.length > 0) return 'needs-attention'
+  return 'deployable'
+}
+
+// Port resolution mirrors deploy.ts: an explicit --port wins, else the Dockerfile's EXPOSE. The
+// rationale string is part of the output — every plan line says why (the `fly launch` pattern).
+export function inferPort(flag: string | undefined, dockerfile: string | undefined): { port?: number; rationale: string } {
+  if (flag) return { port: Number(flag), rationale: '--port flag' }
+  const exposed = dockerfile ? dockerfileExposedPort(dockerfile) : undefined
+  if (exposed) return { port: exposed, rationale: `Dockerfile EXPOSE ${exposed}` }
+  return { port: undefined, rationale: 'not detected — deploy defaults to 8080' }
+}
+
+// Keys the app expects, from .env.example — surfaced so an agent can `insta secrets set` them
+// before the first deploy instead of discovering missing config from runtime crashes.
+export function envKeysFromDotEnvExample(content: string): string[] {
+  const keys: string[] = []
+  for (const line of content.split('\n')) {
+    if (line.trim().startsWith('#')) continue
+    const key = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line)?.[1]
+    if (key) keys.push(key)
+  }
+  return keys
+}
+
+const CONTEXT_WARN_BYTES = 100 * 1024 * 1024
+const WALK_CAP = 50_000 // entries; beyond this the size is reported as a floor
+
+type ContextStats = { totalBytes: number; nodeModulesBytes: number; hasNodeModules: boolean; nodeModulesIgnored: boolean }
+
+function contextStats(dir: string): ContextStats {
+  const ignoreFile = join(dir, '.dockerignore')
+  const ignoreLines = existsSync(ignoreFile)
+    ? readFileSync(ignoreFile, 'utf8').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))
+    : []
+  const nodeModulesIgnored = ignoreLines.some((l) => ['node_modules', 'node_modules/', '/node_modules', '**/node_modules'].includes(l))
+  let totalBytes = 0
+  let nodeModulesBytes = 0
+  let hasNodeModules = false
+  let seen = 0
+  const walk = (d: string, inNodeModules: boolean) => {
+    let entries: string[]
+    try { entries = readdirSync(d) } catch { return }
+    for (const name of entries) {
+      if (seen++ > WALK_CAP) return
+      if (name === '.git') continue
+      const p = join(d, name)
+      let st
+      try { st = statSync(p) } catch { continue }
+      const isNm = inNodeModules || name === 'node_modules'
+      if (name === 'node_modules' && st.isDirectory()) hasNodeModules = true
+      if (st.isDirectory()) walk(p, isNm)
+      else {
+        totalBytes += st.size
+        if (isNm) nodeModulesBytes += st.size
+      }
+    }
+  }
+  walk(dir, false)
+  return { totalBytes, nodeModulesBytes, hasNodeModules, nodeModulesIgnored }
+}
+
+const mb = (bytes: number): string => `${(bytes / 1024 / 1024).toFixed(1)} MB`
+
+export async function buildReport(
+  dirArg: string,
+  opts: { port?: string },
+  deps: { runner: BuildRunner; nixpacksAvailable: boolean },
+): Promise<BuildReport> {
+  const dir = resolve(process.cwd(), dirArg)
+  const userDockerfilePath = join(dir, 'Dockerfile')
+  const hasUserDockerfile = existsSync(userDockerfilePath)
+
+  let dockerfile: BuildReport['dockerfile'] = { source: null }
+  let np: NixpacksPlan | null = null
+  let dockerfileDetail = ''
+  if (hasUserDockerfile) {
+    dockerfile = { source: 'user', path: userDockerfilePath, content: readFileSync(userDockerfilePath, 'utf8') }
+    dockerfileDetail = 'using the Dockerfile in the directory'
+  } else if (!deps.nixpacksAvailable) {
+    dockerfileDetail = 'no Dockerfile in the directory, and nixpacks is not installed to generate one'
+  } else {
+    np = await nixpacksPlan(dir, deps.runner)
+    if (!np) {
+      dockerfileDetail = 'no Dockerfile, and nixpacks matched no provider for this directory'
+    } else {
+      const generated = await nixpacksGeneratedDockerfile(dir, deps.runner)
+      if (generated) {
+        dockerfile = { source: 'nixpacks', content: generated }
+        dockerfileDetail = `generated by nixpacks (providers: ${np.providers.join(', ') || 'none'})`
+      } else {
+        dockerfileDetail = 'nixpacks detected the app but could not generate a Dockerfile'
+      }
+    }
+  }
+
+  const builder: BuildReport['plan']['builder'] = hasUserDockerfile ? 'dockerfile' : np ? 'nixpacks' : null
+  const { port, rationale } = inferPort(opts.port, dockerfile.content)
+  const envExample = join(dir, '.env.example')
+  const envKeys = existsSync(envExample) ? envKeysFromDotEnvExample(readFileSync(envExample, 'utf8')) : []
+
+  const checks: BuildCheck[] = []
+  checks.push({
+    id: 'dockerfile',
+    severity: 'critical',
+    status: dockerfile.source ? 'pass' : 'fail',
+    title: 'Dockerfile',
+    detail: dockerfileDetail,
+    ...(dockerfile.source ? {} : { nextAction: `add a Dockerfile at ${userDockerfilePath}, or install nixpacks (https://nixpacks.com/docs/install) so insta can generate one` }),
+  })
+
+  if (builder === 'dockerfile') {
+    const hasCmd = /^\s*(CMD|ENTRYPOINT)\s/im.test(dockerfile.content ?? '')
+    checks.push({
+      id: 'start-command',
+      severity: 'warning',
+      status: hasCmd ? 'pass' : 'fail',
+      title: 'start command',
+      detail: hasCmd ? 'Dockerfile has a CMD/ENTRYPOINT' : 'no CMD or ENTRYPOINT in the Dockerfile — the base image must supply one',
+      ...(hasCmd ? {} : { nextAction: 'add a CMD (or ENTRYPOINT) so the image starts your app' }),
+    })
+  } else if (builder === 'nixpacks') {
+    checks.push({
+      id: 'start-command',
+      severity: 'critical',
+      status: np?.startCommand ? 'pass' : 'fail',
+      title: 'start command',
+      detail: np?.startCommand ?? 'nixpacks found no start command — the built image would not run',
+      ...(np?.startCommand ? {} : { nextAction: 'define one (e.g. a package.json "start" script, or a Procfile)' }),
+    })
+  } else {
+    checks.push({ id: 'start-command', severity: 'critical', status: 'skip', title: 'start command', detail: 'skipped — no builder' })
+  }
+
+  checks.push({
+    id: 'port',
+    severity: 'warning',
+    status: port !== undefined ? 'pass' : 'fail',
+    title: 'port',
+    detail: port !== undefined ? `${port} (${rationale})` : rationale,
+    ...(port !== undefined ? {} : { nextAction: 'pass --port <n> (or add EXPOSE <n> to the Dockerfile) — a port mismatch is the #1 deploy mistake' }),
+  })
+
+  const ctx = contextStats(dir)
+  const shipsNodeModules = ctx.hasNodeModules && !ctx.nodeModulesIgnored
+  const tooBig = ctx.totalBytes > CONTEXT_WARN_BYTES
+  checks.push({
+    id: 'context',
+    severity: 'warning',
+    status: shipsNodeModules || tooBig ? 'fail' : 'pass',
+    title: 'build context',
+    detail: shipsNodeModules
+      ? `node_modules (${mb(ctx.nodeModulesBytes)}) would ship in the ${mb(ctx.totalBytes)} build context`
+      : `${mb(ctx.totalBytes)}${tooBig ? ' — large contexts make remote builds slow' : ''}`,
+    ...(shipsNodeModules || tooBig ? { nextAction: 'add a .dockerignore (node_modules, build artifacts, secrets)' } : {}),
+  })
+
+  return {
+    dir,
+    plan: { builder, providers: np?.providers ?? [], installCommand: np?.installCommand, buildCommand: np?.buildCommand, startCommand: np?.startCommand, port, portRationale: rationale, envKeys },
+    dockerfile,
+    checks,
+    verdict: computeVerdict(checks),
+  }
+}
+
+const MARK = { pass: '✓', fail: '✗', skip: '·' } as const
+
+export function renderReport(r: BuildReport, explain: boolean): string[] {
+  const lines: string[] = []
+  lines.push(`plan for ${r.dir}:`)
+  lines.push(`  builder: ${r.plan.builder ?? 'none'}${r.plan.providers.length ? ` (providers: ${r.plan.providers.join(', ')})` : ''}`)
+  if (r.plan.installCommand) lines.push(`  install: ${r.plan.installCommand}`)
+  if (r.plan.buildCommand) lines.push(`  build:   ${r.plan.buildCommand}`)
+  if (r.plan.startCommand) lines.push(`  start:   ${r.plan.startCommand}`)
+  lines.push(`  port:    ${r.plan.port ?? '?'} (${r.plan.portRationale})`)
+  if (r.plan.envKeys.length) lines.push(`  env keys (.env.example): ${r.plan.envKeys.join(', ')}`)
+  lines.push('checks:')
+  for (const c of r.checks) {
+    const mark = c.status === 'fail' && c.severity !== 'critical' ? '⚠' : MARK[c.status]
+    lines.push(`  ${mark} ${c.title}${c.detail ? ` — ${c.detail}` : ''}`)
+    if (c.status === 'fail' && c.nextAction) lines.push(`      → ${c.nextAction}`)
+  }
+  if (explain && r.dockerfile.content) {
+    lines.push(`dockerfile (${r.dockerfile.source}):`)
+    for (const l of r.dockerfile.content.trimEnd().split('\n')) lines.push(`  ${l}`)
+  }
+  lines.push(`verdict: ${r.verdict}`)
+  return lines
+}
+
+export async function build(dirArg: string | undefined, opts: { explain?: boolean; json?: boolean; port?: string }): Promise<void> {
+  const dir = dirArg ?? '.'
+  const abs = resolve(process.cwd(), dir)
+  if (!existsSync(abs)) die(`no such directory: ${abs}`)
+  // Only reach for nixpacks when there is no Dockerfile to verify.
+  const nixpacksAvailable = existsSync(join(abs, 'Dockerfile')) ? false : await ensureNixpacks()
+  const report = await buildReport(dir, opts, { runner: quietRunner, nixpacksAvailable })
+  if (opts.json) {
+    // Dockerfile content is included with --explain; without it the report stays small.
+    printJson(opts.explain ? report : { ...report, dockerfile: { ...report.dockerfile, content: undefined } })
+  } else {
+    for (const line of renderReport(report, !!opts.explain)) info(line)
+  }
+  if (report.verdict === 'failed') process.exitCode = 1
+}

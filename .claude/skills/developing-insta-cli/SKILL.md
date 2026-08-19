@@ -26,9 +26,10 @@ npx tsx src/index.ts --help   # run the CLI from source
 | `index.ts` | commander program — registers every command |
 | `api.ts` | typed platform-API client (auth headers, token refresh, error mapping) |
 | `config.ts` | global `~/.insta/config.json` (apiUrl + tokens + user) · project `./.insta/project.json` (projectId / orgId / current branch) |
-| `commands/` | one file per command group: `auth` `org` `project` `services` `branch` `secrets` `deploy` `compute` `upgrade` `metrics` (+`logs`) `billing` `govern` (policy/approvals) `manifest` `observe` |
+| `commands/` | one file per command group: `auth` `org` `project` `services` `branch` `secrets` `build` `deploy` `compute` `upgrade` `metrics` (+`logs`) `billing` `govern` (policy/approvals) `manifest` `observe` |
 | `observe/` | local `insta observe` hook — `scanner.ts` (AWS/GitHub/Stripe/LLM/DB cred detection), `hook.ts`, `install.ts`, `report.ts` (→ platform event ingest) |
 | `flyctl-build.ts` | source-directory deploy build glue (Fly build context) |
+| `nixpacks.ts` | nixpacks glue for `insta build` — plan detection + Dockerfile generation (no Docker daemon) |
 | `ensure-skills.ts` | installs/refreshes the agent skills into the user's project |
 | `util.ts` | shared helpers |
 
