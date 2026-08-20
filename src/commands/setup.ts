@@ -6,12 +6,15 @@
 // Stack skills (tigris/better-auth) intentionally stay per-project: their presence in a
 // project doubles as its stack manifest — that install happens on `project create|link`.
 import { spawn } from 'node:child_process'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import os from 'node:os'
 import { ApiClient } from '../api.js'
 import { resolveEnv } from '../config.js'
 import { DEFAULT_ENV, ENVS, mcpServerName } from '../env.js'
 import { info } from '../util.js'
 import { installAgentConfigs } from './mcp.js'
+import { detectChannel, type Channel } from './upgrade.js'
 
 // The `skills` tool we shell out to prints a clack UI: a frame-by-frame clone spinner, an
 // "Installing to all N agents" banner, a full N-line install-path box, and a third-party
@@ -78,14 +81,176 @@ export function summarizeInstall(output: string): string {
 
 export type Runner = (cmd: string, args: string[]) => Promise<{ ok: boolean; output?: string }>
 
+// ---- CLI self-install (makes `npx -y insta setup agent` a complete one-liner) ----
+
+// Under npx the CLI runs from the npm cache and vanishes when the process exits — but the skill
+// installed below tells every agent to run `insta …`, which then wouldn't exist. So when this
+// process came from the npm channel and no DURABLE `insta` is on PATH, install ourselves
+// globally first. The scan must ignore any PATH entry under a node_modules directory: npx
+// prepends its cache's node_modules/.bin (where this very process's `insta` shim lives), while
+// durable installs (npm -g bin, nvm/volta/fnm, the native binary's ~/.insta/bin) never sit
+// under one.
+// On POSIX a PATH hit only counts if it would actually run: a plain non-executable file (or a
+// directory) named `insta` must not suppress the self-install. Mode bits, not access(X_OK) —
+// access() answers "can THIS process exec it", which for root is always yes, so a root-run
+// setup would wrongly treat a non-executable file as a durable install. On Windows execute
+// permission is extension-driven, so existence of a regular file is the right check.
+const isRunnableFile = (p: string, win: boolean): boolean => {
+  try {
+    const st = statSync(p)
+    if (!st.isFile()) return false
+    return win || (st.mode & 0o111) !== 0
+  } catch { return false }
+}
+
+/** Resolve a bare command name to its absolute PATH location (PATHEXT-aware on Windows).
+ *  cmd.exe searches the CURRENT DIRECTORY before PATH for bare names, so handing it a bare
+ *  `claude` would let a claude.cmd planted in the project directory shadow the real CLI —
+ *  the cmd.exe wrapper below only ever passes absolute paths. */
+export function whichOnPath(
+  bin: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  const win = platform === 'win32'
+  const exts = win ? [...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';'), ''] : ['']
+  for (const dir of (env.PATH ?? '').split(win ? ';' : ':')) {
+    if (!dir) continue
+    for (const ext of exts) {
+      const p = join(dir, bin + ext)
+      if (isRunnableFile(p, win)) return p
+    }
+  }
+  return null
+}
+
+export function findDurableOnPath(
+  bin: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const win = platform === 'win32'
+  const dirs = (env.PATH ?? '').split(win ? ';' : ':')
+  // npm on Windows writes insta.cmd/insta.ps1 plus an extensionless sh shim; PATHEXT covers the
+  // former, the bare name the latter.
+  const exts = win ? [...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';'), ''] : ['']
+  for (const dir of dirs) {
+    // Case-insensitive: Windows paths (and the npx cache) may carry any casing.
+    if (!dir || dir.toLowerCase().includes('node_modules')) continue
+    for (const ext of exts) if (isRunnableFile(join(dir, bin + ext), win)) return true
+  }
+  return false
+}
+
+const cliVersion = (): string => {
+  try {
+    return JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version as string
+  } catch { return 'latest' }
+}
+
+/** Best-effort: a failed global install must not block the skill/MCP setup below — the npx run
+ *  itself still completes the agent onboarding, and the manual fallback is one line. */
+export async function ensureCliInstalled(
+  run: Runner,
+  channel: Channel = detectChannel(),
+  onPath = findDurableOnPath('insta'),
+  recheck: () => boolean = () => findDurableOnPath('insta'),
+): Promise<void> {
+  if (channel !== 'npm' || onPath) return
+  info('installing the insta CLI globally (npm) …')
+  // Pinned to THIS version so the one-liner installs exactly what it ran. The logical `npm` is
+  // resolved to a spawnable invocation ONCE, inside the default runner (resolveSpawnable) —
+  // handing it a pre-resolved node/npm-cli.js path here would make the runner resolve it a
+  // second time and, on Windows, wrap the real node.exe in cmd.exe.
+  const spec = `insta@${cliVersion()}`
+  const res = await run('npm', ['install', '-g', spec])
+  if (res.ok) {
+    // A clean `npm i -g` can still land in a bin dir that isn't on PATH (custom npm prefix) —
+    // exactly the machines this path exists for. Only claim success after re-finding the shim.
+    if (recheck()) {
+      info('✓ insta CLI — installed globally (`insta` now works in any shell)')
+    } else {
+      info('✓ insta CLI — installed globally, but npm\'s global bin dir is not on PATH')
+      info('    add it to PATH (POSIX: `$(npm prefix -g)/bin`; Windows: the dir `npm prefix -g` prints), then verify with `insta --version`')
+    }
+    return
+  }
+  info('  global CLI install failed — continuing with agent setup; install manually with:')
+  info(`    npm install -g ${spec}`)
+  if (/EACCES|permission denied/i.test(res.output ?? '')) {
+    info('    (permission error: the npm prefix is system-owned — use a Node version manager, or elevate that one command)')
+  }
+}
+
+// ---- Windows-safe spawning for npm/npx ----
+// On Windows `npm`/`npx` are .cmd shims, which spawn() without a shell refuses (Node docs:
+// spawning .bat/.cmd needs a shell or cmd.exe). Rather than a shell (argument-quoting hazards),
+// re-enter them as node scripts: the CLI script named by npm_execpath (swapped between
+// npm-cli.js and npx-cli.js as needed), else the one shipped beside the running node, else the
+// bare name (POSIX, where PATH shims resolve fine). Applied ONCE, inside the default runner,
+// so every `run('npm'|'npx', …)` call site benefits and nothing is ever resolved twice.
+export function resolveSpawnable(
+  cmd: string,
+  args: string[],
+  npmExecpath = process.env.npm_execpath,
+  execPath = process.execPath,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): { cmd: string; args: string[] } {
+  // Node re-entry is only valid when THIS process runs on node. On the native-binary channel
+  // execPath is the compiled `insta` executable — and npm scripts export npm_execpath to their
+  // children — so re-entering blindly would spawn `insta npx-cli.js …`. A non-node execPath
+  // sends npm/npx down the generic shim path below instead.
+  const execIsNode = /(^|[\\/])node(\.exe)?$/i.test(execPath)
+  if ((cmd === 'npm' || cmd === 'npx') && execIsNode) {
+    if (npmExecpath && /(^|[\\/])np[mx](-cli)?\.[cm]?js$/.test(npmExecpath)) {
+      const cli = npmExecpath.replace(/np[mx](-cli)?(\.[cm]?js)$/, `${cmd}$1$2`)
+      if (existsSync(cli)) return { cmd: execPath, args: [cli, ...args] }
+    }
+    const nodeDir = dirname(execPath)
+    const besideNode = platform === 'win32'
+      ? join(nodeDir, 'node_modules', 'npm', 'bin', `${cmd}-cli.js`)
+      : join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', `${cmd}-cli.js`)
+    if (existsSync(besideNode)) return { cmd: execPath, args: [besideNode, ...args] }
+  }
+  // Generic shim path — every non-npm CLI we shell out to (claude), plus npm/npx themselves
+  // when node isn't resolvable (native binary channel). On Windows these are .cmd shims, which
+  // spawn() refuses without a shell, so route them through cmd.exe. Guards, in order:
+  // - BARE names only: an absolute path or anything .exe (node.exe from a resolved npm/npx
+  //   invocation passing back through here) is directly spawnable and must NOT see cmd.exe.
+  // - The name is resolved to its ABSOLUTE PATH location first: cmd.exe searches the current
+  //   directory before PATH, so a bare name would let a shim planted in the project dir
+  //   shadow the real CLI. No PATH hit → pass through (spawn fails; callers degrade).
+  // - No manual quoting: libuv already wraps spaced args when building the child command
+  //   line — pre-quoting would be quoted AGAIN and arrive as literal quote characters.
+  // - That leaves cmd.exe metacharacters unprotectable, so an arg carrying one (e.g. a
+  //   custom INSTA_MCP_URL with `&`) skips the wrapper: the bare-shim spawn fails and every
+  //   caller degrades gracefully (probe → not-installed; registration → manual-add
+  //   fallback). Never hand metacharacters to a shell.
+  const bareShim = !/[\\/]/.test(cmd) && !/\.exe$/i.test(cmd)
+  if (platform === 'win32' && bareShim && !args.some((a) => /[&|<>^%"]/.test(a))) {
+    const abs = whichOnPath(cmd, env, platform)
+    if (abs) return { cmd: 'cmd.exe', args: ['/d', '/s', '/c', abs, ...args] }
+  }
+  return { cmd, args }
+}
+
 // Capture stdout+stderr silently (don't stream) so we can print our own clean summary.
 // stdin is 'ignore', NOT 'inherit': under the canonical `curl … | sh` install, stdin is the
 // piped install script itself — a child that inherits it (npx/skills reads for keypresses even
 // with -y) consumes the rest of the script, so the shell never runs the trailing "Get started"
 // guidance. Ignoring stdin keeps the installer's own output intact. (-y means no prompt anyway.)
-const defaultRunner: Runner = (cmd, args) =>
+const defaultRunner: Runner = (cmdIn, argsIn) =>
   new Promise((resolve) => {
-    const env = { ...process.env, AI_AGENT: process.env.AI_AGENT || 'insta', FORCE_COLOR: '0' }
+    const { cmd, args } = resolveSpawnable(cmdIn, argsIn)
+    const env: NodeJS.ProcessEnv = { ...process.env, AI_AGENT: process.env.AI_AGENT || 'insta', FORCE_COLOR: '0' }
+    // When THIS process was launched by npx, npx exports its flags as npm_config_* env vars.
+    // npm_config_package pins package resolution for every nested npm/npx child — the inner
+    // `npx -y skills …` would then resolve `skills` against the insta package and degrade to
+    // `sh: skills: command not found`. Scrub the resolution-pinning vars; keep prefix/registry
+    // (deliberate user configuration).
+    delete env.npm_config_package
+    delete env.npm_config_call
     const p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], env })
     let output = ''
     const grab = (chunk: Buffer) => { output += chunk.toString() }
@@ -95,12 +260,15 @@ const defaultRunner: Runner = (cmd, args) =>
     p.on('close', (code) => resolve({ ok: code === 0, output }))
   })
 
+// Leading -y is npx's OWN flag: on a machine where the `skills` package isn't already in the
+// npx cache, non-TTY `npx skills …` refuses to auto-install and degrades to a shell lookup
+// (`sh: skills: command not found`) — the trailing -y only answers the skills TOOL's prompt.
 // -g = user-level (machine-global); -a '*' = every agent dir the skills tool supports
 // (Claude Code, Codex, Cursor, OpenCode, Copilot, …); --copy = real files, not cache symlinks.
 // `spec` is the skill source for the resolved environment (`owner/repo` or `owner/repo@ref`), so a
 // staging install reads the staging skill text rather than what's published on main.
 export const setupArgs = (spec: string): string[] =>
-  ['skills', 'add', spec, '-s', 'insta', '-a', '*', '-g', '-y', '--copy']
+  ['-y', 'skills', 'add', spec, '-s', 'insta', '-a', '*', '-g', '-y', '--copy']
 
 /** Production's args. Kept as a named export because it is the installed-base default and is
  *  asserted directly by tests; runtime goes through `setupArgs(resolveEnv().skills)`. */
@@ -173,10 +341,14 @@ export async function setupAgent(
   run: Runner = defaultRunner,
   mint?: TokenMinter,
   installConfigs: (agent?: string) => Promise<string[]> = installAgentConfigs,
+  ensure: (run: Runner) => Promise<void> = (r) => ensureCliInstalled(r),
 ): Promise<void> {
   if (!opts.yes && !process.stdout.isTTY) {
     info('non-interactive shell — assuming -y')
   }
+  // BEFORE the skill install: the skill tells agents to run `insta …`, so a durable CLI must
+  // exist by the time it lands.
+  await ensure(run)
   // One resolve for the whole step, so the skills and the MCP registration below cannot disagree
   // about which environment this machine belongs to.
   const { env, skills } = await resolveEnv()
