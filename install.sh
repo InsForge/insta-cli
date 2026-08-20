@@ -223,11 +223,29 @@ fi
 if [ "$AGENTS" = "1" ]; then
   echo
   # `insta setup agent` prints its own "setting up coding-agent skills …" line + clean summary.
-  if [ "$YES" = "1" ]; then
-    "$INSTALL_DIR/$BIN" setup agent -y || echo "warn: agent setup failed — run: insta setup agent"
+  # CLI >= 0.0.38: bare `setup agent` FORCES prod (switching the machine if needed), so a staging
+  # install must pass the environment explicitly. The persisted env already matches (env use above),
+  # so --env is a no-op switch there — it just stops setup from "correcting" the machine to prod.
+  # Older CLIs (a pinned INSTA_VERSION) reject the flag; ONLY that exact case (commander's
+  # "unknown option", which exits before doing anything) falls back to the bare form — on those
+  # versions it follows the persisted environment, the old, correct semantics. Any other failure
+  # must NOT retry bare: on >= 0.0.38 the bare form would flip a requested staging setup to prod.
+  SETUP_ENV_ARGS=""
+  [ -n "$ENV_NAME" ] && SETUP_ENV_ARGS="--env $ENV_NAME"
+  YFLAG=""
+  [ "$YES" = "1" ] && YFLAG="-y"
+  SETUP_ERR="${TMPDIR:-/tmp}/insta-setup-err.$$"
+  if "$INSTALL_DIR/$BIN" setup agent $YFLAG $SETUP_ENV_ARGS 2>"$SETUP_ERR"; then
+    cat "$SETUP_ERR" >&2
   else
-    "$INSTALL_DIR/$BIN" setup agent || echo "warn: agent setup failed — run: insta setup agent"
+    cat "$SETUP_ERR" >&2
+    if [ -n "$SETUP_ENV_ARGS" ] && grep -qi "unknown option" "$SETUP_ERR"; then
+      "$INSTALL_DIR/$BIN" setup agent $YFLAG || echo "warn: agent setup failed — run: insta setup agent"
+    else
+      echo "warn: agent setup failed — run: insta setup agent ${SETUP_ENV_ARGS}"
+    fi
   fi
+  rm -f "$SETUP_ERR"
 fi
 
 # ---- PATH: confirm reachable, or tell the user exactly how (incl. THIS shell) ----
