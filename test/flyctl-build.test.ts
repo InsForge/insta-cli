@@ -1,7 +1,7 @@
 import { mkdtempSync, existsSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { parseImageDigest, flyctlBuildAndPush, type BuildRunner } from '../src/flyctl-build.js'
 
 const PUSH_LINE = 'pushing manifest for registry.fly.io/my-app:insta-1@sha256:abc123def456'
@@ -46,5 +46,34 @@ describe('flyctlBuildAndPush', () => {
     const dir = mkdtempSync(join(tmpdir(), 'insta-src-'))
     const run: BuildRunner = async () => ({ code: 1, output: 'boom' })
     await expect(flyctlBuildAndPush({ dir, flyApp: 'my-app', imageLabel: 'insta-1', token: 't', port: 8080 }, run)).rejects.toThrow(/flyctl deploy --build-only failed/)
+  })
+})
+
+// The tee destination is the `deploy --json` stdout-purity contract: build progress must reach the
+// user either way, but with --json it may not touch stdout (stdout carries exactly one JSON doc).
+describe('build runner tee destinations', () => {
+  it('defaultBuildRunner tees child stdout to process.stdout; stderrBuildRunner keeps stdout clean', async () => {
+    const { defaultBuildRunner, stderrBuildRunner } = await import('../src/flyctl-build.js')
+    const outChunks: string[] = []
+    const errChunks: string[] = []
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation((c: any) => { outChunks.push(String(c)); return true })
+    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation((c: any) => { errChunks.push(String(c)); return true })
+    try {
+      const opts = { cwd: process.cwd(), env: process.env as Record<string, string> }
+      const a = await defaultBuildRunner(process.execPath, ['-e', 'console.log("BUILD_PROGRESS")'], opts)
+      expect(a.code).toBe(0)
+      expect(a.output).toContain('BUILD_PROGRESS')
+      expect(outChunks.join('')).toContain('BUILD_PROGRESS')
+
+      outChunks.length = 0; errChunks.length = 0
+      const b = await stderrBuildRunner(process.execPath, ['-e', 'console.log("BUILD_PROGRESS")'], opts)
+      expect(b.code).toBe(0)
+      expect(b.output).toContain('BUILD_PROGRESS')      // still captured for digest parsing
+      expect(outChunks.join('')).toBe('')               // stdout untouched — reserved for the JSON doc
+      expect(errChunks.join('')).toContain('BUILD_PROGRESS')
+    } finally {
+      outSpy.mockRestore()
+      errSpy.mockRestore()
+    }
   })
 })

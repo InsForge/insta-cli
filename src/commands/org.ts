@@ -8,8 +8,9 @@ export async function orgList(opts: { json?: boolean }): Promise<void> {
   for (const o of orgs) info(`${o.id}  ${o.name}${o.is_personal ? ' (personal)' : ''}  [${o.role}]`)
 }
 
-export async function orgCreate(name: string): Promise<void> {
+export async function orgCreate(name: string, opts: { json?: boolean } = {}): Promise<void> {
   const api = await ApiClient.load()
   const { org } = await api.request('POST', '/orgs', { name })
+  if (opts.json) return printJson(org)
   info(`created org ${org.id} (${org.name})`)
 }

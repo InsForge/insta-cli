@@ -73,7 +73,7 @@ async function readStdin(): Promise<string> {
 // Set a user secret. Project-wide by default; --branch scopes it to one branch. --service binds
 // it to a branch service instead, which implies the current branch (binding requires one). Value
 // comes from the argument, or stdin when omitted (keeps secret values out of shell history).
-export async function secretsSet(name: string, value: string | undefined, opts: { branch?: string; service?: string }): Promise<void> {
+export async function secretsSet(name: string, value: string | undefined, opts: { branch?: string; service?: string; json?: boolean }): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
   const v = value ?? (await readStdin())
@@ -81,16 +81,18 @@ export async function secretsSet(name: string, value: string | undefined, opts: 
   const branch = opts.service ? (opts.branch ?? p.branch) : opts.branch
   const payload: Record<string, string> = { value: v, ...(branch ? { branch } : {}), ...(opts.service ? { service: opts.service } : {}) }
   const res = await api.rawRequest('PUT', `/projects/${p.projectId}/secrets/${encodeURIComponent(name)}`, payload)
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
+  if (opts.json) return printJson({ ok: true, name, branch: branch ?? null, service: opts.service ?? null })
   info(`set ${name}${opts.service ? ` → ${opts.service}` : ''} (${branch ? `branch ${branch}` : 'project-wide'})`)
 }
 
-export async function secretsUnset(name: string, opts: { branch?: string }): Promise<void> {
+export async function secretsUnset(name: string, opts: { branch?: string; json?: boolean }): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
   const qs = opts.branch ? `?branch=${encodeURIComponent(opts.branch)}` : ''
   const res = await api.rawRequest('DELETE', `/projects/${p.projectId}/secrets/${encodeURIComponent(name)}${qs}`)
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
+  if (opts.json) return printJson({ ok: true, name, branch: opts.branch ?? null })
   info(`unset ${name} (${opts.branch ? `branch ${opts.branch}` : 'project-wide'})`)
 }
 

@@ -15,12 +15,19 @@ const GENERIC_DIRS = new Set([
 ])
 
 // Best-effort: wire the credential-audit hook into the project (no-op if assets aren't built).
-function tryInstallObserve(): void {
+// quiet: with --json the install still runs, but its note moves to stderr (stdout is JSON-only).
+function tryInstallObserve(quiet = false): void {
   try {
     const r = installObserve({ cwd: process.cwd() })
-    if (r.claude || r.codex) info('  installed observe hook (credential audit) → ./.insta/observe')
+    if (r.claude || r.codex) {
+      const line = '  installed observe hook (credential audit) → ./.insta/observe'
+      quiet ? process.stderr.write(line + '\n') : info(line)
+    }
   } catch { /* assets missing (dev/unbuilt) — skip silently */ }
 }
+
+// installSkills prints to stdout by default; with --json its notes go to stderr instead.
+const skillsPrint = (json?: boolean) => (json ? (s: string) => void process.stderr.write(s + '\n') : undefined)
 
 async function resolveOrg(api: ApiClient, given?: string): Promise<string> {
   if (given) return given
@@ -47,11 +54,13 @@ export function resolveProjectName(nameArg: string | undefined, cwd = process.cw
   return null
 }
 
-export async function projectCreate(name: string | undefined, opts: { org?: string }): Promise<void> {
+export async function projectCreate(name: string | undefined, opts: { org?: string; json?: boolean }): Promise<void> {
   const resolved = resolveProjectName(name, process.cwd())
   if (!resolved) {
     // No name given and the cwd name is generic — don't provision resources under a junk name.
-    // Guide instead (no hang, no error): name it explicitly, or just ask the skill-equipped agent.
+    // A terminal gets guidance (no hang, no error); --json is a scripted caller with no human to
+    // guide, so it gets a hard error instead of an empty success.
+    if (opts.json) die('no project name — pass one: insta project create <name>')
     info('name your project:  insta project create <name>')
     info('  (or just ask your coding agent — it has the insta skill and will do this for you)')
     return
@@ -60,12 +69,16 @@ export async function projectCreate(name: string | undefined, opts: { org?: stri
   const orgId = await resolveOrg(api, opts.org)
   const out = await api.request('POST', `/orgs/${orgId}/projects`, { name: resolved })
   await writeProject({ projectId: out.project.id, orgId, branch: out.defaultBranch.name })
-  info(`created project ${out.project.id} (${resolved})`)
-  info(`  resources: ${out.resources.map((r: any) => r.kind).join(', ')}`)
-  info(`  linked ./.insta/project.json (branch ${out.defaultBranch.name})`)
-  renderNextActions(out.nextActions)
-  tryInstallObserve()
-  await installSkills({ cwd: process.cwd() })
+  if (opts.json) {
+    printJson({ ...out, linked: { projectId: out.project.id, orgId, branch: out.defaultBranch.name } })
+  } else {
+    info(`created project ${out.project.id} (${resolved})`)
+    info(`  resources: ${out.resources.map((r: any) => r.kind).join(', ')}`)
+    info(`  linked ./.insta/project.json (branch ${out.defaultBranch.name})`)
+    renderNextActions(out.nextActions)
+  }
+  tryInstallObserve(opts.json)
+  await installSkills({ cwd: process.cwd(), print: skillsPrint(opts.json) })
 }
 
 export async function projectList(opts: { org?: string; json?: boolean }): Promise<void> {
@@ -77,19 +90,21 @@ export async function projectList(opts: { org?: string; json?: boolean }): Promi
   for (const p of projects) info(`${p.id}  ${p.name}  [${p.status}]`)
 }
 
-export async function projectLink(id: string): Promise<void> {
+export async function projectLink(id: string, opts: { json?: boolean } = {}): Promise<void> {
   const api = await ApiClient.load()
   const { project } = await api.request('GET', `/projects/${id}`)
   await writeProject({ projectId: project.id, orgId: project.org_id, branch: 'main' })
-  info(`linked project ${project.id} (${project.name})`)
-  tryInstallObserve()
-  await installSkills({ cwd: process.cwd() })
+  if (opts.json) printJson({ project, linked: { projectId: project.id, orgId: project.org_id, branch: 'main' } })
+  else info(`linked project ${project.id} (${project.name})`)
+  tryInstallObserve(opts.json)
+  await installSkills({ cwd: process.cwd(), print: skillsPrint(opts.json) })
 }
 
-export async function projectDelete(opts: { project?: string }): Promise<void> {
+export async function projectDelete(opts: { project?: string; json?: boolean }): Promise<void> {
   const api = await ApiClient.load()
   const projectId = opts.project ?? (await requireProject()).projectId
   const res = await api.rawRequest('DELETE', `/projects/${projectId}`)
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
+  if (opts.json) return printJson({ ok: true, projectId })
   info(`deleted project ${projectId}`)
 }

@@ -144,7 +144,7 @@ export async function servicesList(opts: { json?: boolean; branch?: string }): P
   for (const s of services) info(serviceListLine(s))
 }
 
-export async function servicesRemove(type: string, name: string, opts: { branch?: string } = {}): Promise<void> {
+export async function servicesRemove(type: string, name: string, opts: { branch?: string; json?: boolean } = {}): Promise<void> {
   assertType(type)
   const api = await ApiClient.load()
   const p = await requireProject()
@@ -152,7 +152,8 @@ export async function servicesRemove(type: string, name: string, opts: { branch?
   const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
   const id = resolveServiceId(services, type, name)
   const res = await api.rawRequest('DELETE', `/projects/${p.projectId}/services/${id}`)
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
+  if (opts.json) return printJson({ ok: true, removed: { id, type, name, branch: branch ?? null } })
   info(`removed ${type} service ${name} from ${branch ?? 'default'}`)
 }
 

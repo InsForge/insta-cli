@@ -29,7 +29,14 @@ export async function removeDomain(host: string, opts: Opts): Promise<void> {
   const p = await requireProject()
   const res = await api.rawRequest('DELETE', `/projects/${p.projectId}/compute/domain`, { hostname: host, branch: opts.branch ?? p.branch, group: opts.group })
   if (handleApproval(res, opts.json)) return
-  info(`removed custom domain ${res.body.hostname} from ${res.body.flyApp}`)
+  renderRemoveDomain(res.body, opts.json)
+}
+
+// Split out (same pattern as applyExecResult) so the --json contract — stdout carries the platform
+// response, never prose — is unit-testable without a network mock.
+export function renderRemoveDomain(body: any, json?: boolean): void {
+  if (json) return printJson(body)
+  info(`removed custom domain ${body.hostname} from ${body.flyApp}`)
 }
 
 function printDomain(r: any, json?: boolean): void {
