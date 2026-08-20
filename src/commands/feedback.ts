@@ -41,10 +41,10 @@ const FEEDBACK_ENDPOINT =
   process.env.INSTA_FEEDBACK_URL ||
   'https://feedback.instacloud.com/v1/feedback'
 const FEEDBACK_INGEST_TOKEN = process.env.INSTA_FEEDBACK_TOKEN || 'insta-feedback-public-v1'
-// 30s covers the backend's scale-to-zero cold start (the ingest service waits out the DB wake
-// and persists, so a report can land after the old 10s deadline had already given up on it).
+// 15s gives the backend's scale-to-zero cold start room to answer (the ingest service waits out
+// the DB wake and persists, so a report can land after the old 10s deadline gave up on it).
 // An expired deadline is reported as UNCONFIRMED, not failed — the report may well be stored.
-const FEEDBACK_TIMEOUT_MS = 30_000
+const FEEDBACK_TIMEOUT_MS = 15_000
 const MAX_FILE_BYTES = 256 * 1024
 
 export type FeedbackOpts = {
