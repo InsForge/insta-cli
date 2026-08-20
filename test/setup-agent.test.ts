@@ -142,21 +142,28 @@ test('non-TTY (agents/CI) never prompts for login, even without -y', async () =>
   expect(asked).toBe(0)
 })
 
-test('--mcp-token + interactive login registers MCP with the token AFTER the session exists', async () => {
+test('--mcp-token + interactive login registers MCP with the token exactly once, AFTER the session exists', async () => {
   const events: string[] = []
+  let sessionExists = false // production defaultMinter returns null while logged out
   await setupAgent(
     { yes: false, mcpToken: true },
-    async (cmd, args) => { events.push(`${cmd}:${args[0]}`); return { ok: !(args[0] === 'mcp' && args[1] === 'get'), output: '' } },
-    async () => { events.push('mint'); return 'insta_tok' },
+    async (cmd, args) => {
+      if (args[0] === 'mcp' && args[1] === 'add') events.push('mcp-add')
+      else events.push(`${cmd}:${args[0]}`)
+      return { ok: !(args[0] === 'mcp' && args[1] === 'get'), output: '' }
+    },
+    async () => { events.push('mint'); return sessionExists ? 'insta_tok' : null },
     async () => [], async () => {},
     async () => ({ apiUrl: ENVS.prod.api }), noSwitch,
-    { ask: async () => true, login: async () => { events.push('login') }, stdinTty: true, stdoutTty: true },
+    { ask: async () => true, login: async () => { sessionExists = true; events.push('login') }, stdinTty: true, stdoutTty: true },
   )
   const loginAt = events.indexOf('login')
   expect(loginAt).toBeGreaterThan(-1)
-  // A token mint + `mcp add` happen after login — the pre-login registration ran logged-out.
-  expect(events.slice(loginAt)).toContain('mint')
-  expect(events.slice(loginAt).some((e) => e === 'claude:mcp')).toBe(true)
+  // The production contract: the logged-out pre-login registration mints null and adds NOTHING;
+  // the one and only `mcp add` happens after login.
+  expect(events.slice(0, loginAt)).not.toContain('mcp-add')
+  expect(events.filter((e) => e === 'mcp-add')).toHaveLength(1)
+  expect(events.indexOf('mcp-add')).toBeGreaterThan(loginAt)
 })
 
 test('setupAgent surfaces a disagreeing $INSTA_ENV the same way (INSTA_ENV=staging + --env prod)', async () => {
