@@ -50,7 +50,7 @@ export async function branchMerge(source: string, opts: { into?: string; json?: 
   if (!target) throw new Error('no target branch — pass --into <branch> (or link a branch first)')
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/branches/${encodeURIComponent(target)}/merge`, { from: source })
   if (handleApproval(res, opts.json)) return
-  if (opts.json) return printJson(res.body)
+  if (opts.json) return printJson(res.body ?? {})
   const { created = [], skipped = [] } = (res.body ?? {}) as {
     created?: Array<{ type: string; name: string }>
     skipped?: Array<{ type: string; name: string; reason: string }>

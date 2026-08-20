@@ -20,6 +20,20 @@ export async function envShow(opts: { json?: boolean }): Promise<void> {
   if (!env) info('  (custom apiUrl — `insta env use <name>` to switch to a named environment)')
 }
 
+// One stable schema for BOTH envUse outcomes (no-op and real switch), so a scripted caller can key
+// on any field — mcpServer, previous — without probing which branch ran. Pure, unit-tested.
+export function envUseResult(target: EnvName, previous: string | null, changed: boolean, sessionDropped: boolean) {
+  return {
+    env: target,
+    previous,
+    apiUrl: ENVS[target].api,
+    mcpUrl: ENVS[target].mcp,
+    mcpServer: mcpServerName(target),
+    changed,
+    sessionDropped,
+  }
+}
+
 export async function envUse(name: string, opts: { json?: boolean } = {}): Promise<void> {
   const want = name.trim().toLowerCase()
   if (!isEnvName(want)) die(`unknown environment "${name}" — expected one of: ${ENV_NAMES.join(', ')}`)
@@ -34,7 +48,7 @@ export async function envUse(name: string, opts: { json?: boolean } = {}): Promi
   // how envForApiUrl already treats it) instead of being rewritten as a "switch" that needlessly
   // drops a perfectly good session.
   if (normalizeUrl(stored.apiUrl) === normalizeUrl(nextApi)) {
-    if (opts.json) return printJson({ env: target, apiUrl: nextApi, changed: false, sessionDropped: false })
+    if (opts.json) return printJson(envUseResult(target, from ?? target, false, false))
     info(`already on ${target} (${nextApi})`)
     return
   }
@@ -53,17 +67,7 @@ export async function envUse(name: string, opts: { json?: boolean } = {}): Promi
   delete next.user
   await writeGlobal(next)
 
-  if (opts.json) {
-    return printJson({
-      env: target,
-      previous: from ?? null,
-      apiUrl: nextApi,
-      mcpUrl: ENVS[target].mcp,
-      mcpServer: mcpServerName(target),
-      changed: true,
-      sessionDropped: hadSession,
-    })
-  }
+  if (opts.json) return printJson(envUseResult(target, from ?? null, true, hadSession))
   info(`switched ${from ?? '(custom)'} → ${target}`)
   info(`  api: ${nextApi}`)
   info(`  mcp: ${ENVS[target].mcp} (registers as \`${mcpServerName(target)}\`)`)

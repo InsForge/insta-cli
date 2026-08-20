@@ -4,7 +4,7 @@
 // as the process does.
 import { spawn } from 'node:child_process'
 import { ApiClient, requireProject } from '../api.js'
-import { die, info, handleApproval } from '../util.js'
+import { die, handleApproval } from '../util.js'
 
 export type RunDeps = {
   fetchBundle: () => Promise<Record<string, string>>
