@@ -414,6 +414,8 @@ export async function setupAgent(
   if (others.length) info(`✓ MCP — also configured for ${others.join(', ')} (restart those tools to pick it up)`)
   // The checkmarks end the install, but the user's next move shouldn't be guesswork. Local state
   // only (no network): a config with a session means logged in — good enough for a hint.
+  // Deliberately prod-hosted prompt.md even on a staging setup: it is generic onboarding (the
+  // login/create commands in it are env-aware at runtime), and staging serves no equivalent.
   const stored = await readStored()
   const loggedIn = !!(stored.accessToken || stored.user)
   info(loggedIn
