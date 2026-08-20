@@ -6,7 +6,8 @@ import { join, resolve } from 'node:path'
 import { existsSync } from 'node:fs'
 import * as clack from '@clack/prompts'
 import { ApiClient, ApiError, requireProject } from '../api.js'
-import { info, die, printJson, handleApproval, renderNextActions } from '../util.js'
+import type { ProjectConfig } from '../config.js'
+import { info, printJson, handleApproval, renderNextActions } from '../util.js'
 import { MANIFEST_FILE, collectManifestVariables, loadTemplateManifest, type TemplateManifest, type TemplateVar } from '../template-manifest.js'
 
 // ---- pure, unit-tested helpers ----
@@ -167,6 +168,21 @@ export function looksLikePath(target: string): boolean {
   return target.startsWith('.') || target.startsWith('/') || target.startsWith('~') || target.includes('/') || target.includes('\\')
 }
 
+export type DeployMode = { kind: 'local'; dir: string } | { kind: 'registry'; code: string }
+
+/**
+ * Which deploy mode a target selects. Local mode is OPTED INTO by a path-looking target (./dir,
+ * /abs, sub/dir); a bare word is ALWAYS a registry code — even when a same-named directory with a
+ * manifest sits in the working directory, deploying it must be explicit (./plausible), never a
+ * cwd coincidence. And a path-looking target with no manifest is a mistake, never a registry code.
+ */
+export function deployMode(target: string, hasManifest: (dir: string) => boolean = (d) => existsSync(join(d, MANIFEST_FILE))): DeployMode {
+  if (!looksLikePath(target)) return { kind: 'registry', code: target }
+  const dir = resolve(process.cwd(), target)
+  if (!hasManifest(dir)) throw new Error(`no ${MANIFEST_FILE} at ${join(dir, MANIFEST_FILE)}`)
+  return { kind: 'local', dir }
+}
+
 // ---- deployment progress ----
 
 // The platform pipeline (insta-platform TemplateDeployment): status is running|succeeded|failed|
@@ -249,8 +265,12 @@ export async function watchDeployment(
     if (status === 'failed') throw new Error(failureMessage(dep, done))
     if (status === 'partial') throw new Error(partialMessage(dep))
     if (status === 'succeeded') return dep
-    const current = Math.min(completed, DEPLOY_STEPS.length - 1)
-    if (active !== current) { out(`  … ${DEPLOY_STEPS[current]}`); active = current }
+    // No step named (or one this CLI doesn't know): HOLD — announcing `create services` off a
+    // payload that never said so would be a guess, and the run may well be somewhere else.
+    if (idx !== null) {
+      const current = Math.min(idx, DEPLOY_STEPS.length - 1)
+      if (active !== current) { out(`  … ${DEPLOY_STEPS[current]}`); active = current }
+    }
     await wait(2)
   }
   throw new Error(`timed out after ${Math.round(timeoutMs / 60_000)}m waiting for template deployment ${id} — check \`insta events\``)
@@ -285,39 +305,56 @@ async function promptVariable(v: TemplateVar): Promise<string> {
 
 export type TemplateDeployOpts = { branch?: string; set?: string[]; yes?: boolean; json?: boolean }
 
-export async function templateDeploy(target: string, opts: TemplateDeployOpts = {}): Promise<void> {
-  const given = parseSetFlags(opts.set ?? []) // a typo'd --set fails before any network access
-  const api = await ApiClient.load()
-  const p = await requireProject()
-  const branchName = opts.branch ?? p.branch
+// What the deploy path needs of the API client — ApiClient satisfies it.
+export type TemplateApi = {
+  request: (method: string, path: string, body?: unknown) => Promise<any>
+  rawRequest: (method: string, path: string, body?: unknown) => Promise<{ status: number; body: any }>
+}
 
-  // Local directory mode: the directory carries insta.template.yaml. A path-looking target with
-  // no manifest is a mistake here, never a registry code.
-  const dir = resolve(process.cwd(), target)
-  const local = existsSync(join(dir, MANIFEST_FILE))
-  if (!local && looksLikePath(target)) die(`no ${MANIFEST_FILE} at ${join(dir, MANIFEST_FILE)}`)
+// The outside world this command touches. Injectable (the deps pattern in feedback.ts) so the
+// deploy path itself — which mode a target selects, and what reaches stdout — is testable without
+// a network or a linked project.
+export type TemplateDeployDeps = {
+  api?: TemplateApi
+  project?: ProjectConfig
+  ask?: (v: TemplateVar) => Promise<string>
+  wait?: (s: number) => Promise<void>
+}
+
+export async function templateDeploy(target: string, opts: TemplateDeployOpts = {}, deps: TemplateDeployDeps = {}): Promise<void> {
+  const given = parseSetFlags(opts.set ?? []) // a typo'd --set fails before any network access
+  // --json asked for parseable output: every human progress line is suppressed so stdout carries
+  // exactly one JSON document (the repo's --json convention).
+  const quiet = !!opts.json
+  const api = deps.api ?? (await ApiClient.load())
+  const p = deps.project ?? (await requireProject())
+  const branchName = opts.branch ?? p.branch
+  const ask = deps.ask ?? promptVariable
+
+  // Local directory mode is opted into by a path-looking target; a bare word is always a registry
+  // code, so a same-named local directory can never shadow the registry template.
+  const mode = deployMode(target)
 
   let manifest: TemplateManifest | undefined
   let vars: TemplateVar[]
-  if (local) {
-    manifest = loadTemplateManifest(target) // parse + local validation (pinned images, described vars)
+  if (mode.kind === 'local') {
+    manifest = loadTemplateManifest(mode.dir) // parse + local validation (pinned images, described vars)
     vars = collectManifestVariables(manifest)
-    info(`deploying local template ${manifest.code}@${manifest.version}`)
+    if (!quiet) info(`deploying local template ${manifest.code}@${manifest.version}`)
   } else {
     // Learn the variable set up front from the registry so prompting happens before the POST.
-    const tpl = await api.request('GET', `/templates/${encodeURIComponent(target)}`)
+    const tpl = await api.request('GET', `/templates/${encodeURIComponent(mode.code)}`)
     vars = normalizeInfoVariables((tpl.template ?? tpl).variables)
   }
 
   // --json asked for parseable output, so a caller that happens to own a TTY still gets the error.
   const tty = !opts.json && !opts.yes && !!process.stdin.isTTY && !!process.stdout.isTTY
-  const quiet = !!opts.json
   const onAutoResolved = quiet ? undefined : (v: TemplateVar) =>
     info(`  ${v.name}: ${v.generate ? `platform-generated (${v.generate})` : `default (${v.default})`}`)
-  const variables = await resolveVariables(vars, given, { tty, ask: promptVariable, onAutoResolved })
+  const variables = await resolveVariables(vars, given, { tty, ask, onAutoResolved })
 
   // The endpoint takes the branch NAME directly (branchId is its uuid alias) — no lookup needed.
-  const body = { ...(manifest ? { manifest } : { templateCode: target }), branch: branchName, variables }
+  const body = { ...(mode.kind === 'local' ? { manifest } : { templateCode: mode.code }), branch: branchName, variables }
   let res
   try {
     res = await api.rawRequest('POST', `/projects/${p.projectId}/template-deployments`, body)
@@ -326,7 +363,7 @@ export async function templateDeploy(target: string, opts: TemplateDeployOpts = 
     // machine-readable way, prompt from that and retry once instead of parroting an opaque 4xx.
     const missing = e instanceof ApiError ? missingVariablesFrom(e.body) : null
     if (!missing?.length) throw e
-    Object.assign(variables, await resolveVariables(missing, {}, { tty, ask: promptVariable }))
+    Object.assign(variables, await resolveVariables(missing, {}, { tty, ask }))
     res = await api.rawRequest('POST', `/projects/${p.projectId}/template-deployments`, { ...body, variables })
   }
   if (handleApproval(res)) return
@@ -334,7 +371,7 @@ export async function templateDeploy(target: string, opts: TemplateDeployOpts = 
   const deploymentId = res.body.deploymentId ?? (res.body.deployment ?? res.body).id
   const codeLabel = manifest?.code ?? target
   if (!quiet) info(`deploying template ${codeLabel} to branch ${branchName} (${deploymentId})`)
-  const dep = await watchDeployment((id) => api.request('GET', `/template-deployments/${id}`), deploymentId, quiet ? () => {} : info)
+  const dep = await watchDeployment((id) => api.request('GET', `/template-deployments/${id}`), deploymentId, quiet ? () => {} : info, deps.wait)
   if (opts.json) return printJson(dep)
   info(`template ${codeLabel} deployed to branch ${branchName}`)
   for (const u of deploymentUrls(dep)) info(`  ${u}`)

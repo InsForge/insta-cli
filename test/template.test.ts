@@ -1,11 +1,14 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach, afterAll } from 'vitest'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import {
   imageTagIssue, validateManifest, collectManifestVariables, parseManifestYaml,
   type TemplateManifest, type TemplateVar,
 } from '../src/template-manifest.js'
 import {
   templateListLines, templateInfoLines, normalizeInfoServices, normalizeInfoVariables,
-  parseSetFlags, resolveVariables, missingVariablesFrom, looksLikePath,
+  parseSetFlags, resolveVariables, missingVariablesFrom, looksLikePath, deployMode, templateDeploy,
   stepIndexFor, deploymentUrls, serviceStateLines, partialMessage, watchDeployment, DEPLOY_STEPS,
 } from '../src/commands/template.js'
 
@@ -103,6 +106,23 @@ describe('validateManifest', () => {
     expect(problems).toContain('services.a.env.generated.A_REF must reference a declared generator like ${name}')
     expect(problems).toContain("services.a.env.generated.B_REF references undeclared generator 'nope'")
     expect(problems).toHaveLength(2)
+  })
+  // The generator rule is the SERVER's, so it applies wherever a var declares one — an invalid
+  // generate on an optional var would otherwise pass locally and fail only on the platform.
+  it('checks generate syntax on optional vars too, not just required ones', () => {
+    const m: TemplateManifest = {
+      code: 'x', version: '1',
+      services: { a: { type: 'worker', image: 'a:1', env: { optional: { OPT_GEN: { generate: 'secret:0' } } } } },
+    }
+    expect(validateManifest(m)).toEqual(['services.a.env.optional.OPT_GEN: generate must be secret:N (1-999), got: secret:0'])
+  })
+  // The description lint is about a question put to the deployer, so it stays required-only.
+  it('does not demand a description on optional vars', () => {
+    const m: TemplateManifest = {
+      code: 'x', version: '1',
+      services: { a: { type: 'worker', image: 'a:1', env: { optional: { PLAIN: {}, GEN: { generate: 'secret:16' } } } } },
+    }
+    expect(validateManifest(m)).toEqual([])
   })
   it('rejects out-of-range ports and fractional volumes', () => {
     const m: TemplateManifest = { code: 'x', version: '1', services: { a: { type: 'worker', image: 'a:1', port: 70000, volume: { size: 1.5 } } } }
@@ -270,6 +290,106 @@ describe('looksLikePath', () => {
   })
 })
 
+// Write a valid manifest into <tmp>/<name>/ and return the temp root.
+function manifestDir(name: string, code = name): string {
+  const root = mkdtempSync(join(tmpdir(), 'insta-tpl-'))
+  mkdirSync(join(root, name))
+  writeFileSync(
+    join(root, name, 'insta.template.yaml'),
+    ['code: ' + code, 'version: "1.0"', 'services:', '  app:', '    type: worker', '    image: nginx:1.27', ''].join('\n'),
+  )
+  return root
+}
+
+describe('deployMode', () => {
+  // The shadowing regression: a manifest sitting at ./plausible must NOT hijack the registry code.
+  it('reads a bare word as a registry code even when a same-named local manifest exists', () => {
+    expect(deployMode('plausible', () => true)).toEqual({ kind: 'registry', code: 'plausible' })
+  })
+  it('reads a path-looking target as a local directory', () => {
+    expect(deployMode('./plausible', () => true)).toEqual({ kind: 'local', dir: join(process.cwd(), 'plausible') })
+  })
+  it('fails a path-looking target with no manifest instead of falling back to the registry', () => {
+    expect(() => deployMode('./plausible', () => false)).toThrow(/no insta\.template\.yaml at/)
+  })
+  it('finds the manifest on disk by default', () => {
+    const root = manifestDir('tpl')
+    expect(deployMode(join(root, 'tpl'))).toEqual({ kind: 'local', dir: join(root, 'tpl') })
+    expect(() => deployMode(join(root, 'absent'))).toThrow(/no insta\.template\.yaml at/)
+  })
+})
+
+// The deploy path itself: api + linked project are injected (the deps pattern), so these cover the
+// side-effectful command — which mode a target selects, and what lands on stdout.
+function fakeApi(deployment: any = { status: 'succeeded', services: [{ name: 'app', state: 'healthy', url: 'https://app.example' }] }) {
+  const posts: any[] = []
+  const api = {
+    request: async (_m: string, path: string) => {
+      if (path.startsWith('/templates/')) return { template: { code: 'plausible', variables: { required: [], optional: [] } } }
+      if (path.startsWith('/template-deployments/')) return deployment
+      throw new Error(`unexpected GET ${path}`)
+    },
+    rawRequest: async (_m: string, _path: string, body?: unknown) => {
+      posts.push(body)
+      return { status: 200, body: { deploymentId: 'dep_1' } }
+    },
+  }
+  return { api, posts }
+}
+
+const PROJECT = { projectId: 'proj_1', orgId: 'org_1', branch: 'main' }
+const NO_WAIT = async () => {}
+
+describe('templateDeploy', () => {
+  const stdout: string[] = []
+  const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation((c: any) => { stdout.push(String(c)); return true })
+  afterEach(() => { stdout.length = 0 })
+  afterAll(() => { outSpy.mockRestore() })
+
+  it('sends a bare target as a registry code, not the same-named local manifest', async () => {
+    const root = manifestDir('plausible')
+    const cwd = process.cwd()
+    const { api, posts } = fakeApi()
+    try {
+      process.chdir(root)
+      await templateDeploy('plausible', {}, { api, project: PROJECT, wait: NO_WAIT })
+    } finally { process.chdir(cwd) }
+    expect(posts).toEqual([{ templateCode: 'plausible', branch: 'main', variables: {} }])
+    expect(stdout.join('')).not.toMatch(/local template/)
+  })
+
+  it('sends the local manifest inline when the target is a path', async () => {
+    const root = manifestDir('plausible', 'plausible-fork')
+    const cwd = process.cwd()
+    const { api, posts } = fakeApi()
+    try {
+      process.chdir(root)
+      await templateDeploy('./plausible', {}, { api, project: PROJECT, wait: NO_WAIT })
+    } finally { process.chdir(cwd) }
+    expect(posts[0].manifest.code).toBe('plausible-fork')
+    expect(posts[0].templateCode).toBeUndefined()
+    expect(stdout.join('')).toContain('deploying local template plausible-fork@1.0')
+  })
+
+  // --json is a contract: stdout must parse as ONE document, so no progress line may precede it.
+  it('--json prints a single parseable JSON document in local mode', async () => {
+    const root = manifestDir('tpl')
+    const dep = { status: 'succeeded', services: [{ name: 'app', state: 'healthy', url: 'https://app.example' }] }
+    const { api } = fakeApi(dep)
+    await templateDeploy(join(root, 'tpl'), { json: true }, { api, project: PROJECT, wait: NO_WAIT })
+    const text = stdout.join('')
+    expect(JSON.parse(text)).toEqual(dep)
+    expect(text).not.toMatch(/local template/)
+  })
+
+  it('--json prints a single parseable JSON document in registry mode too', async () => {
+    const dep = { status: 'succeeded', services: [] }
+    const { api } = fakeApi(dep)
+    await templateDeploy('plausible', { json: true }, { api, project: PROJECT, wait: NO_WAIT })
+    expect(JSON.parse(stdout.join(''))).toEqual(dep)
+  })
+})
+
 describe('deployment progress', () => {
   it('maps the step field to an index; anything else holds progress', () => {
     expect(stepIndexFor('create_services')).toBe(0)
@@ -322,6 +442,25 @@ describe('deployment progress', () => {
     ]
     await expect(watchDeployment(async () => seq.shift()!, 'd1', () => {}, async () => {}))
       .rejects.toThrow(/finished partial: 1\/2 services healthy[\s\S]*✓ app — https:\/\/app\.example\n\s+✗ worker \[failed\][\s\S]*--- log tail ---\nOOM killed[\s\S]*created services are kept[\s\S]*re-run the deploy to retry/)
+  })
+  // The first payload often lands before the executor has claimed a step. Announcing
+  // `create services` off it would be a guess — hold until the run says where it is.
+  it('says nothing yet when the first running payload carries no step', async () => {
+    const seq = [
+      { status: 'running' },
+      { status: 'running', step: 'unknown_future_step' },
+      { status: 'running', step: 'write_variables' },
+      { status: 'succeeded' },
+    ]
+    const out: string[] = []
+    await watchDeployment(async () => seq.shift()!, 'd1', (l) => out.push(l), async () => {})
+    expect(out).toEqual([
+      '  ✓ create services',
+      '  … write variables',
+      '  ✓ write variables',
+      '  ✓ deploy',
+      '  ✓ health check',
+    ])
   })
   it('holds progress on a missing/unknown step instead of guessing', async () => {
     const seq = [{ status: 'running', step: 'deploy' }, { status: 'running' }, { status: 'succeeded' }]

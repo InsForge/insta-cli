@@ -122,12 +122,16 @@ export function validateManifest(m: TemplateManifest): string[] {
       if (!match) problems.push(`${where}.env.generated.${varName} must reference a declared generator like \${name}`)
       else if (!generators.has(match[1]!)) problems.push(`${where}.env.generated.${varName} references undeclared generator '${match[1]}'`)
     }
-    for (const [varName, raw] of Object.entries(env.required ?? {})) {
-      const spec = asVarSpec(raw)
-      if (spec.generate && !GENERATOR_RE.test(spec.generate)) problems.push(`${where}.env.required.${varName}: generate must be secret:N (1-999), got: ${spec.generate}`)
-      // A required var is a question put to the deployer — without a description (or a generator
-      // that answers it for them) there is nothing to ask with. Authoring lint, CLI-only.
-      if (!spec.description && !spec.generate) problems.push(`${where}.env.required.${varName}: a description is required (unless generate is set)`)
+    // The generator rule is the server's, so it holds wherever a var declares one — an invalid
+    // generate on an OPTIONAL var is just as fatal at deploy time as on a required one.
+    for (const group of ['required', 'optional'] as const) {
+      for (const [varName, raw] of Object.entries(env[group] ?? {})) {
+        const spec = asVarSpec(raw)
+        if (spec.generate && !GENERATOR_RE.test(spec.generate)) problems.push(`${where}.env.${group}.${varName}: generate must be secret:N (1-999), got: ${spec.generate}`)
+        // A required var is a question put to the deployer — without a description (or a generator
+        // that answers it for them) there is nothing to ask with. Authoring lint, CLI-only.
+        if (group === 'required' && !spec.description && !spec.generate) problems.push(`${where}.env.required.${varName}: a description is required (unless generate is set)`)
+      }
     }
   }
   return problems
