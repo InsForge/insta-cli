@@ -41,7 +41,10 @@ const FEEDBACK_ENDPOINT =
   process.env.INSTA_FEEDBACK_URL ||
   'https://feedback.instacloud.com/v1/feedback'
 const FEEDBACK_INGEST_TOKEN = process.env.INSTA_FEEDBACK_TOKEN || 'insta-feedback-public-v1'
-const FEEDBACK_TIMEOUT_MS = 10_000
+// 15s gives the backend's scale-to-zero cold start room to answer (the ingest service waits out
+// the DB wake and persists, so a report can land after the old 10s deadline gave up on it).
+// An expired deadline is reported as UNCONFIRMED, not failed — the report may well be stored.
+const FEEDBACK_TIMEOUT_MS = 15_000
 const MAX_FILE_BYTES = 256 * 1024
 
 export type FeedbackOpts = {
@@ -190,6 +193,9 @@ export async function buildPayload(
 
 export type SubmitResult =
   | { status: 'received' | 'duplicate'; id: string | null }
+  // unconfirmed = the deadline expired with the request in flight: the server does not abort
+  // mid-request, so the report may have been stored — materially different from 'error'.
+  | { status: 'unconfirmed'; error: string }
   | { status: 'error'; error: string }
 
 /** One POST, 10s timeout, zero retries — feedback is a side quest and must never hang the CLI.
@@ -208,8 +214,10 @@ export async function submit(payload: Record<string, unknown>, fetchImpl: typeof
       signal: AbortSignal.timeout(FEEDBACK_TIMEOUT_MS),
     })
   } catch (e) {
-    const timedOut = e instanceof Error && e.name === 'TimeoutError'
-    return { status: 'error', error: timedOut ? `timed out after ${FEEDBACK_TIMEOUT_MS / 1000}s` : `network error: ${e instanceof Error ? e.message : String(e)}` }
+    if (e instanceof Error && e.name === 'TimeoutError') {
+      return { status: 'unconfirmed', error: `no response after ${FEEDBACK_TIMEOUT_MS / 1000}s — the report may have been recorded anyway` }
+    }
+    return { status: 'error', error: `network error: ${e instanceof Error ? e.message : String(e)}` }
   }
   let body: any = {}
   try {
@@ -240,6 +248,13 @@ export async function feedback(opts: FeedbackOpts, deps: FeedbackDeps = {}): Pro
 
   const result = await submit(payload, deps.fetchImpl ?? fetch)
 
+  if (result.status === 'unconfirmed') {
+    // NOT a failure claim: the request was still in flight at the deadline and the server
+    // finishes what it started, so saying "not submitted" here would be a false negative.
+    if (opts.json) return printJson({ status: 'unconfirmed', error: result.error })
+    process.stderr.write(`warning: feedback receipt unconfirmed (${result.error}) — continue with your task, do not retry\n`)
+    return
+  }
   if (result.status === 'error') {
     // Deliberate exit 0: an agent CANNOT fix a down/rate-limited backend, and feedback must never
     // fail or distract from the task the user actually asked for. Do not retry.
