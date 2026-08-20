@@ -1,6 +1,18 @@
-import { test, expect } from 'vitest'
+import { test, expect, beforeEach, afterEach } from 'vitest'
 import { planSetupEnv, setupAgent, registerMcp, SETUP_ARGS, MCP_SERVER_NAME, DEFAULT_MCP_URL } from '../src/commands/setup.js'
 import { ENVS } from '../src/env.js'
+
+// setupAgent's default planner inputs read $INSTA_ENV / $INSTA_API_URL — a developer or CI shell
+// with either set would change the plan under these tests. Clear and restore around every test.
+const ambient: Record<string, string | undefined> = {}
+beforeEach(() => {
+  for (const k of ['INSTA_ENV', 'INSTA_API_URL']) { ambient[k] = process.env[k]; delete process.env[k] }
+})
+afterEach(() => {
+  for (const k of ['INSTA_ENV', 'INSTA_API_URL']) {
+    if (ambient[k] === undefined) delete process.env[k]; else process.env[k] = ambient[k]
+  }
+})
 
 // Isolated persisted-config fakes: never read (or let envUse WRITE) the developer's real
 // ~/.insta/config.json from inside the test suite.
@@ -62,8 +74,26 @@ test('planSetupEnv: deliberate custom hosts are left alone unless --env is given
   expect(planSetupEnv(undefined, ENVS.staging.api, 'http://127.0.0.1:8080', null)).toEqual({ target: null, switch: false })
   // Persisted custom apiUrl (login --api-url): hands off.
   expect(planSetupEnv(undefined, 'https://preview.example.com', undefined, null)).toEqual({ target: null, switch: false })
-  // --env still wins over both — an explicit flag is the most specific instruction.
-  expect(planSetupEnv('staging', 'https://preview.example.com', 'http://127.0.0.1:8080', null)).toEqual({ target: 'staging', switch: true })
+  // A persisted CUSTOM host with an explicit --env is a plain switch (login --api-url is undone knowingly).
+  expect(planSetupEnv('staging', 'https://preview.example.com', undefined, null)).toEqual({ target: 'staging', switch: true })
+})
+
+test('planSetupEnv: --env conflicting with an ambient override is an ERROR, never a quiet loser', () => {
+  // Everything downstream resolves through resolveEnv(), where the ambient override outranks the
+  // persisted config — proceeding would persist one env and install another's skills/MCP.
+  expect(() => planSetupEnv('staging', ENVS.prod.api, 'http://127.0.0.1:8080', null)).toThrow(/conflicts with \$INSTA_API_URL/)
+  expect(() => planSetupEnv('prod', ENVS.prod.api, undefined, 'staging')).toThrow(/conflicts with \$INSTA_ENV/)
+  // Agreeing values are fine (the installer exports nothing, but a CI shell might set both).
+  expect(planSetupEnv('staging', ENVS.prod.api, undefined, 'staging')).toEqual({ target: 'staging', switch: true })
+  expect(() => planSetupEnv('nope', ENVS.prod.api, undefined, null)).toThrow(/unknown --env/)
+})
+
+test('setupAgent surfaces the --env/$INSTA_API_URL conflict before touching anything', async () => {
+  process.env.INSTA_API_URL = 'http://127.0.0.1:8080'
+  const runs: string[][] = []
+  await expect(callSetup({ yes: true, env: 'staging' }, async (_cmd, args) => { runs.push(args); return { ok: true, output: '' } }))
+    .rejects.toThrow(/conflicts with \$INSTA_API_URL/)
+  expect(runs).toHaveLength(0) // nothing installed, nothing switched
 })
 
 test('planSetupEnv: $INSTA_ENV counts as explicit (installer/CI path)', () => {

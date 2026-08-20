@@ -12,7 +12,7 @@ import os from 'node:os'
 import { ApiClient } from '../api.js'
 import { readPersistedGlobal, resolveEnv, type GlobalConfig } from '../config.js'
 import { DEFAULT_ENV, ENVS, ENV_NAMES, envForApiUrl, envFromEnvVar, isEnvName, mcpServerName, type EnvName } from '../env.js'
-import { die, info } from '../util.js'
+import { info } from '../util.js'
 import { envUse } from './env.js'
 import { installAgentConfigs } from './mcp.js'
 import { detectChannel, type Channel } from './upgrade.js'
@@ -355,7 +355,12 @@ export function planSetupEnv(
 ): { target: EnvName; switch: boolean } | { target: null; switch: false } {
   if (flagEnv !== undefined) {
     const want = flagEnv.trim().toLowerCase()
-    if (!isEnvName(want)) die(`unknown --env "${flagEnv}" — expected one of: ${ENV_NAMES.join(', ')}`)
+    if (!isEnvName(want)) throw new Error(`unknown --env "${flagEnv}" — expected one of: ${ENV_NAMES.join(', ')}`)
+    // A contradicting ambient override must ERROR, not lose quietly: everything after this plan
+    // resolves through resolveEnv(), where $INSTA_API_URL (and $INSTA_ENV) outrank the persisted
+    // config — proceeding would persist one environment and install another's skills/MCP.
+    if (apiUrlOverride) throw new Error(`--env ${want} conflicts with $INSTA_API_URL=${apiUrlOverride} — unset one`)
+    if (envVar && envVar !== want) throw new Error(`--env ${want} conflicts with $INSTA_ENV=${envVar} — unset one`)
     return { target: want, switch: envForApiUrl(persistedApiUrl) !== want }
   }
   if (apiUrlOverride) return { target: null, switch: false }
