@@ -223,10 +223,21 @@ fi
 if [ "$AGENTS" = "1" ]; then
   echo
   # `insta setup agent` prints its own "setting up coding-agent skills …" line + clean summary.
+  # CLI >= 0.0.38: bare `setup agent` FORCES prod (switching the machine if needed), so a staging
+  # install must pass the environment explicitly. The persisted env already matches (env use above),
+  # so --env is a no-op switch there — it just stops setup from "correcting" the machine to prod.
+  # Older CLIs (a pinned INSTA_VERSION) reject the flag; fall back to the bare form, which on those
+  # versions follows the persisted environment — the old, correct semantics.
+  SETUP_ENV_ARGS=""
+  [ -n "$ENV_NAME" ] && SETUP_ENV_ARGS="--env $ENV_NAME"
   if [ "$YES" = "1" ]; then
-    "$INSTALL_DIR/$BIN" setup agent -y || echo "warn: agent setup failed — run: insta setup agent"
+    "$INSTALL_DIR/$BIN" setup agent -y $SETUP_ENV_ARGS \
+      || { [ -n "$SETUP_ENV_ARGS" ] && "$INSTALL_DIR/$BIN" setup agent -y; } \
+      || echo "warn: agent setup failed — run: insta setup agent ${SETUP_ENV_ARGS}"
   else
-    "$INSTALL_DIR/$BIN" setup agent || echo "warn: agent setup failed — run: insta setup agent"
+    "$INSTALL_DIR/$BIN" setup agent $SETUP_ENV_ARGS \
+      || { [ -n "$SETUP_ENV_ARGS" ] && "$INSTALL_DIR/$BIN" setup agent; } \
+      || echo "warn: agent setup failed — run: insta setup agent ${SETUP_ENV_ARGS}"
   fi
 fi
 

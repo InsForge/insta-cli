@@ -10,9 +10,10 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import os from 'node:os'
 import { ApiClient } from '../api.js'
-import { resolveEnv } from '../config.js'
-import { DEFAULT_ENV, ENVS, mcpServerName } from '../env.js'
-import { info } from '../util.js'
+import { readPersistedGlobal, resolveEnv, type GlobalConfig } from '../config.js'
+import { DEFAULT_ENV, ENVS, ENV_NAMES, envForApiUrl, envFromEnvVar, isEnvName, mcpServerName, type EnvName } from '../env.js'
+import { die, info } from '../util.js'
+import { envUse } from './env.js'
 import { installAgentConfigs } from './mcp.js'
 import { detectChannel, type Channel } from './upgrade.js'
 
@@ -336,16 +337,52 @@ export async function registerMcp(run: Runner = defaultRunner, mint: TokenMinter
   }
 }
 
+/** The environment `setup agent` should target, and whether the machine must be switched to it
+ *  first. Pure — decides only; the caller performs the switch.
+ *
+ *  The contract (CLI ≥ 0.0.38): the public one-liner `npx -y insta setup agent` means PRODUCTION,
+ *  full stop — a leftover `insta env use staging` from last month must not silently give a new
+ *  onboarding run staging skills. Staging is an explicit ask: `--env staging` (or $INSTA_ENV).
+ *  Two deliberate exceptions leave the machine alone:
+ *  - an explicit $INSTA_API_URL (insta-oss, a preview) with no --env — a hand-written URL is the
+ *    most specific instruction there is;
+ *  - a persisted CUSTOM apiUrl with no --env — same reasoning, chosen via login --api-url. */
+export function planSetupEnv(
+  flagEnv: string | undefined,
+  persistedApiUrl: string,
+  apiUrlOverride = process.env.INSTA_API_URL,
+  envVar = envFromEnvVar(),
+): { target: EnvName; switch: boolean } | { target: null; switch: false } {
+  if (flagEnv !== undefined) {
+    const want = flagEnv.trim().toLowerCase()
+    if (!isEnvName(want)) die(`unknown --env "${flagEnv}" — expected one of: ${ENV_NAMES.join(', ')}`)
+    return { target: want, switch: envForApiUrl(persistedApiUrl) !== want }
+  }
+  if (apiUrlOverride) return { target: null, switch: false }
+  const persisted = envForApiUrl(persistedApiUrl)
+  if (persisted === null) return { target: null, switch: false } // custom host, chosen deliberately
+  const target = envVar ?? DEFAULT_ENV
+  return { target, switch: persisted !== target }
+}
+
 export async function setupAgent(
-  opts: { yes?: boolean; mcpToken?: boolean },
+  opts: { yes?: boolean; mcpToken?: boolean; env?: string },
   run: Runner = defaultRunner,
   mint?: TokenMinter,
   installConfigs: (agent?: string) => Promise<string[]> = installAgentConfigs,
   ensure: (run: Runner) => Promise<void> = (r) => ensureCliInstalled(r),
+  readStored: () => Promise<GlobalConfig> = readPersistedGlobal,
+  switchEnv: (name: string) => Promise<void> = (n) => envUse(n),
 ): Promise<void> {
   if (!opts.yes && !process.stdout.isTTY) {
     info('non-interactive shell — assuming -y')
   }
+  // Pin the environment BEFORE anything is installed (see planSetupEnv). A required switch goes
+  // through `env use` — the one path that persists the choice and drops the now-foreign session —
+  // and announces itself, so the machine can never end up with its CLI on one deployment and its
+  // skills/MCP on another.
+  const plan = planSetupEnv(opts.env, (await readStored()).apiUrl)
+  if (plan.switch && plan.target) await switchEnv(plan.target)
   // BEFORE the skill install: the skill tells agents to run `insta …`, so a durable CLI must
   // exist by the time it lands.
   await ensure(run)
@@ -375,4 +412,11 @@ export async function setupAgent(
   await registerMcp(run, mint, !!opts.mcpToken)
   const others = await installConfigs()
   if (others.length) info(`✓ MCP — also configured for ${others.join(', ')} (restart those tools to pick it up)`)
+  // The checkmarks end the install, but the user's next move shouldn't be guesswork. Local state
+  // only (no network): a config with a session means logged in — good enough for a hint.
+  const stored = await readStored()
+  const loggedIn = !!(stored.accessToken || stored.user)
+  info(loggedIn
+    ? 'next: `insta project create <name>` in your app repo — or tell your agent: "Fetch https://instacloud.com/prompt.md and follow it"'
+    : 'next: `insta login --oauth github` (headless: `insta login --device`), then `insta project create <name>` — or tell your agent: "Fetch https://instacloud.com/prompt.md and follow it"')
 }

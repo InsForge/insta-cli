@@ -182,6 +182,8 @@ test('setupAgent self-installs the CLI BEFORE the skill install (the skill point
     undefined,
     async () => [],
     (r) => ensureCliInstalled(r, 'npm', false, () => true), // force the npx-with-no-durable-insta case
+    async () => ({ apiUrl: 'https://api.instacloud.com' }), // isolated: never read the real ~/.insta
+    async () => { throw new Error('unexpected env switch') },
   )
   expect(runs[0]!.slice(-3)).toEqual(['install', '-g', `insta@${VERSION}`])
   // Shape, not exact args: the skill source varies with the resolved environment, and
