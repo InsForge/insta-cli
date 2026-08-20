@@ -96,6 +96,17 @@ test('setupAgent surfaces the --env/$INSTA_API_URL conflict before touching anyt
   expect(runs).toHaveLength(0) // nothing installed, nothing switched
 })
 
+test('setupAgent surfaces a disagreeing $INSTA_ENV the same way (INSTA_ENV=staging + --env prod)', async () => {
+  process.env.INSTA_ENV = 'staging'
+  const runs: string[][] = []
+  await expect(callSetup({ yes: true, env: 'prod' }, async (_cmd, args) => { runs.push(args); return { ok: true, output: '' } }))
+    .rejects.toThrow(/conflicts with \$INSTA_ENV/)
+  expect(runs).toHaveLength(0)
+  // Agreeing values proceed — and the assets install for that same env (resolveEnv honors
+  // $INSTA_ENV, which equals the flag, so the plan and the resolution cannot diverge).
+  delete process.env.INSTA_ENV
+})
+
 test('planSetupEnv: $INSTA_ENV counts as explicit (installer/CI path)', () => {
   expect(planSetupEnv(undefined, ENVS.prod.api, undefined, 'staging')).toEqual({ target: 'staging', switch: true })
   expect(planSetupEnv(undefined, ENVS.staging.api, undefined, 'staging')).toEqual({ target: 'staging', switch: false })
