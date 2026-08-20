@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach } from 'vitest'
-import { planSetupEnv, setupAgent, registerMcp, SETUP_ARGS, MCP_SERVER_NAME, DEFAULT_MCP_URL } from '../src/commands/setup.js'
+import { planSetupEnv, setupAgent, shouldOfferLogin, registerMcp, SETUP_ARGS, MCP_SERVER_NAME, DEFAULT_MCP_URL } from '../src/commands/setup.js'
 import { ENVS } from '../src/env.js'
 
 // setupAgent's default planner inputs read $INSTA_ENV / $INSTA_API_URL — a developer or CI shell
@@ -94,6 +94,51 @@ test('setupAgent surfaces the --env/$INSTA_API_URL conflict before touching anyt
   await expect(callSetup({ yes: true, env: 'staging' }, async (_cmd, args) => { runs.push(args); return { ok: true, output: '' } }))
     .rejects.toThrow(/conflicts with \$INSTA_API_URL/)
   expect(runs).toHaveLength(0) // nothing installed, nothing switched
+})
+
+test('shouldOfferLogin: only an interactive human terminal with no session', () => {
+  expect(shouldOfferLogin(false, false, true, true)).toBe(true)
+  expect(shouldOfferLogin(true, false, true, true)).toBe(false)   // -y = non-interactive by request
+  expect(shouldOfferLogin(false, true, true, true)).toBe(false)   // already logged in
+  expect(shouldOfferLogin(false, false, false, true)).toBe(false) // piped stdin (agents, CI)
+  expect(shouldOfferLogin(false, false, true, false)).toBe(false) // redirected stdout
+})
+
+test('setup agent flows into GitHub login by default on a TTY when not logged in', async () => {
+  const events: string[] = []
+  await setupAgent(
+    { yes: false }, // interactive
+    async (_cmd, args) => { events.push(`run:${args[0]}`); return { ok: true, output: '' } },
+    undefined, async () => [], async () => {},
+    async () => ({ apiUrl: ENVS.prod.api }), // no session → not logged in
+    noSwitch,
+    { ask: async (q) => { events.push(`ask:${q.trim()}`); return true }, login: async () => { events.push('login') }, stdinTty: true, stdoutTty: true },
+  )
+  expect(events).toContain('ask:log in now with GitHub? (Y/n)')
+  expect(events[events.length - 1]).toBe('login')
+})
+
+test('declined prompt and failed login both end with the manual hint, never an error', async () => {
+  const prev = process.exitCode
+  // Declined: login never runs.
+  let loggedIn = 0
+  await setupAgent({ yes: false }, async () => ({ ok: true, output: '' }), undefined, async () => [], async () => {},
+    storedProd, noSwitch,
+    { ask: async () => false, login: async () => { loggedIn++ }, stdinTty: true, stdoutTty: true })
+  expect(loggedIn).toBe(0)
+  // Failed: swallowed — setup already succeeded.
+  await setupAgent({ yes: false }, async () => ({ ok: true, output: '' }), undefined, async () => [], async () => {},
+    storedProd, noSwitch,
+    { ask: async () => true, login: async () => { throw new Error('browser exploded') }, stdinTty: true, stdoutTty: true })
+  expect(process.exitCode).toBe(prev)
+})
+
+test('non-TTY (agents/CI) never prompts for login', async () => {
+  let asked = 0
+  await setupAgent({ yes: true }, async () => ({ ok: true, output: '' }), undefined, async () => [], async () => {},
+    storedProd, noSwitch,
+    { ask: async () => { asked++; return true }, login: async () => { asked++ }, stdinTty: false, stdoutTty: false })
+  expect(asked).toBe(0)
 })
 
 test('setupAgent surfaces a disagreeing $INSTA_ENV the same way (INSTA_ENV=staging + --env prod)', async () => {

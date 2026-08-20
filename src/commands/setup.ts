@@ -9,10 +9,12 @@ import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import os from 'node:os'
+import { createInterface } from 'node:readline'
 import { ApiClient } from '../api.js'
 import { readPersistedGlobal, resolveEnv, type GlobalConfig } from '../config.js'
 import { DEFAULT_ENV, ENVS, ENV_NAMES, envForApiUrl, envFromEnvVar, isEnvName, mcpServerName, type EnvName } from '../env.js'
 import { info } from '../util.js'
+import { loginOauth } from './auth.js'
 import { envUse } from './env.js'
 import { installAgentConfigs } from './mcp.js'
 import { detectChannel, type Channel } from './upgrade.js'
@@ -370,6 +372,31 @@ export function planSetupEnv(
   return { target, switch: persisted !== target }
 }
 
+/** Whether setup should flow straight into login: an interactive human terminal with no session.
+ *  Pure. Non-TTY (agents, CI, pipes) and -y runs never prompt — a browser OAuth flow cannot work
+ *  there anyway; they get the printed `next:` hint instead, and prompt.md walks agents through
+ *  login as its own step (relaying the sign-in link to the human). */
+export function shouldOfferLogin(yes: boolean, loggedIn: boolean, stdinTty: boolean, stdoutTty: boolean): boolean {
+  return !yes && !loggedIn && stdinTty && stdoutTty
+}
+
+// One Enter continues into the browser login; only an explicit n/no declines. Matches the
+// curl-installer feel: the single command carries you as far as automation can go, and the one
+// genuinely human step (authorizing in the browser) starts itself instead of being homework.
+const defaultAsk = async (question: string): Promise<boolean> => {
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  const answer: string = await new Promise((resolve) => rl.question(question, resolve))
+  rl.close()
+  return !/^n/i.test(answer.trim())
+}
+
+export type LoginFlow = {
+  ask: (question: string) => Promise<boolean>
+  login: () => Promise<void>
+  stdinTty: boolean
+  stdoutTty: boolean
+}
+
 export async function setupAgent(
   opts: { yes?: boolean; mcpToken?: boolean; env?: string },
   run: Runner = defaultRunner,
@@ -378,6 +405,12 @@ export async function setupAgent(
   ensure: (run: Runner) => Promise<void> = (r) => ensureCliInstalled(r),
   readStored: () => Promise<GlobalConfig> = readPersistedGlobal,
   switchEnv: (name: string) => Promise<void> = (n) => envUse(n),
+  loginFlow: LoginFlow = {
+    ask: defaultAsk,
+    login: () => loginOauth('github', {}),
+    stdinTty: !!process.stdin.isTTY,
+    stdoutTty: !!process.stdout.isTTY,
+  },
 ): Promise<void> {
   if (!opts.yes && !process.stdout.isTTY) {
     info('non-interactive shell — assuming -y')
@@ -423,7 +456,19 @@ export async function setupAgent(
   // login/create commands in it are env-aware at runtime), and staging serves no equivalent.
   const stored = await readStored()
   const loggedIn = !!(stored.accessToken || stored.user)
-  info(loggedIn
-    ? 'next: `insta project create <name>` in your app repo — or tell your agent: "Fetch https://instacloud.com/prompt.md and follow it"'
-    : 'next: `insta login --oauth github` (headless: `insta login --device`), then `insta project create <name>` — or tell your agent: "Fetch https://instacloud.com/prompt.md and follow it"')
+  const nextCreate = 'next: `insta project create <name>` in your app repo — or tell your agent: "Fetch https://instacloud.com/prompt.md and follow it"'
+  if (loggedIn) return info(nextCreate)
+  // Default into login on an interactive terminal — see shouldOfferLogin. Best-effort: a declined
+  // prompt or a failed browser flow leaves a completed setup plus the manual hint, never an error.
+  if (shouldOfferLogin(!!opts.yes, loggedIn, loginFlow.stdinTty, loginFlow.stdoutTty)) {
+    if (await loginFlow.ask('log in now with GitHub? (Y/n) ')) {
+      try {
+        await loginFlow.login()
+        return info(nextCreate)
+      } catch (e) {
+        info(`  login did not complete (${e instanceof Error ? e.message : String(e)}) — no problem, setup itself is done.`)
+      }
+    }
+  }
+  info('next: `insta login --oauth github` (headless: `insta login --device`), then `insta project create <name>` — or tell your agent: "Fetch https://instacloud.com/prompt.md and follow it"')
 }
