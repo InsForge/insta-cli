@@ -13,16 +13,21 @@ export type BuildRunner = (
 ) => Promise<{ code: number; output: string }>
 
 // Spawn flyctl, tee its output to the user (so they see buildkit progress) AND capture it for digest
-// parsing.
-export const defaultBuildRunner: BuildRunner = (cmd, args, opts) =>
-  new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd: opts.cwd, env: opts.env, stdio: ['inherit', 'pipe', 'pipe'] })
-    let output = ''
-    child.stdout?.on('data', (b) => { const s = b.toString(); output += s; process.stdout.write(s) })
-    child.stderr?.on('data', (b) => { const s = b.toString(); output += s; process.stderr.write(s) })
-    child.on('error', (err) => resolve({ code: -1, output: `${output}\n${err.message}` }))
-    child.on('close', (code) => resolve({ code: code ?? -1, output }))
-  })
+// parsing. `to` picks the tee destination for the child's stdout: `deploy --json` reserves the
+// process's stdout for the final JSON document, so it tees build progress to stderr instead.
+function teeRunner(to: NodeJS.WriteStream): BuildRunner {
+  return (cmd, args, opts) =>
+    new Promise((resolve) => {
+      const child = spawn(cmd, args, { cwd: opts.cwd, env: opts.env, stdio: ['inherit', 'pipe', 'pipe'] })
+      let output = ''
+      child.stdout?.on('data', (b) => { const s = b.toString(); output += s; to.write(s) })
+      child.stderr?.on('data', (b) => { const s = b.toString(); output += s; process.stderr.write(s) })
+      child.on('error', (err) => resolve({ code: -1, output: `${output}\n${err.message}` }))
+      child.on('close', (code) => resolve({ code: code ?? -1, output }))
+    })
+}
+export const defaultBuildRunner: BuildRunner = teeRunner(process.stdout)
+export const stderrBuildRunner: BuildRunner = teeRunner(process.stderr)
 
 // buildkit prints "pushing manifest for registry.fly.io/<app>:<label>@sha256:<digest>" on push.
 // Pin to the digest — the bare tag races on Fly's registry (MANIFEST_UNKNOWN); the digest always resolves.
@@ -70,19 +75,22 @@ export async function flyctlBuildAndPush(
 }
 
 // Best-effort: ensure the fly CLI is available (needed for source-directory deploys). Never blocks —
-// if it can't be installed the subsequent build surfaces a clear error.
+// if it can't be installed the subsequent build surfaces a clear error. Everything here is one-time
+// bootstrap DIAGNOSTICS, so it all goes to stderr — including the installers' own stdout (fd 2 in
+// the stdio triple) — keeping stdout clean for `deploy --json`.
 export async function ensureFlyctl(): Promise<void> {
+  const note = (m: string) => process.stderr.write(m + '\n')
   const ok = (cmd: string, args: string[], inherit = false) =>
     new Promise<boolean>((resolve) => {
-      const p = spawn(cmd, args, { stdio: inherit ? 'inherit' : 'ignore' })
+      const p = spawn(cmd, args, { stdio: inherit ? ['inherit', 2, 2] : 'ignore' })
       p.on('error', () => resolve(false))
       p.on('close', (code) => resolve(code === 0))
     })
   try {
     if (await ok('flyctl', ['version'])) return
     if (process.platform === 'darwin' && (await ok('brew', ['--version']))) {
-      info('flyctl not found — installing with `brew install flyctl` (one-time)…')
-      info((await ok('brew', ['install', 'flyctl'], true)) ? 'flyctl installed ✓' : 'flyctl install failed — install manually: https://fly.io/docs/flyctl/install/')
+      note('flyctl not found — installing with `brew install flyctl` (one-time)…')
+      note((await ok('brew', ['install', 'flyctl'], true)) ? 'flyctl installed ✓' : 'flyctl install failed — install manually: https://fly.io/docs/flyctl/install/')
       return
     }
     if (process.platform === 'linux') {
@@ -90,16 +98,16 @@ export async function ensureFlyctl(): Promise<void> {
       // and no brew; without this branch `insta deploy <dir>` dead-ends on a hand-install of a
       // third-party CLI. Official installer, pinned into ~/.fly; the current process extends its
       // own PATH because the installer's shell-profile edit can't reach an already-running process.
-      info('flyctl not found — installing to ~/.fly (one-time)…')
+      note('flyctl not found — installing to ~/.fly (one-time)…')
       const flyHome = `${process.env.HOME ?? '~'}/.fly`
       const installed = await ok('sh', ['-c', `curl -fsSL https://fly.io/install.sh | FLYCTL_INSTALL="${flyHome}" sh`], true)
       if (installed) {
         process.env.PATH = `${process.env.PATH}:${flyHome}/bin`
-        if (await ok('flyctl', ['version'])) { info('flyctl installed ✓'); return }
+        if (await ok('flyctl', ['version'])) { note('flyctl installed ✓'); return }
       }
-      info('flyctl install failed — install manually: https://fly.io/docs/flyctl/install/')
+      note('flyctl install failed — install manually: https://fly.io/docs/flyctl/install/')
       return
     }
-    info('flyctl (fly CLI) not found — install it to deploy from source: https://fly.io/docs/flyctl/install/')
+    note('flyctl (fly CLI) not found — install it to deploy from source: https://fly.io/docs/flyctl/install/')
   } catch { /* best-effort convenience */ }
 }

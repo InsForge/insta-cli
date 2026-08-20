@@ -21,17 +21,19 @@ export async function approvalsList(opts: { status?: string; json?: boolean }): 
   for (const a of approvals) info(`${a.id}  ${a.action}  [${a.status}]  ${a.requested_at}`)
 }
 
-export async function approvalsApprove(id: string, opts: { always?: boolean }): Promise<void> {
+export async function approvalsApprove(id: string, opts: { always?: boolean; json?: boolean }): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
   const out = await api.request('POST', `/projects/${p.projectId}/approvals/${id}/approve`, { always: !!opts.always })
+  if (opts.json) return printJson(out)
   info(`approved ${out.approval.action} (${id})${opts.always ? ' — policy set to allow' : ''}`)
 }
 
-export async function approvalsDeny(id: string): Promise<void> {
+export async function approvalsDeny(id: string, opts: { json?: boolean } = {}): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
   const out = await api.request('POST', `/projects/${p.projectId}/approvals/${id}/deny`)
+  if (opts.json) return printJson(out)
   info(`denied ${out.approval.action} (${id})`)
 }
 
@@ -43,9 +45,10 @@ export async function policyGet(opts: { json?: boolean }): Promise<void> {
   for (const [action, decision] of Object.entries(policy)) info(`${action}: ${decision}`)
 }
 
-export async function policySet(action: string, decision: string): Promise<void> {
+export async function policySet(action: string, decision: string, opts: { json?: boolean } = {}): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
-  await api.request('PUT', `/projects/${p.projectId}/policy/${action}`, { decision })
+  const out = await api.request('PUT', `/projects/${p.projectId}/policy/${action}`, { decision })
+  if (opts.json) return printJson({ action, decision, ...(out ?? {}) })
   info(`policy ${action} = ${decision}`)
 }

@@ -28,10 +28,16 @@ export function info(msg: string): void {
 }
 
 // If the platform gated the action (HTTP 202), tell the user how to get it approved. Returns
-// true when an approval is pending (caller should stop).
-export function handleApproval(res: { status: number; body: any }): boolean {
+// true when an approval is pending (caller should stop). The hint goes to STDERR and the exit
+// code is set to 2: a pending gate is not success (redirected stdout must never swallow it as
+// output), and not a plain error either (die() owns 1) — it's approvable and re-runnable, and
+// scripts/agents branch on the distinct code. With json, stdout carries the platform's raw 202
+// envelope so a scripted caller can lift approvalId/action.
+export function handleApproval(res: { status: number; body: any }, json?: boolean): boolean {
   if (res.status === 202 && res.body?.status === 'approval_required') {
-    info(`approval required for ${res.body.action} — run: insta approvals approve ${res.body.approvalId}`)
+    if (json) printJson(res.body)
+    process.stderr.write(`approval required for ${res.body.action} — run: insta approvals approve ${res.body.approvalId}\n`)
+    process.exitCode = 2
     return true
   }
   return false

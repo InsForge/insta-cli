@@ -75,7 +75,7 @@ const envCmd = program.command('env').description('Show or switch the deployment
 envCmd.command('show', { isDefault: true }).description('Show the current environment and its hosts')
   .option('--json').action(guard((o) => envCmd_.envShow(o)))
 envCmd.command('use <name>').description(`Switch environment (${ENV_NAMES.join(' | ')}) — drops the stored session, which is deployment-specific`)
-  .action(guard((name) => envCmd_.envUse(name)))
+  .option('--json').action(guard((name, o) => envCmd_.envUse(name, o)))
 
 // ---- run (per-request secret injection — nothing written to disk) ----
 program.command('run <cmd> [args...]').description('Run a command with the branch credential bundle injected into its environment (no .env written)')
@@ -100,23 +100,23 @@ mcpCmd.command('install').description('Register the remote MCP server with codin
 // ---- org ----
 const orgCmd = program.command('org').description('Manage organizations')
 orgCmd.command('list').option('--json').action(guard((o) => org.orgList(o)))
-orgCmd.command('create <name>').action(guard((name) => org.orgCreate(name)))
+orgCmd.command('create <name>').option('--json').action(guard((name, o) => org.orgCreate(name, o)))
 
 // ---- project ----
 const pj = program.command('project').description('Manage projects')
-pj.command('create [name]').option('--org <id>', 'org to create under (default: personal)').action(guard((name, o) => project.projectCreate(name, o)))
+pj.command('create [name]').option('--org <id>', 'org to create under (default: personal)').option('--json').action(guard((name, o) => project.projectCreate(name, o)))
 pj.command('list').option('--org <id>').option('--json').action(guard((o) => project.projectList(o)))
-pj.command('link <id>').description('Link a project to this directory').action(guard((id) => project.projectLink(id)))
-pj.command('delete').option('--project <id>').action(guard((o) => project.projectDelete(o)))
+pj.command('link <id>').description('Link a project to this directory').option('--json').action(guard((id, o) => project.projectLink(id, o)))
+pj.command('delete').option('--project <id>').option('--json').action(guard((o) => project.projectDelete(o)))
 
 // ---- branch ----
 const br = program.command('branch').description('Manage branch environments')
-br.command('create <name>').option('--from <branch>', 'parent branch (default: current)').action(guard((name, o) => branch.branchCreate(name, o)))
+br.command('create <name>').option('--from <branch>', 'parent branch (default: current)').option('--json').action(guard((name, o) => branch.branchCreate(name, o)))
 br.command('list').option('--json').action(guard((o) => branch.branchList(o)))
-br.command('switch <name>').action(guard((name) => branch.branchSwitch(name)))
-br.command('delete <name>').action(guard((name) => branch.branchDelete(name)))
+br.command('switch <name>').option('--json').action(guard((name, o) => branch.branchSwitch(name, o)))
+br.command('delete <name>').option('--json').action(guard((name, o) => branch.branchDelete(name, o)))
 br.command('merge <source>').description('Merge a branch service set into another (structural, no data)')
-  .option('--into <branch>', 'target branch (default: current)').action(guard((source, o) => branch.branchMerge(source, o)))
+  .option('--into <branch>', 'target branch (default: current)').option('--json').action(guard((source, o) => branch.branchMerge(source, o)))
 
 // ---- services (opt-in postgres/storage/compute/redis/mysql/mongodb) ----
 const svc = program.command('services').alias('svc').description('Manage project services (postgres|storage|compute|redis|mysql|mongodb)')
@@ -139,7 +139,7 @@ svc.command('add [type] [name]').description('Provision a service on demand (ass
 svc.command('list').option('--json').option('--branch <branch>', 'branch (default: current)')
   .action(guard((o) => services.servicesList(o)))
 svc.command('remove <type> <name>').description('Remove a service and destroy its resources')
-  .option('--branch <branch>', 'branch (default: current)')
+  .option('--branch <branch>', 'branch (default: current)').option('--json')
   .action(guard((type, name, o) => services.servicesRemove(type, name, o)))
 svc.command('rename <type> <name> <new-name>').description('Rename a service and re-key its managed secret names')
   .option('--json').option('--branch <branch>', 'branch (default: current)')
@@ -160,9 +160,9 @@ const sec = program.command('secrets').description('Fetch the credential bundle 
 sec.command('list').description('List secret names, grouped by service').option('--branch <branch>').option('--json').action(guard((o) => secretsCmd.secretsList(o)))
 sec.command('set <name> [value]').description('Set a user secret (project-wide; value from stdin if omitted)')
   .option('--branch <branch>', 'scope to one branch').option('--service <type/name>', 'bind to a branch service (implies current branch)')
-  .action(guard((n, v, o) => secretsCmd.secretsSet(n, v, o)))
+  .option('--json').action(guard((n, v, o) => secretsCmd.secretsSet(n, v, o)))
 sec.command('unset <name>').description('Remove a user secret')
-  .option('--branch <branch>', 'scope to one branch').action(guard((n, o) => secretsCmd.secretsUnset(n, o)))
+  .option('--branch <branch>', 'scope to one branch').option('--json').action(guard((n, o) => secretsCmd.secretsUnset(n, o)))
 sec.command('bind <env-name> <source>').description('Bind a service credential into a compute env var')
   .option('--branch <branch>', 'branch (default: current)')
   .option('--to <compute-service>', 'target compute service, e.g. compute/api')
@@ -197,6 +197,7 @@ program.command('build [dir]').description('Verify a source directory would buil
 program.command('deploy [dir]').description('Deploy a source directory (built remotely on Fly) or a prebuilt --image to a branch compute group')
   .option('--image <url>', 'prebuilt container image to deploy (instead of a source dir)').option('--branch <b>').option('--group <g>').option('--port <p>')
   .option('--websocket', 'run a WebSocket app (larger guest + connection-based concurrency)')
+  .option('--json', 'print the deploy result as JSON (build progress goes to stderr)')
   .action(guard((dir, o) => deploy(dir, o)))
 
 // `insta compute exec` needs the command verbatim after a literal `--`; split it out of argv here,
@@ -211,7 +212,7 @@ compute.command('set-domain <host>').description('Attach a custom domain to a br
 compute.command('check-domain <host>').description("Show a custom domain's cert status + required DNS records")
   .option('--branch <b>').option('--group <g>').option('--json').action(guard((host, o) => computeCmd.checkDomain(host, o)))
 compute.command('remove-domain <host>').description('Detach a custom domain (gated: deploy)')
-  .option('--branch <b>').option('--group <g>').action(guard((host, o) => computeCmd.removeDomain(host, o)))
+  .option('--branch <b>').option('--group <g>').option('--json').action(guard((host, o) => computeCmd.removeDomain(host, o)))
 compute.command('start [service]').description('Bring a compute service online (persistent — re-enables auto-wake)')
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeStart(service, o)))
 compute.command('stop [service]').description('Take a compute service offline; traffic will NOT wake it until `start`')
@@ -302,8 +303,8 @@ program.command('events').description('Show the audit + agent-event timeline').o
 // ---- approvals ----
 const ap = program.command('approvals').description('Governance approvals (HITL)')
 ap.command('list').option('--status <s>', 'pending|granted|denied|consumed').option('--json').action(guard((o) => govern.approvalsList(o)))
-ap.command('approve <id>').option('--always', 'also set the policy to allow').action(guard((id, o) => govern.approvalsApprove(id, o)))
-ap.command('deny <id>').action(guard((id) => govern.approvalsDeny(id)))
+ap.command('approve <id>').option('--always', 'also set the policy to allow').option('--json').action(guard((id, o) => govern.approvalsApprove(id, o)))
+ap.command('deny <id>').option('--json').action(guard((id, o) => govern.approvalsDeny(id, o)))
 
 // ---- observe (local credential audit) ----
 const ob = program.command('observe').description('Local credential-audit hook')
@@ -315,7 +316,7 @@ ob.command('sync').description('Upload findings into the project timeline').acti
 // ---- policy ----
 const pol = program.command('policy').description('Governance policy')
 pol.command('get').option('--json').action(guard((o) => govern.policyGet(o)))
-pol.command('set <action> <decision>').description('action: secrets.read|secrets.write|deploy|project.delete|branch.delete|service.add|service.remove|service.scale|service.upgrade|service.setAccess|storage.read|storage.write|storage.delete; decision: allow|deny|approve').action(guard((a, d) => govern.policySet(a, d)))
+pol.command('set <action> <decision>').description('action: secrets.read|secrets.write|deploy|project.delete|branch.delete|service.add|service.remove|service.scale|service.upgrade|service.setAccess|storage.read|storage.write|storage.delete; decision: allow|deny|approve').option('--json').action(guard((a, d, o) => govern.policySet(a, d, o)))
 
 // ---- feedback (agent + human hurdle reports → the InstaCloud team) ----
 program.command('feedback')

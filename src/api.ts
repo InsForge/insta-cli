@@ -2,7 +2,7 @@
 // 2xx (including 202 approval_required) returns the parsed body; >=400 throws ApiError.
 import { readGlobal, writeGlobal, readProject, writeProject, type GlobalConfig, type ProjectConfig } from './config.js'
 import { autoResolveProject, promptChoice, type ProjectItem } from './resolve-project.js'
-import { die, info } from './util.js'
+import { die } from './util.js'
 
 export class ApiError extends Error {
   constructor(public status: number, msg: string) { super(msg); this.name = 'ApiError' }
@@ -115,7 +115,9 @@ export async function requireProject(): Promise<ProjectConfig> {
       promptChoice,
       save: async (c) => {
         await writeProject(c)
-        info(`auto-linked project ${c.projectId} → ./.insta/project.json`)
+        // stderr: this is a diagnostic that can precede ANY command's output — under --json,
+        // stdout must stay one parseable document.
+        process.stderr.write(`auto-linked project ${c.projectId} → ./.insta/project.json\n`)
       },
       tty: !!process.stdin.isTTY && !!process.stderr.isTTY,
     })

@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import {
   DEFAULT_ENV, ENVS, ENV_NAMES, envForApiUrl, envFromEnvVar, isEnvName, mcpServerName,
 } from '../src/env.js'
+import { envUseResult } from '../src/commands/env.js'
 
 const PROD_API = 'https://api.instacloud.com'
 const STAGING_API = 'https://api.staging.instacloud.com'
@@ -402,5 +403,28 @@ describe('config + env use', () => {
     const { envUse } = await import('../src/commands/env.js')
     await envUse('staging')
     expect((await readConfig()).autoUpdate).toBe(false)
+  })
+})
+
+// envUse's --json output must be ONE schema for both outcomes (no-op and real switch): a scripted
+// caller keying on mcpServer/previous must never get undefined just because the env was unchanged.
+describe('envUseResult', () => {
+  it('emits the same keys for a no-op and a real switch', () => {
+    const noop = envUseResult('prod', 'prod', false, false)
+    const switched = envUseResult('staging', 'prod', true, true)
+    expect(Object.keys(noop).sort()).toEqual(Object.keys(switched).sort())
+  })
+
+  it('resolves api/mcp/server from the target environment', () => {
+    const r = envUseResult('staging', 'prod', true, false)
+    expect(r).toEqual({
+      env: 'staging',
+      previous: 'prod',
+      apiUrl: ENVS.staging.api,
+      mcpUrl: ENVS.staging.mcp,
+      mcpServer: mcpServerName('staging'),
+      changed: true,
+      sessionDropped: false,
+    })
   })
 })

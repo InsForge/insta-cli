@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach, afterAll } from 'vitest'
 import { serializeEnv, handleApproval, nextActionsLines } from '../src/util.js'
 
 describe('serializeEnv', () => {
@@ -14,12 +14,39 @@ describe('serializeEnv', () => {
   })
 })
 
+// A pending gate is a diagnostic, not a result: the hint must go to stderr (stdout may be
+// redirected into a creds file or a JSON parser) and the process must exit non-zero — 2, distinct
+// from die()'s generic 1, so scripts/agents can branch on "approvable, re-run after approval".
 describe('handleApproval', () => {
-  it('returns true on a 202 approval_required', () => {
-    expect(handleApproval({ status: 202, body: { status: 'approval_required', action: 'deploy', approvalId: 'a1' } })).toBe(true)
+  const stdout: string[] = []
+  const stderr: string[] = []
+  const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation((c: any) => { stdout.push(String(c)); return true })
+  const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation((c: any) => { stderr.push(String(c)); return true })
+  afterEach(() => { stdout.length = 0; stderr.length = 0; process.exitCode = undefined })
+  afterAll(() => { outSpy.mockRestore(); errSpy.mockRestore() })
+
+  const gated = { status: 202, body: { status: 'approval_required', action: 'deploy', approvalId: 'a1' } }
+
+  it('202: returns true, hint on stderr, stdout untouched, exit code 2', () => {
+    expect(handleApproval(gated)).toBe(true)
+    expect(stderr.join('')).toMatch(/approval required for deploy — run: insta approvals approve a1/)
+    expect(stdout.join('')).toBe('')
+    expect(process.exitCode).toBe(2)
   })
-  it('returns false on a normal response', () => {
+
+  it('202 + json: raw envelope on stdout, hint still on stderr, exit code 2', () => {
+    expect(handleApproval(gated, true)).toBe(true)
+    expect(JSON.parse(stdout.join(''))).toEqual(gated.body)
+    expect(stdout.join('')).not.toMatch(/approval required for/)
+    expect(stderr.join('')).toMatch(/approval required for deploy/)
+    expect(process.exitCode).toBe(2)
+  })
+
+  it('returns false on a normal response and touches neither stream nor exit code', () => {
     expect(handleApproval({ status: 200, body: { ok: true } })).toBe(false)
+    expect(stdout.join('')).toBe('')
+    expect(stderr.join('')).toBe('')
+    expect(process.exitCode).toBeUndefined()
   })
 })
 
