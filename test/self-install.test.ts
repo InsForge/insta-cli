@@ -60,6 +60,16 @@ test('resolveSpawnable never re-enters a non-npm launcher (yarn.js, pnpm.cjs, bu
   expect(resolveSpawnable('npm', fallback.args, '/usr/lib/pnpm/dist/pnpm.cjs', fakeNode, 'linux')).toEqual(fallback)
 })
 
+test('resolveSpawnable never node-re-enters when execPath is not node (native binary channel)', () => {
+  // npm scripts export npm_execpath to children — a native `insta` run from an npm script must
+  // NOT spawn `insta npx-cli.js …`. With a non-node execPath, npm/npx take the shim path.
+  const bin = mkdtempSync(join(tmpdir(), 'insta-native-'))
+  const realNpxCli = join(bin, 'npx-cli.js')
+  writeFileSync(realNpxCli, '')
+  expect(resolveSpawnable('npx', ['-y', 'skills', 'add'], realNpxCli, '/usr/local/bin/insta', 'linux'))
+    .toEqual({ cmd: 'npx', args: ['-y', 'skills', 'add'] })
+})
+
 test('resolveSpawnable without npm_execpath uses the npm shipped beside the running node (spawnable on Windows)', () => {
   const ARGS = ['install', '-g', 'insta@1.2.3']
   // POSIX layout: <prefix>/bin/node + <prefix>/lib/node_modules/npm/bin/npm-cli.js

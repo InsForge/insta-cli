@@ -135,7 +135,8 @@ export function findDurableOnPath(
   // former, the bare name the latter.
   const exts = win ? [...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';'), ''] : ['']
   for (const dir of dirs) {
-    if (!dir || dir.includes('node_modules')) continue
+    // Case-insensitive: Windows paths (and the npx cache) may carry any casing.
+    if (!dir || dir.toLowerCase().includes('node_modules')) continue
     for (const ext of exts) if (isRunnableFile(join(dir, bin + ext), win)) return true
   }
   return false
@@ -196,37 +197,41 @@ export function resolveSpawnable(
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
 ): { cmd: string; args: string[] } {
-  if (cmd !== 'npm' && cmd !== 'npx') {
-    // Other CLIs we shell out to (claude) are ALSO .cmd shims on Windows when npm-installed.
-    // Their implementation layout isn't ours to know, so route them through cmd.exe (the
-    // documented way to run .cmd files). Guards, in order:
-    // - BARE names only: an absolute path or anything .exe (node.exe from a resolved npm/npx
-    //   invocation passing back through here) is directly spawnable and must NOT see cmd.exe.
-    // - The name is resolved to its ABSOLUTE PATH location first: cmd.exe searches the current
-    //   directory before PATH, so a bare name would let a shim planted in the project dir
-    //   shadow the real CLI. No PATH hit → pass through (spawn fails; callers degrade).
-    // - No manual quoting: libuv already wraps spaced args when building the child command
-    //   line — pre-quoting would be quoted AGAIN and arrive as literal quote characters.
-    // - That leaves cmd.exe metacharacters unprotectable, so an arg carrying one (e.g. a
-    //   custom INSTA_MCP_URL with `&`) skips the wrapper: the bare-shim spawn fails and every
-    //   caller degrades gracefully (probe → not-installed; registration → manual-add
-    //   fallback). Never hand metacharacters to a shell.
-    const bareShim = !/[\\/]/.test(cmd) && !/\.exe$/i.test(cmd)
-    if (platform === 'win32' && bareShim && !args.some((a) => /[&|<>^%"]/.test(a))) {
-      const abs = whichOnPath(cmd, env, platform)
-      if (abs) return { cmd: 'cmd.exe', args: ['/d', '/s', '/c', abs, ...args] }
+  // Node re-entry is only valid when THIS process runs on node. On the native-binary channel
+  // execPath is the compiled `insta` executable — and npm scripts export npm_execpath to their
+  // children — so re-entering blindly would spawn `insta npx-cli.js …`. A non-node execPath
+  // sends npm/npx down the generic shim path below instead.
+  const execIsNode = /(^|[\\/])node(\.exe)?$/i.test(execPath)
+  if ((cmd === 'npm' || cmd === 'npx') && execIsNode) {
+    if (npmExecpath && /(^|[\\/])np[mx](-cli)?\.[cm]?js$/.test(npmExecpath)) {
+      const cli = npmExecpath.replace(/np[mx](-cli)?(\.[cm]?js)$/, `${cmd}$1$2`)
+      if (existsSync(cli)) return { cmd: execPath, args: [cli, ...args] }
     }
-    return { cmd, args }
+    const nodeDir = dirname(execPath)
+    const besideNode = platform === 'win32'
+      ? join(nodeDir, 'node_modules', 'npm', 'bin', `${cmd}-cli.js`)
+      : join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', `${cmd}-cli.js`)
+    if (existsSync(besideNode)) return { cmd: execPath, args: [besideNode, ...args] }
   }
-  if (npmExecpath && /(^|[\\/])np[mx](-cli)?\.[cm]?js$/.test(npmExecpath)) {
-    const cli = npmExecpath.replace(/np[mx](-cli)?(\.[cm]?js)$/, `${cmd}$1$2`)
-    if (existsSync(cli)) return { cmd: execPath, args: [cli, ...args] }
+  // Generic shim path — every non-npm CLI we shell out to (claude), plus npm/npx themselves
+  // when node isn't resolvable (native binary channel). On Windows these are .cmd shims, which
+  // spawn() refuses without a shell, so route them through cmd.exe. Guards, in order:
+  // - BARE names only: an absolute path or anything .exe (node.exe from a resolved npm/npx
+  //   invocation passing back through here) is directly spawnable and must NOT see cmd.exe.
+  // - The name is resolved to its ABSOLUTE PATH location first: cmd.exe searches the current
+  //   directory before PATH, so a bare name would let a shim planted in the project dir
+  //   shadow the real CLI. No PATH hit → pass through (spawn fails; callers degrade).
+  // - No manual quoting: libuv already wraps spaced args when building the child command
+  //   line — pre-quoting would be quoted AGAIN and arrive as literal quote characters.
+  // - That leaves cmd.exe metacharacters unprotectable, so an arg carrying one (e.g. a
+  //   custom INSTA_MCP_URL with `&`) skips the wrapper: the bare-shim spawn fails and every
+  //   caller degrades gracefully (probe → not-installed; registration → manual-add
+  //   fallback). Never hand metacharacters to a shell.
+  const bareShim = !/[\\/]/.test(cmd) && !/\.exe$/i.test(cmd)
+  if (platform === 'win32' && bareShim && !args.some((a) => /[&|<>^%"]/.test(a))) {
+    const abs = whichOnPath(cmd, env, platform)
+    if (abs) return { cmd: 'cmd.exe', args: ['/d', '/s', '/c', abs, ...args] }
   }
-  const nodeDir = dirname(execPath)
-  const besideNode = platform === 'win32'
-    ? join(nodeDir, 'node_modules', 'npm', 'bin', `${cmd}-cli.js`)
-    : join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', `${cmd}-cli.js`)
-  if (existsSync(besideNode)) return { cmd: execPath, args: [besideNode, ...args] }
   return { cmd, args }
 }
 
