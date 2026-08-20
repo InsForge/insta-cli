@@ -142,8 +142,41 @@ export function deployEventLine(ev: { ts?: string; origin?: string; type?: strin
   return `${ev.ts ?? ''}  [${ev.origin ?? ''}] ${ev.type ?? ''}: ${ev.status ?? ''}${inst}`
 }
 
+// A log-window instant from the CLI: unix seconds (all digits) or anything Date.parse reads
+// (ISO-8601 etc.). Throws on junk — a mistyped instant must fail here, not become NaN on the wire.
+export function parseLogInstant(raw: string, flag: string): number {
+  if (/^\d+$/.test(raw)) return Number(raw)
+  const ms = Date.parse(raw)
+  if (Number.isNaN(ms)) throw new Error(`invalid ${flag}: ${raw} (unix seconds or an ISO-8601 date)`)
+  return Math.floor(ms / 1000)
+}
+
+// '90s' | '30m' | '2h' | '1d' → seconds. Throws on junk, zero, and unknown units.
+export function parseSinceSeconds(raw: string): number {
+  const m = /^(\d+)([smhd])$/.exec(raw.trim())
+  if (!m) throw new Error(`invalid --since: ${raw} (e.g. 90s, 30m, 2h, 1d)`)
+  const n = Number(m[1])
+  if (n === 0) throw new Error(`invalid --since: ${raw} (must be > 0)`)
+  return n * { s: 1, m: 60, h: 3600, d: 86400 }[m[2] as 's' | 'm' | 'h' | 'd']
+}
+
+// The from/to pair for the logs request, from whichever window flags were given. Pure, unit-tested.
+export function resolveLogWindow(
+  opts: { from?: string; to?: string; since?: string },
+  now: number = Math.floor(Date.now() / 1000),
+): { from?: number; to?: number } {
+  if (opts.since && opts.from) throw new Error('pass --since or --from, not both')
+  const from = opts.since ? now - parseSinceSeconds(opts.since) : opts.from !== undefined ? parseLogInstant(opts.from, '--from') : undefined
+  const to = opts.to !== undefined ? parseLogInstant(opts.to, '--to') : undefined
+  if (from !== undefined && to !== undefined && to < from) throw new Error('--to is before --from')
+  return { from, to }
+}
+
 // insta logs <db|compute|redis|mysql|mongodb> [group]
-export async function logs(component: string, group: string | undefined, opts: { branch?: string; limit?: string; region?: string; instance?: string; json?: boolean; deploy?: boolean }): Promise<void> {
+export async function logs(component: string, group: string | undefined, opts: { branch?: string; limit?: string; region?: string; instance?: string; json?: boolean; deploy?: boolean; from?: string; to?: string; since?: string }): Promise<void> {
+  const windowFlags = opts.from !== undefined || opts.to !== undefined || opts.since !== undefined
+  if (opts.deploy && windowFlags) throw new Error('--from/--to/--since apply to runtime logs, not --deploy events')
+  const { from, to } = resolveLogWindow(opts)
   const api = await ApiClient.load()
   const p = await requireProject()
   if (opts.deploy) {
@@ -156,7 +189,7 @@ export async function logs(component: string, group: string | undefined, opts: {
     for (const ev of res.events) info(deployEventLine(ev))
     return
   }
-  const res = await api.request('GET', `/projects/${p.projectId}/logs${qs({ component, group, branch: opts.branch ?? p.branch, limit: opts.limit, region: opts.region, instance: opts.instance })}`)
+  const res = await api.request('GET', `/projects/${p.projectId}/logs${qs({ component, group, branch: opts.branch ?? p.branch, limit: opts.limit, region: opts.region, instance: opts.instance, from: from !== undefined ? String(from) : undefined, to: to !== undefined ? String(to) : undefined })}`)
   if (opts.json) return printJson(res)
   if (res.note) info(`note: ${res.note}`)
   if (!res.lines?.length) return info('(no logs)')
