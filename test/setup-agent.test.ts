@@ -133,12 +133,30 @@ test('declined prompt and failed login both end with the manual hint, never an e
   expect(process.exitCode).toBe(prev)
 })
 
-test('non-TTY (agents/CI) never prompts for login', async () => {
+test('non-TTY (agents/CI) never prompts for login, even without -y', async () => {
+  // yes:false so this exercises the TTY gate itself, not the -y gate (covered above).
   let asked = 0
-  await setupAgent({ yes: true }, async () => ({ ok: true, output: '' }), undefined, async () => [], async () => {},
+  await setupAgent({ yes: false }, async () => ({ ok: true, output: '' }), undefined, async () => [], async () => {},
     storedProd, noSwitch,
     { ask: async () => { asked++; return true }, login: async () => { asked++ }, stdinTty: false, stdoutTty: false })
   expect(asked).toBe(0)
+})
+
+test('--mcp-token + interactive login registers MCP with the token AFTER the session exists', async () => {
+  const events: string[] = []
+  await setupAgent(
+    { yes: false, mcpToken: true },
+    async (cmd, args) => { events.push(`${cmd}:${args[0]}`); return { ok: !(args[0] === 'mcp' && args[1] === 'get'), output: '' } },
+    async () => { events.push('mint'); return 'insta_tok' },
+    async () => [], async () => {},
+    async () => ({ apiUrl: ENVS.prod.api }), noSwitch,
+    { ask: async () => true, login: async () => { events.push('login') }, stdinTty: true, stdoutTty: true },
+  )
+  const loginAt = events.indexOf('login')
+  expect(loginAt).toBeGreaterThan(-1)
+  // A token mint + `mcp add` happen after login — the pre-login registration ran logged-out.
+  expect(events.slice(loginAt)).toContain('mint')
+  expect(events.slice(loginAt).some((e) => e === 'claude:mcp')).toBe(true)
 })
 
 test('setupAgent surfaces a disagreeing $INSTA_ENV the same way (INSTA_ENV=staging + --env prod)', async () => {

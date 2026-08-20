@@ -385,7 +385,12 @@ export function shouldOfferLogin(yes: boolean, loggedIn: boolean, stdinTty: bool
 // genuinely human step (authorizing in the browser) starts itself instead of being homework.
 const defaultAsk = async (question: string): Promise<boolean> => {
   const rl = createInterface({ input: process.stdin, output: process.stdout })
-  const answer: string = await new Promise((resolve) => rl.question(question, resolve))
+  // EOF (Ctrl-D) closes the interface without ever answering the question — resolve that as a
+  // decline instead of hanging forever after the checkmarks.
+  const answer: string = await new Promise((resolve) => {
+    rl.on('close', () => resolve('n'))
+    rl.question(question, resolve)
+  })
   rl.close()
   return !/^n/i.test(answer.trim())
 }
@@ -464,6 +469,9 @@ export async function setupAgent(
     if (await loginFlow.ask('log in now with GitHub? (Y/n) ')) {
       try {
         await loginFlow.login()
+        // --mcp-token needs a session to mint: the registration above ran logged-out and skipped
+        // itself with the login hint — now that the session exists, do the token registration.
+        if (opts.mcpToken) await registerMcp(run, mint, true)
         return info(nextCreate)
       } catch (e) {
         info(`  login did not complete (${e instanceof Error ? e.message : String(e)}) — no problem, setup itself is done.`)
