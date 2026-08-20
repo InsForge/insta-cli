@@ -475,6 +475,7 @@ export async function setupAgent(
         return info(nextCreate)
       } catch (e) {
         info(`  login did not complete (${e instanceof Error ? e.message : String(e)}) — no problem, setup itself is done.`)
+        info('  on a remote/SSH machine the browser flow cannot call back here — use `insta login --device` instead.')
       }
     }
   }
