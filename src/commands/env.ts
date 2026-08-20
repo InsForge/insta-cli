@@ -20,7 +20,7 @@ export async function envShow(opts: { json?: boolean }): Promise<void> {
   if (!env) info('  (custom apiUrl — `insta env use <name>` to switch to a named environment)')
 }
 
-export async function envUse(name: string): Promise<void> {
+export async function envUse(name: string, opts: { json?: boolean } = {}): Promise<void> {
   const want = name.trim().toLowerCase()
   if (!isEnvName(want)) die(`unknown environment "${name}" — expected one of: ${ENV_NAMES.join(', ')}`)
   const target: EnvName = want
@@ -34,6 +34,7 @@ export async function envUse(name: string): Promise<void> {
   // how envForApiUrl already treats it) instead of being rewritten as a "switch" that needlessly
   // drops a perfectly good session.
   if (normalizeUrl(stored.apiUrl) === normalizeUrl(nextApi)) {
+    if (opts.json) return printJson({ env: target, apiUrl: nextApi, changed: false, sessionDropped: false })
     info(`already on ${target} (${nextApi})`)
     return
   }
@@ -52,6 +53,17 @@ export async function envUse(name: string): Promise<void> {
   delete next.user
   await writeGlobal(next)
 
+  if (opts.json) {
+    return printJson({
+      env: target,
+      previous: from ?? null,
+      apiUrl: nextApi,
+      mcpUrl: ENVS[target].mcp,
+      mcpServer: mcpServerName(target),
+      changed: true,
+      sessionDropped: hadSession,
+    })
+  }
   info(`switched ${from ?? '(custom)'} → ${target}`)
   info(`  api: ${nextApi}`)
   info(`  mcp: ${ENVS[target].mcp} (registers as \`${mcpServerName(target)}\`)`)

@@ -13,16 +13,21 @@ export type BuildRunner = (
 ) => Promise<{ code: number; output: string }>
 
 // Spawn flyctl, tee its output to the user (so they see buildkit progress) AND capture it for digest
-// parsing.
-export const defaultBuildRunner: BuildRunner = (cmd, args, opts) =>
-  new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd: opts.cwd, env: opts.env, stdio: ['inherit', 'pipe', 'pipe'] })
-    let output = ''
-    child.stdout?.on('data', (b) => { const s = b.toString(); output += s; process.stdout.write(s) })
-    child.stderr?.on('data', (b) => { const s = b.toString(); output += s; process.stderr.write(s) })
-    child.on('error', (err) => resolve({ code: -1, output: `${output}\n${err.message}` }))
-    child.on('close', (code) => resolve({ code: code ?? -1, output }))
-  })
+// parsing. `to` picks the tee destination for the child's stdout: `deploy --json` reserves the
+// process's stdout for the final JSON document, so it tees build progress to stderr instead.
+function teeRunner(to: NodeJS.WriteStream): BuildRunner {
+  return (cmd, args, opts) =>
+    new Promise((resolve) => {
+      const child = spawn(cmd, args, { cwd: opts.cwd, env: opts.env, stdio: ['inherit', 'pipe', 'pipe'] })
+      let output = ''
+      child.stdout?.on('data', (b) => { const s = b.toString(); output += s; to.write(s) })
+      child.stderr?.on('data', (b) => { const s = b.toString(); output += s; process.stderr.write(s) })
+      child.on('error', (err) => resolve({ code: -1, output: `${output}\n${err.message}` }))
+      child.on('close', (code) => resolve({ code: code ?? -1, output }))
+    })
+}
+export const defaultBuildRunner: BuildRunner = teeRunner(process.stdout)
+export const stderrBuildRunner: BuildRunner = teeRunner(process.stderr)
 
 // buildkit prints "pushing manifest for registry.fly.io/<app>:<label>@sha256:<digest>" on push.
 // Pin to the digest — the bare tag races on Fly's registry (MANIFEST_UNKNOWN); the digest always resolves.
