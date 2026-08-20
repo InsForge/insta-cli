@@ -4,7 +4,7 @@
 // as the process does.
 import { spawn } from 'node:child_process'
 import { ApiClient, requireProject } from '../api.js'
-import { die, info } from '../util.js'
+import { die, info, handleApproval } from '../util.js'
 
 export type RunDeps = {
   fetchBundle: () => Promise<Record<string, string>>
@@ -35,9 +35,8 @@ export async function run(cmdAndArgs: string[], opts: { branch?: string }): Prom
   const code = await runWithSecrets(cmd!, rest, {
     fetchBundle: async () => {
       const res = await api.rawRequest('GET', `/projects/${p.projectId}/secrets?branch=${encodeURIComponent(branch)}`)
-      if (res.status === 202) {
-        die(`secrets.read requires approval — run: insta approvals approve ${res.body.approvalId}, then re-run`)
-      }
+      // exit() with no argument honors the exit code handleApproval just set (2).
+      if (handleApproval(res)) process.exit()
       info(`running with ${Object.keys(res.body.secrets).length} injected secrets (branch ${branch}) — nothing written to disk`)
       return res.body.secrets as Record<string, string>
     },

@@ -114,7 +114,7 @@ export async function servicesAdd(type: string, name: string, opts: ServicesAddO
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/services`, servicesAddRequestBody(type, name, branch, opts))
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson(res.body.service)
   const svc = res.body.service
   const access = svc.type === 'storage' ? `  [${svc.public ? 'public' : 'private'}]` : ''
@@ -165,7 +165,7 @@ export async function servicesRename(type: string, name: string, newName: string
   const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
   const id = resolveServiceId(services, type, name)
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/rename`, { name: newName })
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson(res.body.service)
   info(`renamed ${type} service ${name} to ${newName}`)
 }
@@ -186,7 +186,7 @@ export async function servicesSetAccess(type: string, name: string, access: stri
   const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(p.branch)}`)
   const id = resolveServiceId(services, type, name)
   const res = await api.rawRequest('PUT', `/projects/${p.projectId}/services/${id}/access`, { public: isPublic })
-  if (handleApproval(res)) return
+  if (handleApproval(res, _opts.json)) return
   if (_opts.json) return printJson(res.body.service)
   info(`set storage ${name} access to ${access}`)
 }
@@ -200,7 +200,7 @@ export async function servicesScale(type: string, name: string, number: string, 
   const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(_opts.branch ?? p.branch)}`)
   const id = resolveServiceId(services, type, name)
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/scale`, { machineCount, region })
-  if (handleApproval(res)) return
+  if (handleApproval(res, _opts.json)) return
   if (_opts.json) return printJson(res.body.service)
   info(`scaled compute ${name} to ${machineCount} machine(s)${region ? ` in ${region}` : ''}`)
 }
@@ -213,7 +213,7 @@ export async function servicesUpgrade(type: string, name: string, spec: string, 
   const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(_opts.branch ?? p.branch)}`)
   const id = resolveServiceId(services, type, name)
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/upgrade`, { spec })
-  if (handleApproval(res)) return
+  if (handleApproval(res, _opts.json)) return
   if (_opts.json) return printJson(res.body.service)
   info(`upgraded ${type} ${name} to ${spec}`)
 }
@@ -226,7 +226,7 @@ export async function servicesSecrets(type: string, name: string, opts: { branch
   const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(opts.branch ?? p.branch)}`)
   const id = resolveServiceId(services, type, name)
   const res = await api.rawRequest('GET', `/projects/${p.projectId}/services/${id}/secrets`)
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   const { secrets } = res.body
   if (opts.json) return printJson(secrets)
   if (!secrets.length) return info(`(no secrets bound to ${type}/${name})`)

@@ -10,7 +10,7 @@ export async function setDomain(host: string, opts: Opts): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/compute/domain`, { hostname: host, branch: opts.branch ?? p.branch, group: opts.group })
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   printDomain(res.body, opts.json)
 }
 
@@ -28,7 +28,7 @@ export async function removeDomain(host: string, opts: Opts): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
   const res = await api.rawRequest('DELETE', `/projects/${p.projectId}/compute/domain`, { hostname: host, branch: opts.branch ?? p.branch, group: opts.group })
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   info(`removed custom domain ${res.body.hostname} from ${res.body.flyApp}`)
 }
 
@@ -54,7 +54,7 @@ async function lifecycle(verb: 'start' | 'stop' | 'suspend', serviceName: string
   const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
   const id = resolveComputeServiceId(services, serviceName)
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/${verb}`)
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson(res.body)
   info(`compute ${res.body.service?.name ?? id}: ${verb} → desired=${res.body.service?.desired_state} (live: ${res.body.state})`)
 }
@@ -114,17 +114,12 @@ type ExecOpts = LifeOpts & { timeout?: string }
 // of (res, json) so it's unit-testable without a network mock, same as handleApproval's own
 // {status, body} shape.
 //
-// A 202 means the command has NOT run: unlike every other gated command (where "nothing happened"
-// is the safe default), a caller chaining `insta compute exec … && next` must not see exit 0 here,
-// or `next` runs believing the command succeeded. --json prints the raw envelope (so a scripted
-// caller can inspect approvalId/action) instead of the human hint; either way exit 1.
+// A 202 means the command has NOT run: handleApproval owns the whole contract (hint on stderr,
+// raw envelope on stdout with --json, exit 2), so a caller chaining `insta compute exec … && next`
+// can never mistake a pending gate for the command having succeeded — and exit 2 stays
+// distinguishable from the remote command's own exit 1.
 export function applyExecResult(res: { status: number; body: any }, json?: boolean): void {
-  if (res.status === 202 && res.body?.status === 'approval_required') {
-    if (json) printJson(res.body)
-    else handleApproval(res)
-    process.exitCode = 1
-    return
-  }
+  if (handleApproval(res, json)) return
   const { exitCode, stdout, stderr, truncated } = res.body
   if (json) {
     printJson(res.body)
@@ -173,7 +168,7 @@ export async function computeAlwaysOn(mode: string, serviceName: string | undefi
   const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
   const id = resolveComputeServiceId(services, serviceName)
   const res = await api.rawRequest('PUT', `/projects/${p.projectId}/services/${id}/always-on`, { enabled: mode === 'on' })
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson(res.body)
   const on = res.body.service?.always_on
   info(`compute ${res.body.service?.name ?? id}: always-on ${on ? 'ENABLED — machines stay warm (no cold starts; idle RAM bills at actual usage)' : 'disabled — scales to zero when idle (default)'}`)
@@ -276,7 +271,7 @@ export async function computeVolume(serviceName: string | undefined, opts: Volum
     let res
     try { res = await api.rawRequest('DELETE', `/projects/${p.projectId}/services/${id}/volume`) }
     catch (e) { throw volumeDeleteError(e) }
-    if (handleApproval(res)) return
+    if (handleApproval(res, opts.json)) return
     if (opts.json) return printJson(res.body)
     info(volumeDeleteLine(res.body.service?.name ?? serviceName ?? id))
     return
@@ -291,7 +286,7 @@ export async function computeVolume(serviceName: string | undefined, opts: Volum
 
   const sizeGib = parseVolumeGib(opts.size)
   const res = await api.rawRequest('PUT', `/projects/${p.projectId}/services/${id}/volume`, { sizeGib })
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson(res.body)
   info(volumeWriteLine(res.body.service?.name ?? serviceName ?? id, res.body))
 }
@@ -320,7 +315,7 @@ export async function computeLimits(serviceName: string | undefined, opts: Limit
   const body: Record<string, unknown> = { memoryMb: parseMemoryMb(opts.memory) }
   if (opts.cpu) body.cpu = parseCpu(opts.cpu)
   const res = await api.rawRequest('PUT', `/projects/${p.projectId}/services/${id}/limits`, body)
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson(res.body)
   const l = res.body.limits
   info(`compute ${res.body.service?.name ?? id}: ceiling set to ${l.cpu} vCPU / ${fmtMb(l.memoryMb)}`)
