@@ -4,6 +4,7 @@
 // submits it and renders progress by polling the deployment resource.
 import { join, resolve } from 'node:path'
 import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import * as clack from '@clack/prompts'
 import { ApiClient, ApiError, requireProject } from '../api.js'
 import type { ProjectConfig } from '../config.js'
@@ -170,6 +171,13 @@ export function looksLikePath(target: string): boolean {
 
 export type DeployMode = { kind: 'local'; dir: string } | { kind: 'registry'; code: string }
 
+// Expanding `~` is normally the shell's job, but it only does it unquoted — `deploy "~/tpl"`, or a
+// target assembled by an agent, arrives literally, and path.resolve() would then look for a
+// directory actually named "~". looksLikePath advertises `~` as a local path, so honour it here.
+// `~user` is left alone: resolving another user's home needs a passwd lookup, which no shell-less
+// tool should fake.
+const expandHome = (target: string): string => target.replace(/^~(?=[/\\]|$)/, () => homedir())
+
 /**
  * Which deploy mode a target selects. Local mode is OPTED INTO by a path-looking target (./dir,
  * /abs, sub/dir); a bare word is ALWAYS a registry code — even when a same-named directory with a
@@ -178,7 +186,7 @@ export type DeployMode = { kind: 'local'; dir: string } | { kind: 'registry'; co
  */
 export function deployMode(target: string, hasManifest: (dir: string) => boolean = (d) => existsSync(join(d, MANIFEST_FILE))): DeployMode {
   if (!looksLikePath(target)) return { kind: 'registry', code: target }
-  const dir = resolve(process.cwd(), target)
+  const dir = resolve(process.cwd(), expandHome(target))
   if (!hasManifest(dir)) throw new Error(`no ${MANIFEST_FILE} at ${join(dir, MANIFEST_FILE)}`)
   return { kind: 'local', dir }
 }

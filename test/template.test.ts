@@ -39,7 +39,7 @@ describe('imageTagIssue', () => {
   it('accepts version tags and digest pins', () => {
     expect(imageTagIssue('nginx:1.27')).toBeNull()
     expect(imageTagIssue('ghcr.io/a/b:v2')).toBeNull()
-    expect(imageTagIssue('nginx@sha256:abc')).toBeNull()
+    expect(imageTagIssue(`nginx@sha256:${'a'.repeat(64)}`)).toBeNull()
   })
   it('rejects tagless and :latest images', () => {
     expect(imageTagIssue('nginx')).toMatch(/no tag/)
@@ -49,6 +49,23 @@ describe('imageTagIssue', () => {
   it('is not fooled by a registry port', () => {
     expect(imageTagIssue('registry.local:5000/app')).toMatch(/no tag/)
     expect(imageTagIssue('registry.local:5000/app:1.0')).toBeNull()
+  })
+  // Digest-pinned means what the PLATFORM says it means: registry.ts's
+  // DIGEST = /^sha256:[a-f0-9]{64}$/ applied to whatever follows the last `@` (parseImageRef).
+  const HEX64 = 'a'.repeat(64)
+  it('accepts only a real sha256 digest as a digest pin', () => {
+    expect(imageTagIssue(`nginx@sha256:${HEX64}`)).toBeNull()
+    expect(imageTagIssue(`ghcr.io/a/b@sha256:${HEX64}`)).toBeNull()
+  })
+  it('rejects an @ reference that is not a digest, instead of reading it as a pin', () => {
+    expect(imageTagIssue('nginx@weird')).toMatch(/not a sha256 digest/)
+    expect(imageTagIssue('nginx@sha256:abc')).toMatch(/not a sha256 digest/) // too short
+    expect(imageTagIssue(`nginx@sha256:${'A'.repeat(64)}`)).toMatch(/not a sha256 digest/) // hex is lower-case
+    expect(imageTagIssue('nginx@')).toMatch(/not a sha256 digest/)
+  })
+  // `@` wins over `:` in the platform's grammar, so a malformed digest is never salvaged as a tag.
+  it('does not let a malformed digest pass as a tag', () => {
+    expect(imageTagIssue('nginx@sha256:xyz')).not.toBeNull()
   })
 })
 
@@ -123,6 +140,19 @@ describe('validateManifest', () => {
       services: { a: { type: 'worker', image: 'a:1', env: { optional: { PLAIN: {}, GEN: { generate: 'secret:16' } } } } },
     }
     expect(validateManifest(m)).toEqual([])
+  })
+  // A YAML document holds whatever the author typed. The platform runs these scalars through
+  // scalarString (templateManifest.ts): numbers/booleans coerce, anything else is a field error —
+  // so a mistyped image must be REPORTED, never crash the pin lint with "includes is not a function".
+  it('reports a non-string image/build instead of crashing', () => {
+    const m: TemplateManifest = { code: 'x', version: '1', services: { a: { type: 'worker', image: {} as any } } }
+    expect(validateManifest(m)).toEqual(['services.a.image must be a string'])
+    const b: TemplateManifest = { code: 'x', version: '1', services: { a: { type: 'worker', build: [] as any } } }
+    expect(validateManifest(b)).toEqual(['services.a.build must be a string'])
+  })
+  it('coerces a numeric image the way the platform does, then applies the pin lint', () => {
+    const m: TemplateManifest = { code: 'x', version: '1', services: { a: { type: 'worker', image: 123 as any } } }
+    expect(validateManifest(m)).toEqual(['services.a: image 123 has no tag — pin a version (or a @sha256 digest)'])
   })
   it('rejects out-of-range ports and fractional volumes', () => {
     const m: TemplateManifest = { code: 'x', version: '1', services: { a: { type: 'worker', image: 'a:1', port: 70000, volume: { size: 1.5 } } } }
@@ -316,6 +346,33 @@ describe('deployMode', () => {
     const root = manifestDir('tpl')
     expect(deployMode(join(root, 'tpl'))).toEqual({ kind: 'local', dir: join(root, 'tpl') })
     expect(() => deployMode(join(root, 'absent'))).toThrow(/no insta\.template\.yaml at/)
+  })
+
+  // looksLikePath advertises `~` as a local path, so it has to actually resolve: path.resolve()
+  // never expands it, and a quoted target never reaches the shell that would.
+  describe('~ expansion', () => {
+    const origHome = process.env.HOME
+    afterEach(() => { if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome })
+
+    it('expands a leading ~/ to the home directory', () => {
+      const root = manifestDir('tpl')
+      process.env.HOME = root
+      expect(deployMode('~/tpl')).toEqual({ kind: 'local', dir: join(root, 'tpl') })
+    })
+    it('expands a bare ~ to the home directory itself', () => {
+      const root = manifestDir('tpl')
+      process.env.HOME = join(root, 'tpl')
+      expect(deployMode('~')).toEqual({ kind: 'local', dir: join(root, 'tpl') })
+    })
+    it('still reads a bare word as a registry code, ~ or no ~', () => {
+      const root = manifestDir('tpl')
+      process.env.HOME = root
+      expect(deployMode('tpl')).toEqual({ kind: 'registry', code: 'tpl' })
+    })
+    // ~user needs a passwd lookup; leaving it literal beats guessing another user's home.
+    it('leaves ~user alone', () => {
+      expect(() => deployMode('~someone/tpl')).toThrow(/no insta\.template\.yaml at/)
+    })
   })
 })
 

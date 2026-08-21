@@ -59,15 +59,36 @@ const CODE_RE = /^[a-z0-9][a-z0-9-]{0,38}$/
 export const ENV_NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/
 const GENERATOR_RE = /^secret:([1-9]\d{0,2})$/
 
+// What counts as a digest is the PLATFORM's call, not ours: registry.ts's DIGEST regex, verbatim.
+const DIGEST = /^sha256:[a-f0-9]{64}$/
+
 // Why an image must carry a pin: a template is a reproducible deploy, and a tagless ref (implicit
 // :latest) or an explicit :latest re-resolves on every deploy — two runs of the same template
 // version would ship different bytes. Digest-pinned refs (…@sha256:…) are the strongest pin.
+//
+// The reference grammar mirrors the platform's parseImageRef (src/provisioning/registry.ts, THE
+// authority): everything after the LAST `@` is the reference, and `@` wins over `:` — so a `@`
+// reference is a pin only when it is a real digest, and a malformed one is never re-read as a tag.
 export function imageTagIssue(image: string): string | null {
-  if (image.includes('@')) return null // digest-pinned
+  const at = image.lastIndexOf('@')
+  if (at !== -1) {
+    if (DIGEST.test(image.slice(at + 1))) return null // digest-pinned, the strongest pin
+    return `image ${image} carries an @ reference that is not a sha256 digest — use @sha256:<64 hex> (or a version tag)`
+  }
   const lastSegment = image.split('/').pop() ?? ''
   const tag = lastSegment.includes(':') ? lastSegment.split(':').pop() : undefined
   if (!tag) return `image ${image} has no tag — pin a version (or a @sha256 digest)`
   if (tag === 'latest') return `image ${image} is pinned to :latest, which is not a pin — use a version tag (or a @sha256 digest)`
+  return null
+}
+
+// The platform runs every scalar manifest field through scalarString
+// (src/provisioning/templateManifest.ts): a string passes, a number/boolean coerces, anything else
+// is a manifest error naming the field. Same verdict here, so a YAML typo is reported rather than
+// crashing a lint that assumed a string.
+function scalarString(v: unknown): string | null {
+  if (typeof v === 'string') return v
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v)
   return null
 }
 
@@ -99,8 +120,13 @@ export function validateManifest(m: TemplateManifest): string[] {
     if (svc.type !== 'web' && svc.type !== 'worker') problems.push(`${where}.type must be web or worker`)
     if (svc.image && svc.build) problems.push(`${where}: image and build are mutually exclusive`)
     if (!svc.image && !svc.build) problems.push(`${where}: one of image or build is required`)
-    if (svc.image) {
-      const issue = imageTagIssue(svc.image)
+    // A parsed YAML document holds whatever the author typed, so both scalars are type-checked the
+    // platform's way BEFORE any rule reads them as strings.
+    const image = svc.image !== undefined ? scalarString(svc.image) : undefined
+    if (svc.image !== undefined && image === null) problems.push(`${where}.image must be a string`)
+    if (svc.build !== undefined && scalarString(svc.build) === null) problems.push(`${where}.build must be a string`)
+    if (image) {
+      const issue = imageTagIssue(image)
       if (issue) problems.push(`${where}: ${issue}`)
     }
     if (svc.port !== undefined && (!Number.isInteger(svc.port) || svc.port < 1 || svc.port > 65535)) {
