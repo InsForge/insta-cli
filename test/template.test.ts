@@ -321,20 +321,25 @@ describe('deployMode', () => {
 
 // The deploy path itself: api + linked project are injected (the deps pattern), so these cover the
 // side-effectful command — which mode a target selects, and what lands on stdout.
-function fakeApi(deployment: any = { status: 'succeeded', services: [{ name: 'app', state: 'healthy', url: 'https://app.example' }] }) {
+function fakeApi(
+  deployment: any = { status: 'succeeded', services: [{ name: 'app', state: 'healthy', url: 'https://app.example' }] },
+  postResult: { status: number; body: any } = { status: 200, body: { deploymentId: 'dep_1' } },
+  templateVars: unknown = { required: [], optional: [] },
+) {
   const posts: any[] = []
+  const polls: string[] = []
   const api = {
     request: async (_m: string, path: string) => {
-      if (path.startsWith('/templates/')) return { template: { code: 'plausible', variables: { required: [], optional: [] } } }
-      if (path.startsWith('/template-deployments/')) return deployment
+      if (path.startsWith('/templates/')) return { template: { code: 'plausible', variables: templateVars } }
+      if (path.startsWith('/template-deployments/')) { polls.push(path); return deployment }
       throw new Error(`unexpected GET ${path}`)
     },
     rawRequest: async (_m: string, _path: string, body?: unknown) => {
       posts.push(body)
-      return { status: 200, body: { deploymentId: 'dep_1' } }
+      return postResult
     },
   }
-  return { api, posts }
+  return { api, posts, polls }
 }
 
 const PROJECT = { projectId: 'proj_1', orgId: 'org_1', branch: 'main' }
@@ -342,9 +347,11 @@ const NO_WAIT = async () => {}
 
 describe('templateDeploy', () => {
   const stdout: string[] = []
+  const stderr: string[] = []
   const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation((c: any) => { stdout.push(String(c)); return true })
-  afterEach(() => { stdout.length = 0 })
-  afterAll(() => { outSpy.mockRestore() })
+  const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation((c: any) => { stderr.push(String(c)); return true })
+  afterEach(() => { stdout.length = 0; stderr.length = 0; process.exitCode = undefined })
+  afterAll(() => { outSpy.mockRestore(); errSpy.mockRestore() })
 
   it('sends a bare target as a registry code, not the same-named local manifest', async () => {
     const root = manifestDir('plausible')
@@ -387,6 +394,39 @@ describe('templateDeploy', () => {
     const { api } = fakeApi(dep)
     await templateDeploy('plausible', { json: true }, { api, project: PROJECT, wait: NO_WAIT })
     expect(JSON.parse(stdout.join(''))).toEqual(dep)
+  })
+
+  // A gated deploy is the other way out of this command, and it must honour the same contract:
+  // handleApproval's envelope on stdout, hint on stderr, exit 2 (as util.test.ts pins it).
+  const GATED = { status: 202, body: { status: 'approval_required', action: 'template.deploy', approvalId: 'appr_1' } }
+
+  it('--json on an approval-gated deploy prints just the raw 202 envelope (exit 2)', async () => {
+    const { api, polls } = fakeApi(undefined, GATED)
+    await templateDeploy('plausible', { json: true }, { api, project: PROJECT, wait: NO_WAIT })
+    expect(JSON.parse(stdout.join(''))).toEqual(GATED.body)
+    expect(stdout.join('')).not.toMatch(/approval required for/)
+    expect(stderr.join('')).toMatch(/approval required for template\.deploy — run: insta approvals approve appr_1/)
+    expect(process.exitCode).toBe(2)
+    expect(polls).toEqual([]) // nothing was deployed, so nothing is polled
+  })
+
+  it('an approval-gated deploy keeps stdout empty without --json', async () => {
+    const { api } = fakeApi(undefined, GATED)
+    await templateDeploy('plausible', {}, { api, project: PROJECT, wait: NO_WAIT })
+    expect(stdout.join('')).toBe('')
+    expect(stderr.join('')).toMatch(/approval required for template\.deploy/)
+    expect(process.exitCode).toBe(2)
+  })
+
+  // --json also turns prompting off, so a missing required variable must fail on stderr (guard() →
+  // die(), the repo's error channel) rather than blocking on a prompt or dirtying stdout.
+  it('--json never prompts: a missing required variable fails with the --set list, stdout clean', async () => {
+    const { api, posts } = fakeApi(undefined, GATED, { required: [{ name: 'BASE_URL', description: 'public URL' }], optional: [] })
+    await expect(
+      templateDeploy('plausible', { json: true }, { api, project: PROJECT, wait: NO_WAIT, ask: async () => 'prompted!' }),
+    ).rejects.toThrow(/missing required template variables:[\s\S]*BASE_URL\s+public URL[\s\S]*--set NAME=value/)
+    expect(stdout.join('')).toBe('')
+    expect(posts).toEqual([])
   })
 })
 

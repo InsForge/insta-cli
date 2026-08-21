@@ -366,7 +366,9 @@ export async function templateDeploy(target: string, opts: TemplateDeployOpts = 
     Object.assign(variables, await resolveVariables(missing, {}, { tty, ask }))
     res = await api.rawRequest('POST', `/projects/${p.projectId}/template-deployments`, { ...body, variables })
   }
-  if (handleApproval(res)) return
+  // handleApproval owns the whole 202 contract (hint on stderr, raw envelope on stdout under
+  // --json, exit code 2) — pass the flag through as every other gated command does.
+  if (handleApproval(res, opts.json)) return
 
   const deploymentId = res.body.deploymentId ?? (res.body.deployment ?? res.body).id
   const codeLabel = manifest?.code ?? target
