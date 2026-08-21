@@ -1,10 +1,14 @@
 import { resolve, join } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { ApiClient, ApiError, requireProject } from '../api.js'
-import { info, die, handleApproval, renderNextActions } from '../util.js'
-import { flyctlBuildAndPush, ensureFlyctl, defaultBuildRunner, type BuildRunner } from '../flyctl-build.js'
+import { info, die, printJson, handleApproval, renderNextActions } from '../util.js'
+import { flyctlBuildAndPush, ensureFlyctl, defaultBuildRunner, stderrBuildRunner, type BuildRunner } from '../flyctl-build.js'
 
-type DeployOpts = { image?: string; branch?: string; group?: string; port?: string; websocket?: boolean }
+type DeployOpts = { image?: string; branch?: string; group?: string; port?: string; websocket?: boolean; json?: boolean }
+
+// With --json, stdout must carry exactly one JSON document (the deploy result), so every progress
+// line moves to stderr.
+const note = (opts: DeployOpts) => (opts.json ? (m: string) => void process.stderr.write(m + '\n') : info)
 
 // Map CLI options to the platform deploy request body. Pure, so it's unit-tested. --websocket is only
 // sent when set (plain deploys unchanged).
@@ -39,6 +43,7 @@ export async function deploy(dir: string | undefined, opts: DeployOpts): Promise
   const api = await ApiClient.load()
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
+  const log = note(opts)
 
   let port = opts.port ? Number(opts.port) : undefined
   if (dir && port === undefined) {
@@ -46,14 +51,15 @@ export async function deploy(dir: string | undefined, opts: DeployOpts): Promise
     const exposed = existsSync(dockerfile) ? dockerfileExposedPort(readFileSync(dockerfile, 'utf8')) : undefined
     if (exposed) {
       port = exposed
-      info(`using port ${exposed} (Dockerfile EXPOSE) — override with --port`)
+      log(`using port ${exposed} (Dockerfile EXPOSE) — override with --port`)
     }
   }
 
   const effOpts = { ...opts, port: port?.toString() }
   const image = dir ? await buildFromSource(api, p.projectId, dir, branch, effOpts) : opts.image!
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/deploy`, deployRequestBody(image, branch, effOpts))
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
+  if (opts.json) return printJson({ image, ...res.body })
   info(`deployed ${image} -> ${res.body.url} (branch ${res.body.branch}, group ${res.body.group})`)
   renderNextActions(res.body.nextActions)
 }
@@ -83,10 +89,11 @@ export async function buildFromSource(
   dir: string,
   branch: string,
   opts: DeployOpts,
-  run: BuildRunner = defaultBuildRunner,
+  run: BuildRunner = opts.json ? stderrBuildRunner : defaultBuildRunner,
 ): Promise<string> {
   const absDir = resolve(process.cwd(), dir)
   if (!existsSync(join(absDir, 'Dockerfile'))) die(`no Dockerfile at ${join(absDir, 'Dockerfile')} — add one, or use --image <url>`)
+  const log = note(opts)
 
   let tok
   try {
@@ -96,18 +103,19 @@ export async function buildFromSource(
     // daemon deploys from the SAME docker this shell uses, so build locally and hand it the tag.
     if (!(e instanceof ApiError) || e.status !== 501) throw e
     const tag = localImageTag(projectId, opts.group)
-    info(`no remote builder on this daemon — building ${dir} locally with docker…`)
+    log(`no remote builder on this daemon — building ${dir} locally with docker…`)
     const built = await dockerBuildLocal(absDir, tag, run)
-    info(`  built ${built}`)
+    log(`  built ${built}`)
     return built
   }
-  if (handleApproval(tok)) die('deploy requires approval — get it approved, then re-run')
+  // exit() with no argument honors the exit code handleApproval just set (2).
+  if (handleApproval(tok, opts.json)) process.exit()
   const { token, flyApp } = tok.body
 
   await ensureFlyctl() // cloud path only — the local path needs docker, which the daemon requires anyway
   const port = opts.port ? Number(opts.port) : 8080
-  info(`building ${dir} for ${flyApp} (remote builder)…`)
+  log(`building ${dir} for ${flyApp} (remote builder)…`)
   const { imageRef } = await flyctlBuildAndPush({ dir: absDir, flyApp, imageLabel: `insta-${Date.now()}`, token, port }, run)
-  info(`  pushed ${imageRef}`)
+  log(`  pushed ${imageRef}`)
   return imageRef
 }

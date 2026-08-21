@@ -14,7 +14,7 @@ export async function secrets(opts: { branch?: string; output?: string; print?: 
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
   const res = await api.rawRequest('GET', `/projects/${p.projectId}/secrets${q(branch)}`)
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   const bundle: Record<string, string> = res.body.secrets
   if (opts.json) return printJson(bundle)
   if (opts.print) { process.stdout.write(serializeEnv(bundle)); return }
@@ -43,7 +43,7 @@ export async function secretsTree(opts: { json?: boolean }): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
   const res = await api.rawRequest('GET', `/projects/${p.projectId}/secrets/tree`)
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   const tree: Tree = res.body
   if (opts.json) return printJson(tree)
   if (tree.projectWide.length) { info('(project-wide)'); for (const n of tree.projectWide) info(`  ${n}`) }
@@ -56,7 +56,7 @@ export async function secretsList(opts: { branch?: string; json?: boolean }): Pr
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
   const res = await api.rawRequest('GET', `/projects/${p.projectId}/secrets/tree`)
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   const tree: Tree = res.body
   const b = tree.branches.find((x) => x.name === branch)
   if (opts.json) return printJson({ projectWide: tree.projectWide, branch: b })
@@ -73,7 +73,7 @@ async function readStdin(): Promise<string> {
 // Set a user secret. Project-wide by default; --branch scopes it to one branch. --service binds
 // it to a branch service instead, which implies the current branch (binding requires one). Value
 // comes from the argument, or stdin when omitted (keeps secret values out of shell history).
-export async function secretsSet(name: string, value: string | undefined, opts: { branch?: string; service?: string }): Promise<void> {
+export async function secretsSet(name: string, value: string | undefined, opts: { branch?: string; service?: string; json?: boolean }): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
   const v = value ?? (await readStdin())
@@ -81,16 +81,18 @@ export async function secretsSet(name: string, value: string | undefined, opts: 
   const branch = opts.service ? (opts.branch ?? p.branch) : opts.branch
   const payload: Record<string, string> = { value: v, ...(branch ? { branch } : {}), ...(opts.service ? { service: opts.service } : {}) }
   const res = await api.rawRequest('PUT', `/projects/${p.projectId}/secrets/${encodeURIComponent(name)}`, payload)
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
+  if (opts.json) return printJson({ ok: true, name, branch: branch ?? null, service: opts.service ?? null })
   info(`set ${name}${opts.service ? ` → ${opts.service}` : ''} (${branch ? `branch ${branch}` : 'project-wide'})`)
 }
 
-export async function secretsUnset(name: string, opts: { branch?: string }): Promise<void> {
+export async function secretsUnset(name: string, opts: { branch?: string; json?: boolean }): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
   const qs = opts.branch ? `?branch=${encodeURIComponent(opts.branch)}` : ''
   const res = await api.rawRequest('DELETE', `/projects/${p.projectId}/secrets/${encodeURIComponent(name)}${qs}`)
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
+  if (opts.json) return printJson({ ok: true, name, branch: opts.branch ?? null })
   info(`unset ${name} (${opts.branch ? `branch ${opts.branch}` : 'project-wide'})`)
 }
 
@@ -105,7 +107,7 @@ export async function secretsBind(envName: string, source: string, opts: { branc
     source,
     ...(opts.sourceName ? { sourceName: opts.sourceName } : {}),
   })
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson({ ok: true })
   info(`bound ${envName} on ${opts.to} to ${source}${opts.sourceName ? `.${opts.sourceName}` : ''} (branch ${branch})`)
 }
@@ -116,7 +118,7 @@ export async function secretsUnbind(envName: string, opts: { branch?: string; fr
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
   const res = await api.rawRequest('DELETE', `/projects/${p.projectId}/secret-bindings/${encodeURIComponent(envName)}?branch=${encodeURIComponent(branch)}&target=${encodeURIComponent(opts.from)}`)
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson({ ok: true })
   info(`unbound ${envName} from ${opts.from} (branch ${branch})`)
 }
@@ -127,7 +129,7 @@ export async function secretsBindings(opts: { branch?: string; target?: string; 
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
   const res = await api.rawRequest('GET', `/projects/${p.projectId}/secret-bindings?branch=${encodeURIComponent(branch)}&target=${encodeURIComponent(opts.target)}`)
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   const bindings = res.body.bindings ?? []
   if (opts.json) return printJson(bindings)
   if (!bindings.length) return info(`(no secret bindings for ${opts.target} on ${branch})`)
@@ -139,7 +141,7 @@ export async function secretsSources(opts: { branch?: string; json?: boolean }):
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
   const res = await api.rawRequest('GET', `/projects/${p.projectId}/secret-sources?branch=${encodeURIComponent(branch)}`)
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   const sources = res.body.sources ?? []
   if (opts.json) return printJson(sources)
   if (!sources.length) return info(`(no credential sources on ${branch})`)

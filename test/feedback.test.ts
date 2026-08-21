@@ -138,6 +138,17 @@ describe('submit', () => {
     expect(result.status).toBe('error')
     expect((result as { error: string }).error).toContain('ENOTFOUND')
   })
+
+  it('a timeout is UNCONFIRMED, not an error — the server finishes in-flight requests', async () => {
+    const fetchImpl = (async () => {
+      const e = new Error('aborted')
+      e.name = 'TimeoutError'
+      throw e
+    }) as unknown as typeof fetch
+    const result = await submit({}, fetchImpl)
+    expect(result.status).toBe('unconfirmed')
+    expect((result as { error: string }).error).toContain('may have been recorded')
+  })
 })
 
 describe('feedback command', () => {
@@ -161,6 +172,16 @@ describe('feedback command', () => {
       throw new Error('connect ECONNREFUSED')
     }) as unknown as typeof fetch
     await expect(feedback({ ...valid, json: true }, { interactive: false, cliVersion: 'x', fetchImpl })).resolves.toBeUndefined()
+  })
+
+  it('an unconfirmed timeout does not throw either', async () => {
+    const fetchImpl = (async () => {
+      const e = new Error('aborted')
+      e.name = 'TimeoutError'
+      throw e
+    }) as unknown as typeof fetch
+    await expect(feedback({ ...valid, json: true }, { interactive: false, cliVersion: 'x', fetchImpl })).resolves.toBeUndefined()
+    expect(process.exitCode ?? 0).toBe(0)
   })
 })
 

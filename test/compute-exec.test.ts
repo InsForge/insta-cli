@@ -83,18 +83,20 @@ describe('applyExecResult', () => {
   afterEach(() => { stdout.length = 0; stderr.length = 0; process.exitCode = undefined })
   afterAll(() => { outSpy.mockRestore(); errSpy.mockRestore() })
 
-  it('202: exits 1 and prints the human approval hint (non-json)', () => {
+  it('202: exits 2 with the human approval hint on stderr, stdout untouched (non-json)', () => {
     applyExecResult({ status: 202, body: { status: 'approval_required', action: 'deploy', approvalId: 'appr_1' } })
-    expect(process.exitCode).toBe(1)
-    expect(stdout.join('')).toMatch(/approval required for deploy — run: insta approvals approve appr_1/)
+    expect(process.exitCode).toBe(2)
+    expect(stderr.join('')).toMatch(/approval required for deploy — run: insta approvals approve appr_1/)
+    expect(stdout.join('')).toBe('')
   })
 
-  it('202: exits 1 and prints the raw envelope with --json (not the human hint)', () => {
+  it('202: exits 2 and prints the raw envelope with --json (hint on stderr, never stdout)', () => {
     const body = { status: 'approval_required', action: 'deploy', approvalId: 'appr_1', message: 'needs review' }
     applyExecResult({ status: 202, body }, true)
-    expect(process.exitCode).toBe(1)
+    expect(process.exitCode).toBe(2)
     expect(JSON.parse(stdout.join(''))).toEqual(body)
     expect(stdout.join('')).not.toMatch(/approval required for/)
+    expect(stderr.join('')).toMatch(/approval required for deploy/)
   })
 
   it('200: passes a normal exit code through untouched', () => {

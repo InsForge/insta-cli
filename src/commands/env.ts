@@ -20,7 +20,21 @@ export async function envShow(opts: { json?: boolean }): Promise<void> {
   if (!env) info('  (custom apiUrl — `insta env use <name>` to switch to a named environment)')
 }
 
-export async function envUse(name: string): Promise<void> {
+// One stable schema for BOTH envUse outcomes (no-op and real switch), so a scripted caller can key
+// on any field — mcpServer, previous — without probing which branch ran. Pure, unit-tested.
+export function envUseResult(target: EnvName, previous: string | null, changed: boolean, sessionDropped: boolean) {
+  return {
+    env: target,
+    previous,
+    apiUrl: ENVS[target].api,
+    mcpUrl: ENVS[target].mcp,
+    mcpServer: mcpServerName(target),
+    changed,
+    sessionDropped,
+  }
+}
+
+export async function envUse(name: string, opts: { json?: boolean } = {}): Promise<void> {
   const want = name.trim().toLowerCase()
   if (!isEnvName(want)) die(`unknown environment "${name}" — expected one of: ${ENV_NAMES.join(', ')}`)
   const target: EnvName = want
@@ -34,6 +48,7 @@ export async function envUse(name: string): Promise<void> {
   // how envForApiUrl already treats it) instead of being rewritten as a "switch" that needlessly
   // drops a perfectly good session.
   if (normalizeUrl(stored.apiUrl) === normalizeUrl(nextApi)) {
+    if (opts.json) return printJson(envUseResult(target, from ?? target, false, false))
     info(`already on ${target} (${nextApi})`)
     return
   }
@@ -52,13 +67,14 @@ export async function envUse(name: string): Promise<void> {
   delete next.user
   await writeGlobal(next)
 
+  if (opts.json) return printJson(envUseResult(target, from ?? null, true, hadSession))
   info(`switched ${from ?? '(custom)'} → ${target}`)
   info(`  api: ${nextApi}`)
   info(`  mcp: ${ENVS[target].mcp} (registers as \`${mcpServerName(target)}\`)`)
   if (hadSession) info('  previous session dropped (separate deployment) — run `insta login --oauth github`')
   // Switching the CLI does NOT re-point already-installed agents: their MCP registration and skill
   // files were written for the previous environment and are keyed by a different server name, so
-  // they keep talking to it until setup is re-run. (The installer path is fine — install.sh runs
-  // `env use` before `setup agent`.)
-  info('  re-point this machine\'s agents at it with: insta setup agent')
+  // they keep talking to it until setup is re-run. --env is REQUIRED in the hint: since 0.0.38 a
+  // bare `setup agent` forces prod, which would silently undo the switch the user just made.
+  info(`  re-point this machine's agents at it with: insta setup agent --env ${target}`)
 }

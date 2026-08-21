@@ -19,7 +19,7 @@ export async function dbAlwaysOn(mode: string, opts: Opts): Promise<void> {
   if (branch) qs.set('branch', branch)
   if (opts.group) qs.set('group', opts.group)
   const res = await api.rawRequest('PATCH', `/projects/${p.projectId}/database/settings${qs.toString() ? `?${qs}` : ''}`, { scaleToZero: mode !== 'on' })
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson(res.body)
   const s2z = res.body?.scaleToZero
   info(`postgres ${opts.group ?? 'default'}: always-on ${s2z === false ? 'ENABLED — instance stays warm (no cold starts; idle RAM bills at actual usage)' : 'disabled — scales to zero when idle (default; first connection after idle cold-starts)'}`)
@@ -115,7 +115,7 @@ export async function dbLimits(opts: Opts & { cpu?: string; memory?: string }): 
     if (e instanceof ApiError) throw new Error(`setting the ceiling failed (${e.status}): ${e.message}`)
     throw e
   }
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson(res.body)
   const cpu = typeof res.body?.cpuMilli === 'number' ? `${res.body.cpuMilli / 1000} vCPU` : (opts.cpu ?? 'unchanged')
   const mem = typeof res.body?.memoryMib === 'number' ? fmtMib(res.body.memoryMib) : (opts.memory ?? 'unchanged')
@@ -224,7 +224,7 @@ export async function dbVolume(opts: Opts & { size?: string }): Promise<void> {
     if (e instanceof ApiError) throw new Error(`growing the volume failed (${e.status}): ${e.message}`)
     throw e
   }
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson(res.body)
   const vg = res.body?.volumeGib
   info(`postgres ${opts.group ?? 'default'}: volume ${typeof vg === 'number' ? `grown to ${vg}Gi` : `set to ${sizeGib}Gi`}`)

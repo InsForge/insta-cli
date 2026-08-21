@@ -26,14 +26,33 @@ npm install -g insta
 ```
 
 For coding agents. Installs the CLI, the `insta` skill for every agent on the machine, and
-registers the MCP server:
+registers the MCP server — one command for macOS, Linux, WSL, and native Windows shells
+(PowerShell/cmd). Needs Node 18+ with a writable npm global prefix (a Node version manager
+qualifies; if the global install can't write, setup continues and prints the exact
+version-pinned `npm install -g` fallback to run yourself). E2e-validated on macOS, Linux,
+and Windows (PowerShell + cmd):
+
+```bash
+npx -y insta setup agent
+```
+
+This command means **production** (CLI ≥ 0.0.38): if the machine was previously switched to
+staging it switches back — announced, session dropped, like `insta env use prod`. Staging is
+its own explicit command, which also persists the choice:
+
+```bash
+npx -y insta setup agent --env staging
+```
+
+On macOS/Linux without Node, the native-binary installer puts the `insta` CLI on PATH (the
+skill + MCP steps it then runs still need Node — the skills tool runs via npx). Never run it
+on native Windows — PowerShell's `curl` alias and the WSL `bash` shim break it; use npx
+above, or download `insta-windows-x64.exe` from the
+[releases page](https://github.com/InsForge/insta-cli/releases):
 
 ```bash
 curl -fsSL agents.instacloud.com | sh
 ```
-
-On Windows, download `insta-windows-x64.exe` from the
-[releases page](https://github.com/InsForge/insta-cli/releases).
 
 Pin a version with `INSTA_VERSION=v0.0.22`; change the install directory with
 `INSTA_INSTALL_DIR`. While the CLI is pre-1.0 it updates itself on new releases. Turn that
@@ -101,7 +120,8 @@ prints an approval id for an admin to grant with `insta approvals approve <id>`.
 
 `insta manifest` prints an agent-legible view of every branch and its URLs. `insta setup
 agent` installs the InstaCloud skill and registers the remote MCP server for the coding
-agents on the machine.
+agents on the machine — and, when running from the npx cache with no durable `insta` on
+PATH, first installs the CLI itself globally.
 
 ## Environments
 
@@ -167,7 +187,7 @@ build never reaches a production installer.
 |---|---|
 | `insta login` · `logout` · `status` | Email/password or `--oauth github\|google`; `status` shows the environment, login and linked project/branch |
 | `insta env` | `show` · `use <prod\|staging>` |
-| `insta setup` | `agent` — install the skill and register MCP for every coding agent |
+| `insta setup` | `agent` — install the CLI (if missing), the skill, and MCP for every coding agent; targets prod, `--env staging` for staging |
 | `insta mcp` | `install` — register the remote MCP server only |
 | `insta org` | `list` · `create` (one free org per user) |
 | `insta project` | `create` · `list` · `link` · `delete` |

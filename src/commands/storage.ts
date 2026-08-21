@@ -60,7 +60,7 @@ export async function storageList(opts: ListOpts): Promise<void> {
   const branch = opts.branch ?? p.branch
   const svc = await storageTarget(api, p.projectId, branch, opts.service)
   const res = await api.rawRequest('GET', objectsPath(p.projectId, svc.id, { branch, prefix: opts.prefix, cursor: opts.cursor, limit }))
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson(res.body)
   const objects: Array<{ key: string; size?: number; lastModified?: string }> = res.body?.objects ?? []
   if (!objects.length) {
@@ -152,7 +152,7 @@ export async function storageGet(key: string, opts: GetOpts, deps: GetDeps = {})
   const branch = opts.branch ?? p.branch
   const svc = await storageTarget(api, p.projectId, branch, opts.service)
   const res = await api.rawRequest('GET', objectDownloadPath(p.projectId, svc.id, { branch, key }))
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   // --json hands over the presigned URL instead of downloading, as `insta secrets --json` does.
   // Before outputPath, so a key with no filename still works when nothing is written to disk.
   if (opts.json) return printJson(res.body)
@@ -170,7 +170,7 @@ export async function storageDelete(key: string, opts: Common): Promise<void> {
   const branch = opts.branch ?? p.branch
   const svc = await storageTarget(api, p.projectId, branch, opts.service)
   const res = await api.rawRequest('DELETE', objectsPath(p.projectId, svc.id, { branch, key }))
-  if (handleApproval(res)) return
+  if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson(res.body)
   info(`deleted ${key} from storage/${svc.name} (branch ${branch})`)
 }
