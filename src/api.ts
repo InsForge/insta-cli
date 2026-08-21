@@ -5,7 +5,9 @@ import { autoResolveProject, promptChoice, type ProjectItem } from './resolve-pr
 import { die } from './util.js'
 
 export class ApiError extends Error {
-  constructor(public status: number, msg: string) { super(msg); this.name = 'ApiError' }
+  // body carries the parsed error payload for callers that branch on machine-readable errors
+  // (e.g. template deploy's missing_variables); the message stays the human line.
+  constructor(public status: number, msg: string, public body?: any) { super(msg); this.name = 'ApiError' }
 }
 
 // Store a durable insta_ key as the credential: set it as the bearer and drop any refresh token (an insta_ key never rotates; a stale one would leak to /auth/refresh on a 401).
@@ -49,14 +51,14 @@ export class ApiClient {
   // Returns parsed body for status < 400 (incl. 202); throws ApiError otherwise.
   async request<T = any>(method: string, path: string, body?: unknown, opts: { auth?: boolean } = {}): Promise<T> {
     const res = await this.raw(method, path, body, opts.auth ?? true)
-    if (res.status >= 400) throw new ApiError(res.status, res.body?.error ?? `HTTP ${res.status}`)
+    if (res.status >= 400) throw new ApiError(res.status, res.body?.error ?? `HTTP ${res.status}`, res.body)
     return res.body as T
   }
 
   // Like request but returns {status, body} so callers can branch on 202 (approval_required).
   async rawRequest(method: string, path: string, body?: unknown, opts: { auth?: boolean } = {}): Promise<RawResult> {
     const res = await this.raw(method, path, body, opts.auth ?? true)
-    if (res.status >= 400) throw new ApiError(res.status, res.body?.error ?? `HTTP ${res.status}`)
+    if (res.status >= 400) throw new ApiError(res.status, res.body?.error ?? `HTTP ${res.status}`, res.body)
     return res
   }
 
