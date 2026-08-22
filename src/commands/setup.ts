@@ -490,8 +490,11 @@ export async function setupAgent(
   if (claude === 'new' && !opts.mcpToken) {
     info('  Claude Code first use: run `/mcp` and authorize in the browser (headless machines: `insta setup agent --mcp-token`)')
   }
-  // The checkmarks end the install, but the user's next move shouldn't be guesswork.
+  // The checkmarks end the install, but the user's next move shouldn't be guesswork. Agent-first:
+  // the whole point of setup is that the machine's coding agents now know InstaCloud (skill + MCP)
+  // and can drive `insta` themselves — project create/link, deploys, and (via the device flow)
+  // even login. The human's next move is simply to go build.
   info(loggedIn
-    ? 'next: run `insta project create` inside your app directory (existing project: `insta project link <id>`)'
-    : 'next: `insta login --oauth github` (headless: `insta login --device`), then `insta project create` inside your app directory')
+    ? 'next: open a coding-agent session in your app directory and keep building — your agents know InstaCloud now'
+    : 'next: open a coding-agent session in your app directory and keep building — your agents know InstaCloud now (they will walk you through `insta login` when it is needed)')
 }

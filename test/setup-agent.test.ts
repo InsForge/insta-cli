@@ -215,7 +215,7 @@ test('ONE combined MCP line (restart note only when config-file agents exist) an
   expect(out).toContain('✓ MCP — Claude Code, Cursor, Factory Droid (already-running tools load it on restart)')
   expect(out).not.toContain('also configured for')             // the old second MCP line is gone
   expect(out).not.toContain('review skills before use')        // the skill lecture is gone
-  expect(out).toContain('next: `insta login --oauth github` (headless: `insta login --device`), then `insta project create` inside your app directory')
+  expect(out).toContain('next: open a coding-agent session in your app directory and keep building — your agents know InstaCloud now (they will walk you through `insta login` when it is needed)')
   expect(out).not.toContain('prompt.md')                       // the circular agent clause is gone
 })
 
