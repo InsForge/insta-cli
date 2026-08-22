@@ -1,6 +1,6 @@
 {
   "name": "insta",
-  "version": "0.0.42",
+  "version": "0.0.43",
   "type": "module",
   "description": "InstaCloud CLI — a thin client of the platform control-plane API.",
   "keywords": [
