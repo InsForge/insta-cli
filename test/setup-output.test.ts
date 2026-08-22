@@ -29,7 +29,7 @@ test('summary names the well-known agents and rolls the rest into +N more', () =
   expect(names).toContain('Cursor')
   expect(names).toContain('Universal (.agents)')
   const line = summarizeInstall(SAMPLE)
-  expect(line.startsWith('✓ Agent skills —')).toBe(true)
+  expect(line.startsWith('✓ Agents —')).toBe(true)
   expect(line).toContain('Claude Code')
   // never dumps raw paths or the scary "73 agents" banner
   expect(line).not.toContain('skills/insta')
@@ -37,7 +37,7 @@ test('summary names the well-known agents and rolls the rest into +N more', () =
 })
 
 test('summary degrades gracefully when no paths are parseable', () => {
-  expect(summarizeInstall('some unexpected output')).toBe('✓ insta skill installed for your coding agents')
+  expect(summarizeInstall('some unexpected output')).toBe('✓ Agents set up')
 })
 
 test('error-path classifier drops expected no-global-support noise', () => {

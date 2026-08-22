@@ -73,13 +73,13 @@ export function parseInstalledAgents(output: string): { count: number; names: st
 // The Railway-style one-liner: a few named agents, the rest as "+N more".
 export function summarizeInstall(output: string): string {
   const { count, names } = parseInstalledAgents(output)
-  if (count === 0) return '✓ insta skill installed for your coding agents'
+  if (count === 0) return '✓ Agents set up'
   const shown = names.slice(0, 6)
   const more = count - shown.length
   const list = shown.length
     ? shown.join(', ') + (more > 0 ? `, +${more} more` : '')
     : `${count} agent${count === 1 ? '' : 's'}`
-  return `✓ Agent skills — ${list}`
+  return `✓ Agents — ${list}`
 }
 
 export type Runner = (cmd: string, args: string[]) => Promise<{ ok: boolean; output?: string }>
@@ -442,8 +442,8 @@ export async function setupAgent(
   const { env, skills } = await resolveEnv()
   const args = setupArgs(skills)
   info(env && env !== DEFAULT_ENV
-    ? `setting up coding-agent skills (${env}) …`
-    : 'setting up coding-agent skills …')
+    ? `setting up your coding agents (${env}) …`
+    : 'setting up your coding agents …')
   const res = await run('npx', args)
   if (!res.ok) {
     info('  skill install failed — install manually with:')
@@ -458,9 +458,9 @@ export async function setupAgent(
     process.exitCode = 1
     return
   }
-  info(summarizeInstall(res.output ?? ''))
-  // Register everything first, summarize ONCE below: Claude Code via `claude mcp add`, every other
-  // agent via a config-file entry — different mechanisms, one outcome, one line.
+  // Register everything first, then summarize ONCE below: the skill files, Claude Code's
+  // `claude mcp add`, and the config-file MCP entries are three mechanisms with one outcome —
+  // "your agents are ready" — so they get one line, not three inventories of agent names.
   let claude = await registerMcp(run, mint, !!opts.mcpToken, false)
   const others = await installConfigs()
   // Default into login on an interactive terminal (see shouldOfferLogin) BEFORE the MCP summary:
@@ -481,20 +481,17 @@ export async function setupAgent(
       }
     }
   }
-  // The one MCP line. The restart note exists because config-file agents only read their config
-  // at startup; Claude Code picks it up live.
-  const mcpTargets = [...(claude === 'new' || claude === 'existing' ? ['Claude Code'] : []), ...others]
-  if (mcpTargets.length) {
-    info(`✓ MCP — ${mcpTargets.join(', ')}${others.length ? ' (already-running tools load it on restart)' : ''}`)
-  }
+  // THE summary line. The restart note exists because config-file agents only read their MCP
+  // config at startup; the skill files need no restart.
+  const mcpOk = claude === 'new' || claude === 'existing' || others.length > 0
+  info(`${summarizeInstall(res.output ?? '')} — ready to use InstaCloud${mcpOk ? ' (skill + MCP; restart any open tools)' : ''}`)
   if (claude === 'new' && !opts.mcpToken) {
     info('  Claude Code first use: run `/mcp` and authorize in the browser (headless machines: `insta setup agent --mcp-token`)')
   }
-  // The checkmarks end the install, but the user's next move shouldn't be guesswork. Agent-first:
-  // the whole point of setup is that the machine's coding agents now know InstaCloud (skill + MCP)
-  // and can drive `insta` themselves — project create/link, deploys, and (via the device flow)
-  // even login. The human's next move is simply to go build.
+  // The user's next move: one concrete action, not a concept. The agents drive `insta` themselves
+  // (project create/link, deploys, login via the device flow), so the human just asks for the
+  // thing they actually want.
   info(loggedIn
-    ? 'next: open a coding-agent session in your app directory and keep building — your agents know InstaCloud now'
-    : 'next: open a coding-agent session in your app directory and keep building — your agents know InstaCloud now (they will walk you through `insta login` when it is needed)')
+    ? 'next: open your coding agent inside your app and ask it to "deploy this app on InstaCloud"'
+    : 'next: open your coding agent inside your app and ask it to "deploy this app on InstaCloud" — it will walk you through `insta login`')
 }
