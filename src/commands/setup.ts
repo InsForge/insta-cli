@@ -314,29 +314,37 @@ const defaultMinter: TokenMinter = async () => {
 // is the headless fallback (CI, no browser): mint a durable token into the header instead.
 // Idempotent — an existing registration is left alone. Best-effort: the skill install is the
 // primary outcome; agents without an MCP registry are covered by the skill alone.
-export async function registerMcp(run: Runner = defaultRunner, mint: TokenMinter = defaultMinter, useToken = false): Promise<void> {
+/** Outcome of the Claude Code MCP registration. `announce` controls the SUCCESS lines only —
+ *  `setup agent` passes false and folds Claude Code into one combined MCP line with the
+ *  config-file agents; `insta mcp install` keeps the default self-narration. Failure surfaces
+ *  (manual-add fallback, missing token) always print — silence there would read as success. */
+export type McpStatus = 'new' | 'existing' | 'no-claude' | 'no-token' | 'failed'
+export async function registerMcp(run: Runner = defaultRunner, mint: TokenMinter = defaultMinter, useToken = false, announce = true): Promise<McpStatus> {
   const { name, url } = await resolveMcpTarget()
-  if (!(await run('claude', ['--version'])).ok) return // no Claude Code on this machine
+  if (!(await run('claude', ['--version'])).ok) return 'no-claude' // no Claude Code on this machine
   if ((await run('claude', ['mcp', 'get', name])).ok) {
-    info(`✓ MCP — ${name} already registered with Claude Code`)
-    return
+    if (announce) info(`✓ MCP — ${name} already registered with Claude Code`)
+    return 'existing'
   }
   const args = ['mcp', 'add', '--transport', 'http', '--scope', 'user', name, url]
   if (useToken) {
     const token = await mint()
     if (!token) {
       info('  MCP not registered (--mcp-token needs a login) — run `insta login`, then `insta setup agent --mcp-token` again')
-      return
+      return 'no-token'
     }
     args.push('--header', `Authorization: Bearer ${token}`)
   }
   const res = await run('claude', args)
-  if (res.ok) {
+  if (!res.ok) {
+    info(`  MCP registration failed — add manually:\n    claude mcp add --transport http ${name} ${url}`)
+    return 'failed'
+  }
+  if (announce) {
     info(`✓ MCP — ${name} registered with Claude Code (\`claude mcp list\` to verify)`)
     if (!useToken) info('  first use: run `/mcp` in Claude Code and authorize in the browser (headless machines: `insta setup agent --mcp-token`)')
-  } else {
-    info(`  MCP registration failed — add manually:\n    claude mcp add --transport http ${name} ${url}`)
   }
+  return 'new'
 }
 
 /** The environment `setup agent` should target, and whether the machine must be switched to it
@@ -451,33 +459,39 @@ export async function setupAgent(
     return
   }
   info(summarizeInstall(res.output ?? ''))
-  info('  every coding agent on this machine now knows InstaCloud (review skills before use — they run with full permissions).')
-  await registerMcp(run, mint, !!opts.mcpToken)
+  // Register everything first, summarize ONCE below: Claude Code via `claude mcp add`, every other
+  // agent via a config-file entry — different mechanisms, one outcome, one line.
+  let claude = await registerMcp(run, mint, !!opts.mcpToken, false)
   const others = await installConfigs()
-  if (others.length) info(`✓ MCP — also configured for ${others.join(', ')} (restart those tools to pick it up)`)
-  // The checkmarks end the install, but the user's next move shouldn't be guesswork. Local state
-  // only (no network): a config with a session means logged in — good enough for a hint.
-  // Deliberately prod-hosted prompt.md even on a staging setup: it is generic onboarding (the
-  // login/create commands in it are env-aware at runtime), and staging serves no equivalent.
-  const stored = await readStored()
-  const loggedIn = !!(stored.accessToken || stored.user)
-  const nextCreate = 'next: `insta project create <name>` in your app repo — or tell your agent: "Fetch https://instacloud.com/prompt.md and follow it"'
-  if (loggedIn) return info(nextCreate)
-  // Default into login on an interactive terminal — see shouldOfferLogin. Best-effort: a declined
+  // Default into login on an interactive terminal (see shouldOfferLogin) BEFORE the MCP summary:
+  // a --mcp-token registration needs the session to mint, so a post-login retry must land in the
+  // same combined line instead of announcing Claude Code separately. Best-effort: a declined
   // prompt or a failed browser flow leaves a completed setup plus the manual hint, never an error.
+  const stored = await readStored()
+  let loggedIn = !!(stored.accessToken || stored.user)
   if (shouldOfferLogin(!!opts.yes, loggedIn, loginFlow.stdinTty, loginFlow.stdoutTty)) {
     if (await loginFlow.ask('log in now with GitHub? (Y/n) ')) {
       try {
         await loginFlow.login()
-        // --mcp-token needs a session to mint: the registration above ran logged-out and skipped
-        // itself with the login hint — now that the session exists, do the token registration.
-        if (opts.mcpToken) await registerMcp(run, mint, true)
-        return info(nextCreate)
+        loggedIn = true
+        if (opts.mcpToken) claude = await registerMcp(run, mint, true, false)
       } catch (e) {
         info(`  login did not complete (${e instanceof Error ? e.message : String(e)}) — no problem, setup itself is done.`)
         info('  on a remote/SSH machine the browser flow cannot call back here — use `insta login --device` instead.')
       }
     }
   }
-  info('next: `insta login --oauth github` (headless: `insta login --device`), then `insta project create <name>` — or tell your agent: "Fetch https://instacloud.com/prompt.md and follow it"')
+  // The one MCP line. The restart note exists because config-file agents only read their config
+  // at startup; Claude Code picks it up live.
+  const mcpTargets = [...(claude === 'new' || claude === 'existing' ? ['Claude Code'] : []), ...others]
+  if (mcpTargets.length) {
+    info(`✓ MCP — ${mcpTargets.join(', ')}${others.length ? ' (already-running tools load it on restart)' : ''}`)
+  }
+  if (claude === 'new' && !opts.mcpToken) {
+    info('  Claude Code first use: run `/mcp` and authorize in the browser (headless machines: `insta setup agent --mcp-token`)')
+  }
+  // The checkmarks end the install, but the user's next move shouldn't be guesswork.
+  info(loggedIn
+    ? 'next: run `insta project create` inside your app directory (existing project: `insta project link <id>`)'
+    : 'next: `insta login --oauth github` (headless: `insta login --device`), then `insta project create` inside your app directory')
 }

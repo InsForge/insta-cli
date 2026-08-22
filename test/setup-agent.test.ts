@@ -1,4 +1,4 @@
-import { test, expect, beforeEach, afterEach } from 'vitest'
+import { test, expect, beforeEach, afterEach, vi } from 'vitest'
 import { planSetupEnv, setupAgent, shouldOfferLogin, registerMcp, SETUP_ARGS, MCP_SERVER_NAME, DEFAULT_MCP_URL } from '../src/commands/setup.js'
 import { ENVS } from '../src/env.js'
 
@@ -195,6 +195,34 @@ test('setup agent on a staging-persisted machine switches to prod BEFORE install
   )
   expect(order[0]).toBe('switch:prod') // env pinned first — skills/MCP must not land for staging
   expect(order[1]).toBe('ensure')
+})
+
+// ---- output copy: one combined MCP line + a next: that makes sense (user feedback 2026-08-20) ----
+
+const captureSetupOutput = async (installConfigs: () => Promise<string[]>): Promise<string> => {
+  let out = ''
+  const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c) => { out += String(c); return true })
+  try {
+    await setupAgent({ yes: true }, async () => ({ ok: true, output: '' }), undefined,
+      installConfigs, async () => {}, storedProd, noSwitch,
+      { ask: async () => false, login: async () => {}, stdinTty: false, stdoutTty: false })
+  } finally { spy.mockRestore() }
+  return out
+}
+
+test('ONE combined MCP line (restart note only when config-file agents exist) and concrete next: copy', async () => {
+  const out = await captureSetupOutput(async () => ['Cursor', 'Factory Droid'])
+  expect(out).toContain('✓ MCP — Claude Code, Cursor, Factory Droid (already-running tools load it on restart)')
+  expect(out).not.toContain('also configured for')             // the old second MCP line is gone
+  expect(out).not.toContain('review skills before use')        // the skill lecture is gone
+  expect(out).toContain('next: `insta login --oauth github` (headless: `insta login --device`), then `insta project create` inside your app directory')
+  expect(out).not.toContain('prompt.md')                       // the circular agent clause is gone
+})
+
+test('MCP line with Claude Code alone carries no restart note', async () => {
+  const out = await captureSetupOutput(async () => [])
+  expect(out).toContain('✓ MCP — Claude Code\n')
+  expect(out).not.toContain('restart')
 })
 
 test('registerMcp is idempotent — an existing registration is left alone (no token minted)', async () => {
