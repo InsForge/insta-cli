@@ -219,6 +219,19 @@ test('ONE combined MCP line (restart note only when config-file agents exist) an
   expect(out).not.toContain('prompt.md')                       // the circular agent clause is gone
 })
 
+test('logged-in next: is also agent-first (pinned)', async () => {
+  let out = ''
+  const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c) => { out += String(c); return true })
+  try {
+    await setupAgent({ yes: true }, async () => ({ ok: true, output: '' }), undefined,
+      async () => [], async () => {},
+      async () => ({ apiUrl: ENVS.prod.api, user: { id: 'u', email: 't@e.com', name: 'T' } }), noSwitch,
+      { ask: async () => false, login: async () => {}, stdinTty: false, stdoutTty: false })
+  } finally { spy.mockRestore() }
+  expect(out).toContain('next: open a coding-agent session in your app directory and keep building — your agents know InstaCloud now')
+  expect(out).not.toContain('insta login') // logged in — no login clause
+})
+
 test('MCP line with Claude Code alone carries no restart note', async () => {
   const out = await captureSetupOutput(async () => [])
   expect(out).toContain('✓ MCP — Claude Code\n')
