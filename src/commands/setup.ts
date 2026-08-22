@@ -459,11 +459,30 @@ export async function setupAgent(
     return
   }
   info(summarizeInstall(res.output ?? ''))
-  // ONE combined MCP line: Claude Code registers via `claude mcp add`, every other agent gets a
-  // config-file entry — different mechanisms, one outcome. The restart note exists because
-  // config-file agents only read their config at startup; Claude Code picks it up live.
-  const claude = await registerMcp(run, mint, !!opts.mcpToken, false)
+  // Register everything first, summarize ONCE below: Claude Code via `claude mcp add`, every other
+  // agent via a config-file entry — different mechanisms, one outcome, one line.
+  let claude = await registerMcp(run, mint, !!opts.mcpToken, false)
   const others = await installConfigs()
+  // Default into login on an interactive terminal (see shouldOfferLogin) BEFORE the MCP summary:
+  // a --mcp-token registration needs the session to mint, so a post-login retry must land in the
+  // same combined line instead of announcing Claude Code separately. Best-effort: a declined
+  // prompt or a failed browser flow leaves a completed setup plus the manual hint, never an error.
+  const stored = await readStored()
+  let loggedIn = !!(stored.accessToken || stored.user)
+  if (shouldOfferLogin(!!opts.yes, loggedIn, loginFlow.stdinTty, loginFlow.stdoutTty)) {
+    if (await loginFlow.ask('log in now with GitHub? (Y/n) ')) {
+      try {
+        await loginFlow.login()
+        loggedIn = true
+        if (opts.mcpToken) claude = await registerMcp(run, mint, true, false)
+      } catch (e) {
+        info(`  login did not complete (${e instanceof Error ? e.message : String(e)}) — no problem, setup itself is done.`)
+        info('  on a remote/SSH machine the browser flow cannot call back here — use `insta login --device` instead.')
+      }
+    }
+  }
+  // The one MCP line. The restart note exists because config-file agents only read their config
+  // at startup; Claude Code picks it up live.
   const mcpTargets = [...(claude === 'new' || claude === 'existing' ? ['Claude Code'] : []), ...others]
   if (mcpTargets.length) {
     info(`✓ MCP — ${mcpTargets.join(', ')}${others.length ? ' (already-running tools load it on restart)' : ''}`)
@@ -471,27 +490,8 @@ export async function setupAgent(
   if (claude === 'new' && !opts.mcpToken) {
     info('  Claude Code first use: run `/mcp` and authorize in the browser (headless machines: `insta setup agent --mcp-token`)')
   }
-  // The checkmarks end the install, but the user's next move shouldn't be guesswork. Local state
-  // only (no network): a config with a session means logged in — good enough for a hint.
-  const stored = await readStored()
-  const loggedIn = !!(stored.accessToken || stored.user)
-  const nextCreate = 'next: run `insta project create` inside your app directory (existing project: `insta project link <id>`)'
-  if (loggedIn) return info(nextCreate)
-  // Default into login on an interactive terminal — see shouldOfferLogin. Best-effort: a declined
-  // prompt or a failed browser flow leaves a completed setup plus the manual hint, never an error.
-  if (shouldOfferLogin(!!opts.yes, loggedIn, loginFlow.stdinTty, loginFlow.stdoutTty)) {
-    if (await loginFlow.ask('log in now with GitHub? (Y/n) ')) {
-      try {
-        await loginFlow.login()
-        // --mcp-token needs a session to mint: the registration above ran logged-out and skipped
-        // itself with the login hint — now that the session exists, do the token registration.
-        if (opts.mcpToken) await registerMcp(run, mint, true)
-        return info(nextCreate)
-      } catch (e) {
-        info(`  login did not complete (${e instanceof Error ? e.message : String(e)}) — no problem, setup itself is done.`)
-        info('  on a remote/SSH machine the browser flow cannot call back here — use `insta login --device` instead.')
-      }
-    }
-  }
-  info('next: `insta login --oauth github` (headless: `insta login --device`), then `insta project create` inside your app directory')
+  // The checkmarks end the install, but the user's next move shouldn't be guesswork.
+  info(loggedIn
+    ? 'next: run `insta project create` inside your app directory (existing project: `insta project link <id>`)'
+    : 'next: `insta login --oauth github` (headless: `insta login --device`), then `insta project create` inside your app directory')
 }
