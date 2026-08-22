@@ -210,16 +210,19 @@ const captureSetupOutput = async (installConfigs: () => Promise<string[]>): Prom
   return out
 }
 
-test('ONE combined MCP line (restart note only when config-file agents exist) and concrete next: copy', async () => {
+test('ONE agents summary line (skills + MCP folded) and one concrete next: action', async () => {
   const out = await captureSetupOutput(async () => ['Cursor', 'Factory Droid'])
-  expect(out).toContain('✓ MCP — Claude Code, Cursor, Factory Droid (already-running tools load it on restart)')
+  // Exactly one ✓ line for the whole agent setup — no separate MCP inventory of agent names.
+  expect(out).toContain('— ready to use InstaCloud (skill + MCP; restart any open tools)')
+  expect(out.split('\n').filter((l) => l.includes('✓'))).toHaveLength(1)
+  expect(out).not.toContain('✓ MCP —')                         // the separate MCP line is gone
   expect(out).not.toContain('also configured for')             // the old second MCP line is gone
   expect(out).not.toContain('review skills before use')        // the skill lecture is gone
-  expect(out).toContain('next: open a coding-agent session in your app directory and keep building — your agents know InstaCloud now (they will walk you through `insta login` when it is needed)')
+  expect(out).toContain('next: open your coding agent inside your app and ask it to "deploy this app on InstaCloud" — it will walk you through `insta login`')
   expect(out).not.toContain('prompt.md')                       // the circular agent clause is gone
 })
 
-test('logged-in next: is also agent-first (pinned)', async () => {
+test('logged-in next: is also one concrete action (pinned)', async () => {
   let out = ''
   const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c) => { out += String(c); return true })
   try {
@@ -228,14 +231,14 @@ test('logged-in next: is also agent-first (pinned)', async () => {
       async () => ({ apiUrl: ENVS.prod.api, user: { id: 'u', email: 't@e.com', name: 'T' } }), noSwitch,
       { ask: async () => false, login: async () => {}, stdinTty: false, stdoutTty: false })
   } finally { spy.mockRestore() }
-  expect(out).toContain('next: open a coding-agent session in your app directory and keep building — your agents know InstaCloud now')
+  expect(out).toContain('next: open your coding agent inside your app and ask it to "deploy this app on InstaCloud"')
   expect(out).not.toContain('insta login') // logged in — no login clause
 })
 
-test('MCP line with Claude Code alone carries no restart note', async () => {
+test('the summary still notes skill + MCP when only Claude Code has MCP', async () => {
   const out = await captureSetupOutput(async () => [])
-  expect(out).toContain('✓ MCP — Claude Code\n')
-  expect(out).not.toContain('restart')
+  expect(out).toContain('— ready to use InstaCloud (skill + MCP; restart any open tools)')
+  expect(out).not.toContain('✓ MCP —')
 })
 
 test('registerMcp is idempotent — an existing registration is left alone (no token minted)', async () => {
