@@ -235,6 +235,21 @@ test('logged-in next: is also one concrete action (pinned)', async () => {
   expect(out).not.toContain('insta login') // logged in — no login clause
 })
 
+test('fresh Claude Code registration adds ONLY the one-time /mcp authorize hint (still one ✓ line)', async () => {
+  let out = ''
+  const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c) => { out += String(c); return true })
+  try {
+    await setupAgent({ yes: true },
+      // `claude mcp get` not-ok → fresh registration; everything else succeeds.
+      async (_cmd, args) => ({ ok: !(args[0] === 'mcp' && args[1] === 'get'), output: '' }),
+      undefined, async () => [], async () => {}, storedProd, noSwitch,
+      { ask: async () => false, login: async () => {}, stdinTty: false, stdoutTty: false })
+  } finally { spy.mockRestore() }
+  expect(out).toContain('— ready to use InstaCloud (skill + MCP; restart any open tools)')
+  expect(out).toContain('Claude Code first use: run `/mcp` and authorize in the browser')
+  expect(out.split('\n').filter((l) => l.includes('✓'))).toHaveLength(1) // hint is indented, not a second checkmark
+})
+
 test('the summary still notes skill + MCP when only Claude Code has MCP', async () => {
   const out = await captureSetupOutput(async () => [])
   expect(out).toContain('— ready to use InstaCloud (skill + MCP; restart any open tools)')
