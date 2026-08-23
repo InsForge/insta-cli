@@ -233,15 +233,12 @@ if [ "$AGENTS" = "1" ]; then
   # must NOT retry bare: on >= 0.0.38 the bare form would flip a requested staging setup to prod.
   SETUP_ENV_ARGS=""
   [ -n "$ENV_NAME" ] && SETUP_ENV_ARGS="--env $ENV_NAME"
+  # -y is a HARD non-interactive request, exactly as the help text says — it is never dropped.
+  # agents.sh no longer forwards it: without -y the CLI itself decides promptability (a human
+  # terminal answers via /dev/tty, CLI >= 0.0.44; agents/CI/cron are never prompted), so the
+  # curl|sh path can offer the browser login while unattended runs stay fully non-interactive.
   YFLAG=""
-  if [ "$YES" = "1" ]; then
-    # agents.sh always forwards -y (the pipe makes everything look non-interactive), but a HUMAN
-    # terminal may still be attached — if /dev/tty answers, drop -y so `setup agent` can offer the
-    # browser login (CLI >= 0.0.44 reads the Y/n from /dev/tty). Truly unattended runs (CI, cron,
-    # docker: no controlling terminal) keep -y and are never prompted. Skill/MCP steps prompt in
-    # neither case — they are non-interactive by construction.
-    if ( : < /dev/tty ) 2>/dev/null; then YFLAG=""; else YFLAG="-y"; fi
-  fi
+  [ "$YES" = "1" ] && YFLAG="-y"
   SETUP_ERR="${TMPDIR:-/tmp}/insta-setup-err.$$"
   if "$INSTALL_DIR/$BIN" setup agent $YFLAG $SETUP_ENV_ARGS 2>"$SETUP_ERR"; then
     cat "$SETUP_ERR" >&2

@@ -395,13 +395,21 @@ export function shouldOfferLogin(yes: boolean, loggedIn: boolean, stdinTty: bool
 // but the controlling terminal can still answer, via /dev/tty (the standard installer trick;
 // Homebrew prompts the same way). Never on Windows (no /dev/tty, and the curl path doesn't exist
 // there), and never without one (agents, CI, cron — openSync fails, so they can't be prompted).
+/** Wrap an already-open fd as a prompt input with SINGLE-OWNER cleanup: the stream owns the fd
+ *  (autoClose), close() only destroys the stream, and post-close stream errors are swallowed.
+ *  ReadStream.destroy() closes the fd asynchronously on Node 20, so a second closeSync here
+ *  would race it into an unhandled EBADF right after the user answers. */
+export function makePromptSource(fd: number): { input: NodeJS.ReadableStream; close: () => void } {
+  const stream = createReadStream('', { fd, autoClose: true })
+  stream.on('error', () => { /* post-close EBADF and friends — never unhandled */ })
+  return { input: stream, close: () => { try { stream.destroy() } catch { /* already destroyed */ } } }
+}
+
 const openPromptInput = (): { input: NodeJS.ReadableStream; close: () => void } | null => {
   if (process.stdin.isTTY) return { input: process.stdin, close: () => {} }
   if (process.platform === 'win32') return null
   try {
-    const fd = openSync('/dev/tty', 'r')
-    const stream = createReadStream('', { fd, autoClose: false })
-    return { input: stream, close: () => { try { stream.destroy(); closeSync(fd) } catch { /* closed */ } } }
+    return makePromptSource(openSync('/dev/tty', 'r'))
   } catch { return null }
 }
 
