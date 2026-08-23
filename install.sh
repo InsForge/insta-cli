@@ -7,7 +7,7 @@
 # Agent one-liner (installs the CLI AND sets up coding-agent skills; on a human terminal it also
 # offers the browser login — unattended runs stay fully non-interactive):
 #   curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/agents.sh | sh
-#   (equivalent to piping this script with:  sh -s -- --agents -y)
+#   (equivalent to piping this script with:  sh -s -- --agents; add -y for a hard non-interactive run)
 #
 # Flags:
 #   --agents       after installing, run `insta setup agent` (skills for Claude Code/Codex/Cursor/…)

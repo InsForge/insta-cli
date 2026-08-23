@@ -37,4 +37,6 @@ if ! curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/instal
   exit 1
 fi
 [ -s "$tmp" ] || { echo "error: downloaded install.sh is empty" >&2; exit 1; }
-sh "$tmp" --agents --staging -y "$@"
+# No -y: without it the CLI decides promptability itself (a human terminal answers the login
+# offer via /dev/tty; unattended runs are never prompted). Pass -y for a hard non-interactive run.
+sh "$tmp" --agents --staging "$@"
