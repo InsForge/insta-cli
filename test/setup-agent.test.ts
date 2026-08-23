@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, openSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, openSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { makePromptSource, planSetupEnv, setupAgent, shouldOfferLogin, registerMcp, SETUP_ARGS, MCP_SERVER_NAME, DEFAULT_MCP_URL } from '../src/commands/setup.js'
@@ -101,17 +101,21 @@ test('setupAgent surfaces the --env/$INSTA_API_URL conflict before touching anyt
 
 test('makePromptSource: single-owner fd cleanup — close is idempotent and never leaves an unhandled error', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'insta-tty-'))
-  const f = join(dir, 'answer')
-  writeFileSync(f, 'y\n')
-  const src = makePromptSource(openSync(f, 'r'))
-  // Reading works through the wrapper…
-  const first: Buffer | string | null = await new Promise((resolve) => src.input.once('data', resolve))
-  expect(String(first)).toContain('y')
-  // …and cleanup is single-owner: repeated close() never throws, and the stream's own async fd
-  // close (autoClose) has no second closeSync racing it into an unhandled EBADF.
-  src.close()
-  src.close()
-  await new Promise((r) => setTimeout(r, 20)) // let the async fd close land; unhandled 'error' would fail the run
+  try {
+    const f = join(dir, 'answer')
+    writeFileSync(f, 'y\n')
+    const src = makePromptSource(openSync(f, 'r'))
+    // Reading works through the wrapper…
+    const first: Buffer | string | null = await new Promise((resolve) => src.input.once('data', resolve))
+    expect(String(first)).toContain('y')
+    // …and cleanup is single-owner: repeated close() never throws, and the stream's own async fd
+    // close (autoClose) has no second closeSync racing it into an unhandled EBADF.
+    src.close()
+    src.close()
+    await new Promise((r) => setTimeout(r, 20)) // let the async fd close land; unhandled 'error' would fail the run
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('shouldOfferLogin: only an interactive human terminal with no session', () => {
