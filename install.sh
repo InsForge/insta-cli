@@ -4,7 +4,8 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh
 #
-# Agent one-liner (installs the CLI AND sets up coding-agent skills, non-interactive):
+# Agent one-liner (installs the CLI AND sets up coding-agent skills; on a human terminal it also
+# offers the browser login — unattended runs stay fully non-interactive):
 #   curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/agents.sh | sh
 #   (equivalent to piping this script with:  sh -s -- --agents -y)
 #
@@ -233,7 +234,14 @@ if [ "$AGENTS" = "1" ]; then
   SETUP_ENV_ARGS=""
   [ -n "$ENV_NAME" ] && SETUP_ENV_ARGS="--env $ENV_NAME"
   YFLAG=""
-  [ "$YES" = "1" ] && YFLAG="-y"
+  if [ "$YES" = "1" ]; then
+    # agents.sh always forwards -y (the pipe makes everything look non-interactive), but a HUMAN
+    # terminal may still be attached — if /dev/tty answers, drop -y so `setup agent` can offer the
+    # browser login (CLI >= 0.0.44 reads the Y/n from /dev/tty). Truly unattended runs (CI, cron,
+    # docker: no controlling terminal) keep -y and are never prompted. Skill/MCP steps prompt in
+    # neither case — they are non-interactive by construction.
+    if ( : < /dev/tty ) 2>/dev/null; then YFLAG=""; else YFLAG="-y"; fi
+  fi
   SETUP_ERR="${TMPDIR:-/tmp}/insta-setup-err.$$"
   if "$INSTALL_DIR/$BIN" setup agent $YFLAG $SETUP_ENV_ARGS 2>"$SETUP_ERR"; then
     cat "$SETUP_ERR" >&2
