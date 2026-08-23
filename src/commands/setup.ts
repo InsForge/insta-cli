@@ -492,6 +492,6 @@ export async function setupAgent(
   // (project create/link, deploys, login via the device flow), so the human just asks for the
   // thing they actually want.
   info(loggedIn
-    ? 'next: open your coding agent inside your app and ask it to "deploy this app on InstaCloud"'
-    : 'next: open your coding agent inside your app and ask it to "deploy this app on InstaCloud" — it will walk you through `insta login`')
+    ? 'next: open your coding agent inside your app and start building — ask it to "deploy this app on InstaCloud" when you\'re ready'
+    : 'next: open your coding agent inside your app and start building — ask it to "deploy this app on InstaCloud" when you\'re ready (it will walk you through `insta login`)')
 }
