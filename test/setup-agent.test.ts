@@ -218,7 +218,7 @@ test('ONE agents summary line (skills + MCP folded) and one concrete next: actio
   expect(out).not.toContain('✓ MCP —')                         // the separate MCP line is gone
   expect(out).not.toContain('also configured for')             // the old second MCP line is gone
   expect(out).not.toContain('review skills before use')        // the skill lecture is gone
-  expect(out).toContain('next: open your coding agent inside your app and ask it to "deploy this app on InstaCloud" — it will walk you through `insta login`')
+  expect(out).toContain('next: open your coding agent inside your app and start building — ask it to "deploy this app on InstaCloud" when you\'re ready (it will walk you through `insta login`)')
   expect(out).not.toContain('prompt.md')                       // the circular agent clause is gone
 })
 
@@ -231,7 +231,7 @@ test('logged-in next: is also one concrete action (pinned)', async () => {
       async () => ({ apiUrl: ENVS.prod.api, user: { id: 'u', email: 't@e.com', name: 'T' } }), noSwitch,
       { ask: async () => false, login: async () => {}, stdinTty: false, stdoutTty: false })
   } finally { spy.mockRestore() }
-  expect(out).toContain('next: open your coding agent inside your app and ask it to "deploy this app on InstaCloud"')
+  expect(out).toContain('next: open your coding agent inside your app and start building — ask it to "deploy this app on InstaCloud" when you\'re ready')
   expect(out).not.toContain('insta login') // logged in — no login clause
 })
 
