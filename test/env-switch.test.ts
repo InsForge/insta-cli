@@ -35,6 +35,15 @@ describe('env table', () => {
     expect(ENVS.prod.mcp).not.toContain('staging')
   })
 
+  // The console host anchors the device-login approval link (#134): each environment must name
+  // its own, and they are pinned because the working hosts were verified by probe — prod's
+  // console serves /device, and staging's console (not the staging landing site) is the host
+  // that serves it there.
+  it('gives every environment its own console host for device-login approval', () => {
+    expect(ENVS.prod.console).toBe('https://console.instacloud.com')
+    expect(ENVS.staging.console).toBe('https://console.staging.instacloud.com')
+  })
+
   it('gives every environment a skill source', () => {
     for (const name of ENV_NAMES) {
       expect(ENVS[name].skills).toMatch(/^[\w.-]+\/[\w.-]+(#[\w./-]+)?$/)

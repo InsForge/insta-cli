@@ -3,8 +3,9 @@
 // the loop's protocol behavior: pending -> retry, slow_down -> back off, denial/expiry -> clear
 // errors, approval -> the session token comes back.
 import { describe, expect, it } from 'vitest'
-import { deviceGrant, type DevicePoster } from '../src/commands/auth.js'
+import { deviceGrant, deviceVerificationUrl, type DevicePoster } from '../src/commands/auth.js'
 import { ApiError } from '../src/api.js'
+import { ENVS } from '../src/env.js'
 
 const START = {
   device_code: 'dev-123', user_code: 'ABCD1234',
@@ -137,5 +138,70 @@ describe('deviceGrant', () => {
     }
     expect(lines.join('')).toContain('https://console.test/device')
     expect(lines.join('')).not.toContain('undefined')
+  })
+
+  // #134: the staging platform minted its approval link on a host with no /device page (the
+  // landing site — the link passed Vercel SSO and 404'd). For a known environment the CLI
+  // re-anchors the link onto that environment's console host, and names the deployment in the
+  // prompt so a code can't be skimmed into approval against the wrong one.
+  it('labels the environment and re-anchors a wrong-host approval link (staging, #134)', async () => {
+    const lines: string[] = []
+    const write = process.stdout.write.bind(process.stdout)
+    process.stdout.write = ((s: string) => { lines.push(String(s)); return true }) as typeof process.stdout.write
+    try {
+      const wrongHost = {
+        ...START,
+        verification_uri: 'https://staging.instacloud.com/device',
+        verification_uri_complete: 'https://staging.instacloud.com/device?user_code=ABCD1234',
+      }
+      const { post, wait } = fakeFlow(['token:sess-s'], wrongHost)
+      const target = { env: 'staging' as const, apiUrl: ENVS.staging.api }
+      await expect(deviceGrant(post, wait, target)).resolves.toBe('sess-s')
+    } finally {
+      process.stdout.write = write
+    }
+    const out = lines.join('')
+    expect(out).toContain('to log in to STAGING')
+    expect(out).toContain(`${ENVS.staging.console}/device?user_code=ABCD1234`)
+    expect(out).not.toContain('https://staging.instacloud.com/device') // the 404 host, gone
+  })
+
+  // A custom/self-hosted apiUrl has no environment name — the prompt names the host instead,
+  // and the server's link is trusted as-is (rewriting a deliberate custom target would break it).
+  it('labels a custom host by its apiUrl and leaves the link untouched', async () => {
+    const lines: string[] = []
+    const write = process.stdout.write.bind(process.stdout)
+    process.stdout.write = ((s: string) => { lines.push(String(s)); return true }) as typeof process.stdout.write
+    try {
+      const { post, wait } = fakeFlow(['token:sess-c'])
+      await expect(deviceGrant(post, wait, { env: null, apiUrl: 'https://insta.local:7130' })).resolves.toBe('sess-c')
+    } finally {
+      process.stdout.write = write
+    }
+    const out = lines.join('')
+    expect(out).toContain('to log in to https://insta.local:7130')
+    expect(out).toContain('https://console.test/device?user_code=ABCD1234')
+  })
+})
+
+// The link rewrite itself: origin-only, path + query preserved, and inert everywhere it must be.
+describe('deviceVerificationUrl', () => {
+  it('re-anchors a wrong-host link onto the environment console, keeping path and user_code', () => {
+    expect(deviceVerificationUrl('https://staging.instacloud.com/device?user_code=AB12-CD34', 'staging'))
+      .toBe(`${ENVS.staging.console}/device?user_code=AB12-CD34`)
+  })
+
+  it('is a no-op when the platform already points at the environment console', () => {
+    const good = `${ENVS.prod.console}/device?user_code=AB12`
+    expect(deviceVerificationUrl(good, 'prod')).toBe(good)
+  })
+
+  it('never rewrites for a custom/self-hosted target (env null)', () => {
+    expect(deviceVerificationUrl('https://insta.local:7130/device?user_code=AB12', null))
+      .toBe('https://insta.local:7130/device?user_code=AB12')
+  })
+
+  it('shows an unparseable server string as-is rather than dropping the link', () => {
+    expect(deviceVerificationUrl('not a url', 'staging')).toBe('not a url')
   })
 })

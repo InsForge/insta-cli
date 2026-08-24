@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { ApiClient, ApiError, linkedProject } from '../api.js'
-import { ENVS, ENV_NAMES, envForApiUrl, isEnvName } from '../env.js'
+import { ENVS, ENV_NAMES, envForApiUrl, isEnvName, type EnvName } from '../env.js'
 import { info, die, printJson, promptPassword, openUrl } from '../util.js'
 
 /** --api-url and --env both set the target host; --api-url wins (more specific), matching the
@@ -58,7 +58,11 @@ export async function loginDevice(opts: { apiUrl?: string; env?: string }): Prom
   const api = await ApiClient.load()
   const target = targetApiUrl(opts)
   if (target) api.setApiUrl(target)
-  const token = await deviceGrant((path, body) => api.request('POST', path, body, { auth: false }))
+  const token = await deviceGrant(
+    (path, body) => api.request('POST', path, body, { auth: false }),
+    undefined,
+    { env: envForApiUrl(api.apiUrl), apiUrl: api.apiUrl },
+  )
   api.setSession({ accessToken: token, refreshToken: token })
   const me = await api.request<{ user: { id: string; email: string | null; name: string | null } }>('GET', '/me')
   api.setSession({ accessToken: token, refreshToken: token }, me.user)
@@ -110,12 +114,31 @@ type DeviceStart = {
 
 export type DevicePoster = (path: string, body: Record<string, unknown>) => Promise<any>
 
+/** Where the login is headed — names the environment in the prompt and anchors the approval
+ *  link. `env` is null for a custom/self-hosted apiUrl (deliberate choice, left alone). */
+export type DeviceTarget = { env: EnvName | null; apiUrl: string }
+
 const sleepSeconds = (s: number) => new Promise<void>((r) => setTimeout(r, s * 1000))
+
+/** The device-approval link to show the user. verification_uri is built by the PLATFORM from its
+ *  own INSTA_CONSOLE_URL, so a misconfigured deployment mints links to a host that serves no
+ *  /device page at all (live-caught on staging, #134: the landing site — the link passed Vercel
+ *  SSO and 404'd). For a known environment the CLI knows the console host itself, so re-anchor
+ *  the link there: path and query (the user_code) stay the server's, only the origin moves — on
+ *  a correctly configured platform this is a no-op. A custom/self-hosted host (env null) is the
+ *  user's deliberate choice and is never rewritten. */
+export function deviceVerificationUrl(raw: string, env: EnvName | null): string {
+  if (!env) return raw
+  let url: URL
+  try { url = new URL(raw) } catch { return raw } // unparseable — show the server's string as-is
+  const consoleOrigin = new URL(ENVS[env].console).origin
+  return url.origin === consoleOrigin ? raw : `${consoleOrigin}${url.pathname}${url.search}`
+}
 
 // Drives the device grant against the platform's Better Auth mount (/api/auth/device*) and
 // returns the approved session token. Injectable poster + wait keep this testable without a
 // network or real timers. Poll errors arrive as ApiError with the OAuth error code as message.
-export async function deviceGrant(post: DevicePoster, wait: (s: number) => Promise<void> = sleepSeconds): Promise<string> {
+export async function deviceGrant(post: DevicePoster, wait: (s: number) => Promise<void> = sleepSeconds, target?: DeviceTarget): Promise<string> {
   const start = (await post('/api/auth/device/code', { client_id: 'insta-cli' })) as DeviceStart
   // A missing/garbage expires_in must fail loudly here — carried into the deadline arithmetic it
   // becomes NaN, every `Date.now() < deadline` is false, and login dies as a bogus instant expiry.
@@ -126,8 +149,11 @@ export async function deviceGrant(post: DevicePoster, wait: (s: number) => Promi
     throw new Error('malformed device authorization response (missing expires_in) — is the platform up to date?')
   }
   const lifetime = Math.min(expiresIn, 3600) // no device code sensibly outlives an hour
-  info('to log in, open this link in a browser on any device:')
-  info(`  ${start.verification_uri_complete ?? start.verification_uri}`)
+  // Name the deployment in the prompt ("to log in to STAGING …"): approving a device code
+  // against the wrong environment is exactly the mistake worth making loud (see status()).
+  const where = target ? (target.env?.toUpperCase() ?? target.apiUrl) : null
+  info(`to log in${where ? ` to ${where}` : ''}, open this link in a browser on any device:`)
+  info(`  ${deviceVerificationUrl(start.verification_uri_complete ?? start.verification_uri, target?.env ?? null)}`)
   info(`and check it shows this code: ${start.user_code}`)
   info(`waiting for approval… (expires in ${Math.round(lifetime / 60)}m, ctrl-c to abort)`)
   // Absent OR non-finite interval = the RFC 8628 §3.2 default 5s: NaN would fire the timer
