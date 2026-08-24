@@ -33,7 +33,7 @@ version-pinned `npm install -g` fallback to run yourself). E2e-validated on macO
 and Windows (PowerShell + cmd):
 
 ```bash
-npx -y insta setup agent
+npx -y insta@latest setup agent
 ```
 
 This command means **production** (CLI ≥ 0.0.38): if the machine was previously switched to
@@ -41,7 +41,7 @@ staging it switches back — announced, session dropped, like `insta env use pro
 its own explicit command, which also persists the choice:
 
 ```bash
-npx -y insta setup agent --env staging
+npx -y insta@latest setup agent --env staging
 ```
 
 On macOS/Linux without Node, the native-binary installer puts the `insta` CLI on PATH (the
