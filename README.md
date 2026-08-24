@@ -157,7 +157,7 @@ That host is a CloudFront cache, so after a change to the installer it can serve
 previous copy for up to about a day. This form is equivalent and always current:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh -s -- --agents --staging -y
+curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh -s -- --agents --staging
 ```
 
 If the environment cannot be applied — an installed CLI older than 0.0.23 has no `insta
