@@ -6,7 +6,7 @@
 // Stack skills (tigris/better-auth) intentionally stay per-project: their presence in a
 // project doubles as its stack manifest — that install happens on `project create|link`.
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { closeSync, createReadStream, existsSync, openSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import os from 'node:os'
 import { createInterface } from 'node:readline'
@@ -391,8 +391,41 @@ export function shouldOfferLogin(yes: boolean, loggedIn: boolean, stdinTty: bool
 // One Enter continues into the browser login; only an explicit n/no declines. Matches the
 // curl-installer feel: the single command carries you as far as automation can go, and the one
 // genuinely human step (authorizing in the browser) starts itself instead of being homework.
+// Where to read the answer from. Under `curl … | sh` stdin is the SCRIPT pipe, not the human —
+// but the controlling terminal can still answer, via /dev/tty (the standard installer trick;
+// Homebrew prompts the same way). Never on Windows (no /dev/tty, and the curl path doesn't exist
+// there), and never without one (agents, CI, cron — openSync fails, so they can't be prompted).
+/** Wrap an already-open fd as a prompt input with SINGLE-OWNER cleanup: the stream owns the fd
+ *  (autoClose), close() only destroys the stream, and post-close stream errors are swallowed.
+ *  ReadStream.destroy() closes the fd asynchronously on Node 20, so a second closeSync here
+ *  would race it into an unhandled EBADF right after the user answers. */
+export function makePromptSource(fd: number): { input: NodeJS.ReadableStream; close: () => void } {
+  const stream = createReadStream('', { fd, autoClose: true })
+  stream.on('error', () => { /* post-close EBADF and friends — never unhandled */ })
+  return { input: stream, close: () => { try { stream.destroy() } catch { /* already destroyed */ } } }
+}
+
+const openPromptInput = (): { input: NodeJS.ReadableStream; close: () => void } | null => {
+  if (process.stdin.isTTY) return { input: process.stdin, close: () => {} }
+  if (process.platform === 'win32') return null
+  try {
+    return makePromptSource(openSync('/dev/tty', 'r'))
+  } catch { return null }
+}
+
+/** Whether a human can answer a prompt at all: an interactive stdin, or a reachable /dev/tty
+ *  (the curl|sh case). The stdout-TTY requirement lives in shouldOfferLogin — an agent piping
+ *  our output must never be prompted even though its process may have a controlling terminal. */
+export function canPromptViaTty(): boolean {
+  if (process.stdin.isTTY) return true
+  if (process.platform === 'win32') return false
+  try { closeSync(openSync('/dev/tty', 'r')); return true } catch { return false }
+}
+
 const defaultAsk = async (question: string): Promise<boolean> => {
-  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  const src = openPromptInput()
+  if (!src) return false // gate said yes but the terminal vanished — decline, never hang
+  const rl = createInterface({ input: src.input, output: process.stdout })
   // EOF (Ctrl-D) closes the interface without ever answering the question — resolve that as a
   // decline instead of hanging forever after the checkmarks.
   const answer: string = await new Promise((resolve) => {
@@ -400,6 +433,7 @@ const defaultAsk = async (question: string): Promise<boolean> => {
     rl.question(question, resolve)
   })
   rl.close()
+  src.close()
   return !/^n/i.test(answer.trim())
 }
 
@@ -421,7 +455,7 @@ export async function setupAgent(
   loginFlow: LoginFlow = {
     ask: defaultAsk,
     login: () => loginOauth('github', {}),
-    stdinTty: !!process.stdin.isTTY,
+    stdinTty: canPromptViaTty(),
     stdoutTty: !!process.stdout.isTTY,
   },
 ): Promise<void> {

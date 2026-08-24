@@ -4,9 +4,10 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh
 #
-# Agent one-liner (installs the CLI AND sets up coding-agent skills, non-interactive):
+# Agent one-liner (installs the CLI AND sets up coding-agent skills; on a human terminal it also
+# offers the browser login — unattended runs stay fully non-interactive):
 #   curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/agents.sh | sh
-#   (equivalent to piping this script with:  sh -s -- --agents -y)
+#   (equivalent to piping this script with:  sh -s -- --agents; add -y for a hard non-interactive run)
 #
 # Flags:
 #   --agents       after installing, run `insta setup agent` (skills for Claude Code/Codex/Cursor/…)
@@ -232,6 +233,10 @@ if [ "$AGENTS" = "1" ]; then
   # must NOT retry bare: on >= 0.0.38 the bare form would flip a requested staging setup to prod.
   SETUP_ENV_ARGS=""
   [ -n "$ENV_NAME" ] && SETUP_ENV_ARGS="--env $ENV_NAME"
+  # -y is a HARD non-interactive request, exactly as the help text says — it is never dropped.
+  # agents.sh no longer forwards it: without -y the CLI itself decides promptability (a human
+  # terminal answers via /dev/tty, CLI >= 0.0.44; agents/CI/cron are never prompted), so the
+  # curl|sh path can offer the browser login while unattended runs stay fully non-interactive.
   YFLAG=""
   [ "$YES" = "1" ] && YFLAG="-y"
   SETUP_ERR="${TMPDIR:-/tmp}/insta-setup-err.$$"

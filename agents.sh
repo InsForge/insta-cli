@@ -9,10 +9,12 @@
 #
 # Thin shim (the Railway agents.sh pattern): exactly equivalent to
 #
-#     curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh -s -- --agents -y
+#     curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh -s -- --agents
 #
 # Installs the insta CLI (checksum-verified native binary) and the insta agent skill
-# user-globally for every coding agent on the machine. Extra args are forwarded.
+# user-globally for every coding agent on the machine, and — on a human terminal — offers the
+# browser login (the CLI reads the answer from /dev/tty; unattended runs are never prompted).
+# Pass -y for a hard non-interactive run. Extra args are forwarded.
 set -eu
 
-curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh -s -- --agents -y "$@"
+curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh -s -- --agents "$@"
