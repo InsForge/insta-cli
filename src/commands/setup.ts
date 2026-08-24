@@ -60,7 +60,10 @@ export function parseInstalledAgents(output: string): { count: number; names: st
   for (const line of output.split('\n')) {
     const plain = line.replace(/\x1b\[[0-9;]*m/g, '')
     // The tool boxes each line ("│    → ~/.claude/skills/insta   │"), so don't anchor to EOL.
-    const m = plain.match(/→\s*(\S+)\/skills\/[A-Za-z0-9_-]+/)
+    // Separator-agnostic: on Windows the tool prints C:\Users\…\.claude\skills\insta — a
+    // forward-slash-only match found nothing there, collapsing the summary to a nameless
+    // "Agents set up" (user report).
+    const m = plain.match(/→\s*(\S+)[\\/]skills[\\/][A-Za-z0-9_-]+/)
     if (m && m[1]) paths.add(m[1])
   }
   const names: string[] = []
@@ -518,7 +521,7 @@ export async function setupAgent(
   // THE summary line. The restart note exists because config-file agents only read their MCP
   // config at startup; the skill files need no restart.
   const mcpOk = claude === 'new' || claude === 'existing' || others.length > 0
-  info(`${summarizeInstall(res.output ?? '')} — ready to use InstaCloud${mcpOk ? ' (skill + MCP; restart any open tools)' : ''}`)
+  info(`${summarizeInstall(res.output ?? '')} — ready to use InstaCloud${mcpOk ? ' (CLI + skill + MCP; restart any open tools)' : ''}`)
   if (claude === 'new' && !opts.mcpToken) {
     info('  Claude Code first use: run `/mcp` and authorize in the browser (headless machines: `insta setup agent --mcp-token`)')
   }

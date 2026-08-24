@@ -235,7 +235,7 @@ const captureSetupOutput = async (installConfigs: () => Promise<string[]>): Prom
 test('ONE agents summary line (skills + MCP folded) and one concrete next: action', async () => {
   const out = await captureSetupOutput(async () => ['Cursor', 'Factory Droid'])
   // Exactly one ✓ line for the whole agent setup — no separate MCP inventory of agent names.
-  expect(out).toContain('— ready to use InstaCloud (skill + MCP; restart any open tools)')
+  expect(out).toContain('— ready to use InstaCloud (CLI + skill + MCP; restart any open tools)')
   expect(out.split('\n').filter((l) => l.includes('✓'))).toHaveLength(1)
   expect(out).not.toContain('✓ MCP —')                         // the separate MCP line is gone
   expect(out).not.toContain('also configured for')             // the old second MCP line is gone
@@ -267,14 +267,14 @@ test('fresh Claude Code registration adds ONLY the one-time /mcp authorize hint 
       undefined, async () => [], async () => {}, storedProd, noSwitch,
       { ask: async () => false, login: async () => {}, stdinTty: false, stdoutTty: false })
   } finally { spy.mockRestore() }
-  expect(out).toContain('— ready to use InstaCloud (skill + MCP; restart any open tools)')
+  expect(out).toContain('— ready to use InstaCloud (CLI + skill + MCP; restart any open tools)')
   expect(out).toContain('Claude Code first use: run `/mcp` and authorize in the browser')
   expect(out.split('\n').filter((l) => l.includes('✓'))).toHaveLength(1) // hint is indented, not a second checkmark
 })
 
 test('the summary still notes skill + MCP when only Claude Code has MCP', async () => {
   const out = await captureSetupOutput(async () => [])
-  expect(out).toContain('— ready to use InstaCloud (skill + MCP; restart any open tools)')
+  expect(out).toContain('— ready to use InstaCloud (CLI + skill + MCP; restart any open tools)')
   expect(out).not.toContain('✓ MCP —')
 })
 

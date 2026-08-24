@@ -22,6 +22,18 @@ const SAMPLE = `
 ├────────────────────────────────────────╯
 `
 
+test('parseInstalledAgents handles Windows backslash paths (user report: nameless "Agents set up")', () => {
+  const out = [
+    String.raw`│    → C:\Users\olive\.agents\skills\insta   │`,
+    String.raw`│    → C:\Users\olive\.claude\skills\insta   │`,
+    String.raw`│    → C:\Users\olive\.codex\skills\insta   │`,
+  ].join('\n')
+  const { count, names } = parseInstalledAgents(out)
+  expect(count).toBe(3)
+  expect(names).toEqual(['Universal (.agents)', 'Claude Code', 'OpenAI Codex'])
+  expect(summarizeInstall(out)).toBe('✓ Agents — Universal (.agents), Claude Code, OpenAI Codex')
+})
+
 test('summary names the well-known agents and rolls the rest into +N more', () => {
   const { count, names } = parseInstalledAgents(SAMPLE)
   expect(count).toBe(7)
