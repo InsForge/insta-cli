@@ -300,7 +300,9 @@ export async function connectWithPsql(url: string, spawnImpl: typeof spawn = spa
   // Strip ambient PG* first: parent-env PGHOSTADDR/PGSERVICE/PGOPTIONS/PGSSL* would silently
   // redirect or reshape the connection away from the service this command just resolved.
   const env: NodeJS.ProcessEnv = { ...process.env }
-  for (const k of Object.keys(env)) if (k.startsWith('PG')) delete env[k]
+  // Case-insensitive: Windows env names are case-insensitive, so ambient `pgservice` redirects
+  // psql just as PGSERVICE does.
+  for (const k of Object.keys(env)) if (k.slice(0, 2).toUpperCase() === 'PG') delete env[k]
   Object.assign(env, psqlEnvFromUrl(url))
   return await new Promise<number>((resolve, reject) => {
     const child = spawnImpl('psql', [], { stdio: 'inherit', env })
