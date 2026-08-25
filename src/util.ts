@@ -2,26 +2,27 @@
 import { createInterface } from 'node:readline'
 import { spawn } from 'node:child_process'
 
-/** How to launch the default browser for `url` on `platform`. Pure so the Windows quoting is
- *  testable. On Windows the launcher is `cmd /c start`, and cmd.exe treats a bare `&` as a
- *  command separator — an unquoted OAuth URL gets truncated at its first query joiner (the
- *  browser then opens `…?provider=github` with no `redirect`, and the platform rightly 400s).
- *  Node's own arg quoting only kicks in on whitespace, so we quote the URL ourselves and pass
- *  the line verbatim: `cmd /c start "" "<url>"` (the empty quotes are start's window title —
- *  without them the quoted URL itself would be taken as the title). A literal `"` would end our
- *  quoting, so it is percent-encoded first; it can never appear in a well-formed URL anyway. */
-export function openUrlSpawn(url: string, platform: NodeJS.Platform = process.platform): { cmd: string; args: string[]; verbatim: boolean } {
+/** How to launch the default browser for `url` on `platform`. Pure so the Windows encoding is
+ *  testable. On Windows NO shell may ever parse the URL: cmd.exe splits at bare `&` (which #138
+ *  fixed by quoting) but ALSO expands `%…%` sequences even inside quotes, and a percent-encoded
+ *  OAuth redirect (`http%3A%2F%2F127.0.0.1…`) is nothing but such sequences. So the launch goes
+ *  through PowerShell's -EncodedCommand instead: the whole `Start-Process '<url>'` line travels
+ *  as base64(UTF-16LE) — no argument parsing anywhere — and the single-quoted PS literal
+ *  interpolates nothing (embedded `'` doubled per PS rules). Start-Process on a URL is
+ *  ShellExecute, i.e. the default browser. */
+export function openUrlSpawn(url: string, platform: NodeJS.Platform = process.platform): { cmd: string; args: string[] } {
   if (platform === 'win32') {
-    return { cmd: 'cmd', args: ['/c', 'start', '""', `"${url.replaceAll('"', '%22')}"`], verbatim: true }
+    const encoded = Buffer.from(`Start-Process '${url.replaceAll("'", "''")}'`, 'utf16le').toString('base64')
+    return { cmd: 'powershell', args: ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded] }
   }
-  return { cmd: platform === 'darwin' ? 'open' : 'xdg-open', args: [url], verbatim: false }
+  return { cmd: platform === 'darwin' ? 'open' : 'xdg-open', args: [url] }
 }
 
 // Best-effort: open a URL in the user's default browser. Returns false if we couldn't launch.
 export function openUrl(url: string): boolean {
-  const { cmd, args, verbatim } = openUrlSpawn(url)
+  const { cmd, args } = openUrlSpawn(url)
   try {
-    const child = spawn(cmd, args, { stdio: 'ignore', detached: true, windowsVerbatimArguments: verbatim })
+    const child = spawn(cmd, args, { stdio: 'ignore', detached: true, windowsHide: true })
     child.on('error', () => {})
     child.unref()
     return true
