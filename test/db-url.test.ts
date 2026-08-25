@@ -91,6 +91,27 @@ describe('connectWithPsql', () => {
     expect(call?.env.PGHOST).toBe('insta-abc.db.example.com')
   })
 
+  it('strips ambient PG* vars so parent env cannot redirect the connection', async () => {
+    process.env.PGHOSTADDR = '10.9.9.9'
+    process.env.PGSERVICE = 'evil'
+    try {
+      let env: Record<string, string | undefined> | undefined
+      const child = new FakeChild()
+      const code = connectWithPsql(DSN, ((_c: string, _a: string[], opts: { env: Record<string, string> }) => {
+        env = opts.env
+        queueMicrotask(() => child.emit('close', 0))
+        return child
+      }) as any)
+      expect(await code).toBe(0)
+      expect(env?.PGHOSTADDR).toBeUndefined()
+      expect(env?.PGSERVICE).toBeUndefined()
+      expect(env?.PGHOST).toBe('insta-abc.db.example.com')
+    } finally {
+      delete process.env.PGHOSTADDR
+      delete process.env.PGSERVICE
+    }
+  })
+
   it('maps signal death to 128+signo instead of a fake exit 1', async () => {
     const child = new FakeChild()
     const code = connectWithPsql(DSN, (() => {

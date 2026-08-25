@@ -297,8 +297,13 @@ export function psqlEnvFromUrl(url: string): Record<string, string> {
 
 /** Core, dependency-injected for tests: spawn psql against the DSN (via PG* env, never argv), return its exit code. */
 export async function connectWithPsql(url: string, spawnImpl: typeof spawn = spawn): Promise<number> {
+  // Strip ambient PG* first: parent-env PGHOSTADDR/PGSERVICE/PGOPTIONS/PGSSL* would silently
+  // redirect or reshape the connection away from the service this command just resolved.
+  const env: NodeJS.ProcessEnv = { ...process.env }
+  for (const k of Object.keys(env)) if (k.startsWith('PG')) delete env[k]
+  Object.assign(env, psqlEnvFromUrl(url))
   return await new Promise<number>((resolve, reject) => {
-    const child = spawnImpl('psql', [], { stdio: 'inherit', env: { ...process.env, ...psqlEnvFromUrl(url) } })
+    const child = spawnImpl('psql', [], { stdio: 'inherit', env })
     child.on('error', (e: NodeJS.ErrnoException) =>
       reject(e.code === 'ENOENT'
         ? new Error('psql not found on PATH — install the postgres client, or print the DSN with `insta db url`')

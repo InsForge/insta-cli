@@ -70,8 +70,9 @@ insta deploy .
 ```
 
 `project create` makes an empty project and links the current directory. Services are
-opt-in, so you add only what you need. `secrets` writes the current branch's credentials to
-`./.env`. `deploy .` builds the directory remotely and ships it to the branch's compute
+opt-in, so you add only what you need. `secrets` writes the current branch's user-defined
+secrets to `./.env` (the postgres connection string is read with `insta db url`). `deploy .`
+builds the directory remotely and ships it to the branch's compute
 service; it needs a `Dockerfile`, but no local Docker.
 
 ## Authentication
