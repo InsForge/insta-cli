@@ -1,5 +1,31 @@
 import { describe, it, expect, vi, afterEach, afterAll } from 'vitest'
-import { serializeEnv, handleApproval, nextActionsLines } from '../src/util.js'
+import { serializeEnv, handleApproval, nextActionsLines, openUrlSpawn } from '../src/util.js'
+
+// The OAuth authorize URL carries &-joined query params. cmd.exe splits an unquoted line at every
+// bare & — the browser then opens `…?provider=github` alone and the platform 400s with
+// "querystring must have required property 'redirect'" — so the Windows launch must pass the URL
+// as ONE quoted verbatim argument.
+describe('openUrlSpawn', () => {
+  const oauthUrl = 'https://api.instacloud.com/auth/cli/authorize?provider=github&redirect=http%3A%2F%2F127.0.0.1%3A51234%2Fcallback&state=abc123'
+
+  it('win32: quotes the whole URL as one verbatim start argument (no bare & for cmd to split)', () => {
+    const { cmd, args, verbatim } = openUrlSpawn(oauthUrl, 'win32')
+    expect(cmd).toBe('cmd')
+    expect(verbatim).toBe(true)
+    // `start ""` — first quoted token is the window title; the URL must arrive after it, quoted.
+    expect(args).toEqual(['/c', 'start', '""', `"${oauthUrl}"`])
+  })
+
+  it('win32: a literal quote cannot break out of the quoted argument', () => {
+    const { args } = openUrlSpawn('https://x.test/?a="b"', 'win32')
+    expect(args[3]).toBe('"https://x.test/?a=%22b%22"')
+  })
+
+  it('darwin/linux: plain single-arg launchers, never verbatim', () => {
+    expect(openUrlSpawn(oauthUrl, 'darwin')).toEqual({ cmd: 'open', args: [oauthUrl], verbatim: false })
+    expect(openUrlSpawn(oauthUrl, 'linux')).toEqual({ cmd: 'xdg-open', args: [oauthUrl], verbatim: false })
+  })
+})
 
 describe('serializeEnv', () => {
   it('quotes and escapes values; ends with newline', () => {
