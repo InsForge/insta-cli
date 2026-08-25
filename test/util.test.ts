@@ -9,18 +9,30 @@ import { serializeEnv, handleApproval, nextActionsLines, openUrl, openUrlSpawn }
 describe('openUrlSpawn', () => {
   const oauthUrl = 'https://api.instacloud.com/auth/cli/authorize?provider=github&redirect=http%3A%2F%2F127.0.0.1%3A51234%2Fcallback&state=abc123'
   const decodePs = (args: string[]): string => Buffer.from(args[args.length - 1]!, 'base64').toString('utf16le')
+  // The URL rides as base64 INSIDE the script — pull it back out and decode it.
+  const decodeUrl = (args: string[]): string => {
+    const script = decodePs(args)
+    const m = script.match(/FromBase64String\('([A-Za-z0-9+/=]+)'\)/)
+    return m ? Buffer.from(m[1]!, 'base64').toString('utf8') : script
+  }
 
-  it('win32: base64-encoded Start-Process carries the URL byte-for-byte (& and %XX intact)', () => {
+  it('win32: pinned powershell; the URL survives byte-for-byte (& and %XX intact) with no URL byte in PS source', () => {
     const { cmd, args } = openUrlSpawn(oauthUrl, 'win32', 'C:\\Windows')
     // Absolute pinned path — a bare `powershell` would resolve via the CURRENT DIRECTORY first.
     expect(cmd).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
     expect(args.slice(0, -1)).toEqual(['-NoProfile', '-NonInteractive', '-EncodedCommand'])
-    expect(decodePs(args)).toBe(`Start-Process '${oauthUrl}'`)
+    expect(decodeUrl(args)).toBe(oauthUrl)
+    // The whole script is ASCII by construction — no URL byte can appear in PS source.
+    expect(decodePs(args)).toMatch(/^[\x20-\x7e]+$/)
   })
 
-  it('win32: an embedded single quote is doubled, so it cannot end the PS literal', () => {
-    const { args } = openUrlSpawn("https://x.test/?a='b'", 'win32')
-    expect(decodePs(args)).toBe("Start-Process 'https://x.test/?a=''b'''")
+  it('win32: quote characters — ASCII or the smart quotes PowerShell also honors — cannot break out', () => {
+    // U+2019/U+2018 terminate a single-quoted PS literal just like ASCII ' does, so a URL like
+    // this would smuggle `Start-Process calc` into an interpolated script.
+    const hostile = 'https://x.test/\u2019; Start-Process calc; \u2018?a=\'b\''
+    const { args } = openUrlSpawn(hostile, 'win32')
+    expect(decodeUrl(args)).toBe(hostile) // delivered as DATA…
+    expect(decodePs(args)).toMatch(/^[\x20-\x7e]+$/) // …never as PS source
   })
 
   it('darwin/linux: plain single-arg launchers', () => {

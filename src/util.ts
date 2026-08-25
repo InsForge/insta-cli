@@ -18,10 +18,16 @@ export function openUrlSpawn(
   systemRoot: string = process.env.SYSTEMROOT ?? process.env.windir ?? 'C:\\Windows',
 ): { cmd: string; args: string[] } {
   if (platform === 'win32') {
-    const encoded = Buffer.from(`Start-Process '${url.replaceAll("'", "''")}'`, 'utf16le').toString('base64')
+    // The URL never appears in PowerShell SOURCE at all: it travels as base64 inside the script
+    // and is decoded by .NET at runtime. Interpolating it into a quoted literal is not enough —
+    // PowerShell honors smart quotes (U+2018–U+201B) as string delimiters too, so ASCII-only
+    // escaping still leaves a breakout. The script below is pure ASCII by construction (the
+    // base64 alphabet), so no byte of any URL can terminate anything.
+    const urlB64 = Buffer.from(url, 'utf8').toString('base64')
+    const script = `Start-Process ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${urlB64}')))`
     return {
       cmd: `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
-      args: ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+      args: ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
     }
   }
   return { cmd: platform === 'darwin' ? 'open' : 'xdg-open', args: [url] }
