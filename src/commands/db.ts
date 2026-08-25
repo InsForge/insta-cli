@@ -274,17 +274,40 @@ export async function dbUrl(opts: Opts): Promise<void> {
   process.stdout.write(r.url + '\n')
 }
 
-/** Core, dependency-injected for tests: spawn psql against the DSN, return its exit code. */
+// Decompose a postgres DSN into libpq PG* environment variables. Pure, exported for tests.
+// The credential must NOT ride in psql's argv — process arguments are visible to every local
+// user via `ps`, so a secrets.read-gated value would leak the moment the session starts. Child
+// environment is not (the `insta run` model), and PG* env is a libpq-supported mechanism, so
+// psql runs with an empty argv. `sslmode` is the only query param the platform's DSNs carry;
+// anything else would be a platform-side change this mapping should then learn about.
+export function psqlEnvFromUrl(url: string): Record<string, string> {
+  const u = new URL(url)
+  const env: Record<string, string> = {}
+  if (u.hostname) env.PGHOST = decodeURIComponent(u.hostname)
+  if (u.port) env.PGPORT = u.port
+  if (u.username) env.PGUSER = decodeURIComponent(u.username)
+  if (u.password) env.PGPASSWORD = decodeURIComponent(u.password)
+  const db = u.pathname.replace(/^\//, '')
+  if (db) env.PGDATABASE = decodeURIComponent(db)
+  const sslmode = u.searchParams.get('sslmode')
+  if (sslmode) env.PGSSLMODE = sslmode
+  return env
+}
+
+/** Core, dependency-injected for tests: spawn psql against the DSN (via PG* env, never argv), return its exit code. */
 export async function connectWithPsql(url: string, spawnImpl: typeof spawn = spawn): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
-    const child = spawnImpl('psql', [url], { stdio: 'inherit' })
+    const child = spawnImpl('psql', [], { stdio: 'inherit', env: { ...process.env, ...psqlEnvFromUrl(url) } })
     child.on('error', (e: NodeJS.ErrnoException) =>
       reject(e.code === 'ENOENT'
         ? new Error('psql not found on PATH — install the postgres client, or print the DSN with `insta db url`')
         : e))
-    child.on('close', (code) => resolve(code ?? 1))
+    // Signal death reports code null — map to the conventional 128+signo so the advertised
+    // exit-status passthrough holds for Ctrl-C'd/killed sessions too.
+    child.on('close', (code, signal) => resolve(code ?? (signal ? 128 + (SIGNO[signal] ?? 0) : 1)))
   })
 }
+const SIGNO: Record<string, number> = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGKILL: 9, SIGTERM: 15 }
 
 // Open an interactive psql session on the postgres service. The DSN never touches disk or argv
 // history beyond the child process. Exits with psql's own exit code (agents rely on this, as

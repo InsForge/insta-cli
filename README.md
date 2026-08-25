@@ -104,10 +104,12 @@ the two branches diverge independently. A project is capped at 10 branches.
 
 ### Credentials come from the secret seam, not a file you maintain
 
-`insta secrets` fetches the current branch's bundle and writes `./.env`. `insta run <cmd>`
-does the same without touching disk, injecting the bundle into the child process only.
-Credential names are per service — `DATABASE_URL`, `BUCKET_NAME`, `AWS_ACCESS_KEY_ID` —
-suffixed with the service name when a project has more than one service of a type.
+`insta secrets` fetches the current branch's **user-defined** secrets and writes `./.env`.
+`insta run <cmd>` does the same without touching disk, injecting them into the child process
+only. Provider-minted service credentials (`DATABASE_URL`, `BUCKET_NAME`,
+`AWS_ACCESS_KEY_ID`, …) are not in that bundle — they reach compute through explicit
+`insta secrets bind` rules, and the postgres connection string is read directly with
+`insta db url` (or `insta db connect` for a psql session).
 
 ### Destructive actions can require approval
 

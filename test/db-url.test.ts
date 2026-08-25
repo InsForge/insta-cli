@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it } from 'vitest'
 
-import { connectWithPsql, resolveDbUrl } from '../src/commands/db.js'
+import { connectWithPsql, psqlEnvFromUrl, resolveDbUrl } from '../src/commands/db.js'
 
 function stubApi(services: Array<{ id: string; type: string; name: string }>, credentials: Record<string, string>, status = 200) {
   const paths: string[] = []
@@ -45,30 +45,64 @@ describe('resolveDbUrl', () => {
   })
 
   it('parks on a 202 approval: null result, exit code 2', async () => {
-    expect(await resolveDbUrl(stubApi(services, {}, 202), 'p1', undefined, undefined)).toBeNull()
-    expect(process.exitCode).toBe(2)
-    process.exitCode = 0
+    try {
+      expect(await resolveDbUrl(stubApi(services, {}, 202), 'p1', undefined, undefined)).toBeNull()
+      expect(process.exitCode).toBe(2)
+    } finally {
+      process.exitCode = 0
+    }
   })
 })
 
 class FakeChild extends EventEmitter {}
 
+const DSN = 'postgres://postgres:s3cr%40t@insta-abc.db.example.com:5432/instadb?sslmode=require'
+
+describe('psqlEnvFromUrl', () => {
+  it('maps every DSN part to its libpq variable, percent-decoded', () => {
+    expect(psqlEnvFromUrl(DSN)).toEqual({
+      PGHOST: 'insta-abc.db.example.com',
+      PGPORT: '5432',
+      PGUSER: 'postgres',
+      PGPASSWORD: 's3cr@t',
+      PGDATABASE: 'instadb',
+      PGSSLMODE: 'require',
+    })
+  })
+
+  it('omits what the DSN omits instead of setting empties', () => {
+    expect(psqlEnvFromUrl('postgres://host/db')).toEqual({ PGHOST: 'host', PGDATABASE: 'db' })
+  })
+})
+
 describe('connectWithPsql', () => {
-  it('passes the DSN as psql argv and returns its exit code', async () => {
-    let call: { cmd: string; args: string[] } | undefined
+  it('keeps the credential out of argv — psql gets PG* env and an empty argv — and returns its exit code', async () => {
+    let call: { cmd: string; args: string[]; env: Record<string, string> } | undefined
     const child = new FakeChild()
-    const code = connectWithPsql('pg://db', ((cmd: string, args: string[]) => {
-      call = { cmd, args }
+    const code = connectWithPsql(DSN, ((cmd: string, args: string[], opts: { env: Record<string, string> }) => {
+      call = { cmd, args, env: opts.env }
       queueMicrotask(() => child.emit('close', 3))
       return child
     }) as any)
     expect(await code).toBe(3)
-    expect(call).toEqual({ cmd: 'psql', args: ['pg://db'] })
+    expect(call?.cmd).toBe('psql')
+    expect(call?.args).toEqual([])
+    expect(call?.env.PGPASSWORD).toBe('s3cr@t')
+    expect(call?.env.PGHOST).toBe('insta-abc.db.example.com')
+  })
+
+  it('maps signal death to 128+signo instead of a fake exit 1', async () => {
+    const child = new FakeChild()
+    const code = connectWithPsql(DSN, (() => {
+      queueMicrotask(() => child.emit('close', null, 'SIGTERM'))
+      return child
+    }) as any)
+    expect(await code).toBe(143)
   })
 
   it('turns a missing psql binary into guidance, not a raw ENOENT', async () => {
     const child = new FakeChild()
-    const code = connectWithPsql('pg://db', (() => {
+    const code = connectWithPsql(DSN, (() => {
       queueMicrotask(() => child.emit('error', Object.assign(new Error('spawn psql ENOENT'), { code: 'ENOENT' })))
       return child
     }) as any)
