@@ -188,7 +188,11 @@ function browserOauth(apiUrl: string, provider: string): Promise<string> {
       const redirect = `http://127.0.0.1:${port}/callback`
       const authorizeUrl = `${apiUrl}/auth/cli/authorize?provider=${encodeURIComponent(provider)}&redirect=${encodeURIComponent(redirect)}&state=${state}`
       info(`opening browser to authorize with ${provider}…`)
-      if (!openUrl(authorizeUrl)) info(`open this URL to continue:\n  ${authorizeUrl}`)
+      // Always print the URL: a launcher that fails to start reports it on spawn's ASYNC error
+      // event, so openUrl's return value cannot see it (e.g. powershell.exe blocked by AppLocker
+      // on hardened fleets) — and the silent variant of that failure looks exactly like a hang.
+      info(`if nothing opens, use this URL:\n  ${authorizeUrl}`)
+      openUrl(authorizeUrl)
       info('waiting for you to finish in the browser… (times out in 2m; ctrl-c to abort)')
       timer = setTimeout(() => { server.close(); reject(new Error('timed out waiting for browser login (2m)')) }, 120_000)
     })

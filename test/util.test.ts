@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, afterAll } from 'vitest'
-import { serializeEnv, handleApproval, nextActionsLines, openUrlSpawn } from '../src/util.js'
+import { serializeEnv, handleApproval, nextActionsLines, openUrl, openUrlSpawn } from '../src/util.js'
 
 // The OAuth authorize URL is hostile to BOTH Windows shells: cmd.exe splits an unquoted line at
 // every bare `&` (the tester-reported "querystring must have required property 'redirect'"), and
@@ -11,8 +11,9 @@ describe('openUrlSpawn', () => {
   const decodePs = (args: string[]): string => Buffer.from(args[args.length - 1]!, 'base64').toString('utf16le')
 
   it('win32: base64-encoded Start-Process carries the URL byte-for-byte (& and %XX intact)', () => {
-    const { cmd, args } = openUrlSpawn(oauthUrl, 'win32')
-    expect(cmd).toBe('powershell')
+    const { cmd, args } = openUrlSpawn(oauthUrl, 'win32', 'C:\\Windows')
+    // Absolute pinned path — a bare `powershell` would resolve via the CURRENT DIRECTORY first.
+    expect(cmd).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
     expect(args.slice(0, -1)).toEqual(['-NoProfile', '-NonInteractive', '-EncodedCommand'])
     expect(decodePs(args)).toBe(`Start-Process '${oauthUrl}'`)
   })
@@ -25,6 +26,17 @@ describe('openUrlSpawn', () => {
   it('darwin/linux: plain single-arg launchers', () => {
     expect(openUrlSpawn(oauthUrl, 'darwin')).toEqual({ cmd: 'open', args: [oauthUrl] })
     expect(openUrlSpawn(oauthUrl, 'linux')).toEqual({ cmd: 'xdg-open', args: [oauthUrl] })
+  })
+})
+
+// The launchers are ShellExecute-family: they RUN whatever target they are handed (a UNC path is
+// an execution), and a smart quote could otherwise terminate the PS literal — so openUrl refuses
+// everything that is not a web URL before any spawn happens.
+describe('openUrl scheme gate', () => {
+  it('refuses non-http(s) targets without spawning', () => {
+    expect(openUrl('file:///etc/passwd')).toBe(false)
+    expect(openUrl('\\\\attacker\\share\\evil.exe')).toBe(false)
+    expect(openUrl('x.test/no-scheme')).toBe(false)
   })
 })
 
