@@ -385,6 +385,7 @@ export async function templateDeploy(target: string, opts: TemplateDeployOpts = 
   if (opts.json) return printJson(dep)
   info(`template ${codeLabel} deployed to branch ${branchName}`)
   for (const u of deploymentUrls(dep)) info(`  ${u}`)
-  info('next: run `insta secrets` to refresh .env with the new service credentials')
+  // Provider credentials are not in the `insta secrets` bundle — point at the paths that exist.
+  info('next: `insta db url` prints the postgres DSN; bind service credentials into compute with `insta secrets bind`; `insta secrets` refreshes user-defined secrets in .env')
   renderNextActions(dep.nextActions)
 }
