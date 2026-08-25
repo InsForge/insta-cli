@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, afterAll } from 'vitest'
-import { serializeEnv, handleApproval, nextActionsLines, openUrl, openUrlSpawn } from '../src/util.js'
+import { serializeEnv, handleApproval, nextActionsLines, isWebUrl, openUrl, openUrlSpawn } from '../src/util.js'
 
 // The OAuth authorize URL is hostile to BOTH Windows shells: cmd.exe splits an unquoted line at
 // every bare `&` (the tester-reported "querystring must have required property 'redirect'"), and
@@ -42,9 +42,15 @@ describe('openUrlSpawn', () => {
 })
 
 // The launchers are ShellExecute-family: they RUN whatever target they are handed (a UNC path is
-// an execution), and a smart quote could otherwise terminate the PS literal — so openUrl refuses
-// everything that is not a web URL before any spawn happens.
+// an execution) — so openUrl refuses everything that is not a web URL before any spawn happens.
 describe('openUrl scheme gate', () => {
+  it('accepts real authorize/billing URLs — a broken gate regex must fail HERE, not as a silent no-open', () => {
+    // Positive coverage via the exported gate (calling openUrl(true-case) would spawn a browser).
+    expect(isWebUrl('https://api.instacloud.com/auth/cli/authorize?provider=github&redirect=x&state=y')).toBe(true)
+    expect(isWebUrl('http://localhost:8080/session')).toBe(true)
+    expect(isWebUrl('HTTPS://X.TEST/upper-scheme')).toBe(true)
+  })
+
   it('refuses non-http(s) targets without spawning', () => {
     expect(openUrl('file:///etc/passwd')).toBe(false)
     expect(openUrl('\\\\attacker\\share\\evil.exe')).toBe(false)

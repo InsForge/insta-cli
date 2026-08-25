@@ -33,13 +33,15 @@ export function openUrlSpawn(
   return { cmd: platform === 'darwin' ? 'open' : 'xdg-open', args: [url] }
 }
 
+// ShellExecute-family launchers (Start-Process/open/xdg-open) run ANY target they're handed —
+// a UNC path is an execution, not a navigation — so only web URLs may reach them.
+export const isWebUrl = (url: string): boolean => /^https?:\/\//i.test(url)
+
 // Best-effort: open a URL in the user's default browser. Returns false if we couldn't launch —
 // but a launcher that starts and THEN fails (ENOENT arrives on the async 'error' event) still
 // reads as true, so callers must not treat true as proof the browser opened.
 export function openUrl(url: string): boolean {
-  // ShellExecute-family launchers (Start-Process/open/xdg-open) run ANY target they're handed —
-  // a UNC path is an execution, not a navigation — so only web URLs may pass.
-  if (!/^https?:\/\//i.test(url)) return false
+  if (!isWebUrl(url)) return false
   const { cmd, args } = openUrlSpawn(url)
   try {
     const child = spawn(cmd, args, { stdio: 'ignore', detached: true })
