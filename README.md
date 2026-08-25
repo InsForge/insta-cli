@@ -65,6 +65,7 @@ insta login --oauth github
 insta project create my-app
 insta services add postgres db
 insta services add compute api
+insta secrets bind DATABASE_URL postgres/db --to compute/api
 insta secrets
 insta deploy .
 ```
