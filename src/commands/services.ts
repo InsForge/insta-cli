@@ -121,6 +121,14 @@ export async function servicesAdd(type: string, name: string, opts: ServicesAddO
   const img = svc.image ? `  running ${svc.image}${svc.port ? `:${svc.port}` : ''}` : ''
   const vol = svc.volume_gib ? `  vol ${svc.volume_gib}Gi at /data` : ''
   info(`added ${type} service ${name} on ${branch ?? 'default'} (${svc.id})${access}${svc.region ? `  ${svc.region}` : ''}${img}${vol}${svc.domain ? ` — ${svc.domain}` : ''}`)
+  // Discoverability: the DB is directly dialable, but its DSN is deliberately absent from the
+  // general `insta secrets` bundle — without this line nothing in the product says how to reach it.
+  if (type === 'postgres') {
+    // The hint must be runnable as printed: carry --branch when the service was created on a
+    // branch other than the linked one, and --group so it survives multiple postgres services.
+    const flags = `${opts.branch ? ` --branch ${opts.branch}` : ''} --group ${name}`
+    info(`  connect: \`insta db url${flags}\` prints the connection string, \`insta db connect${flags}\` opens psql (--group optional with a single postgres service)`)
+  }
   renderNextActions(res.body.nextActions)
 }
 

@@ -70,8 +70,9 @@ insta deploy .
 ```
 
 `project create` makes an empty project and links the current directory. Services are
-opt-in, so you add only what you need. `secrets` writes the current branch's credentials to
-`./.env`. `deploy .` builds the directory remotely and ships it to the branch's compute
+opt-in, so you add only what you need. `secrets` writes the current branch's user-defined
+secrets to `./.env` (the postgres connection string is read with `insta db url`). `deploy .`
+builds the directory remotely and ships it to the branch's compute
 service; it needs a `Dockerfile`, but no local Docker.
 
 ## Authentication
@@ -104,10 +105,12 @@ the two branches diverge independently. A project is capped at 10 branches.
 
 ### Credentials come from the secret seam, not a file you maintain
 
-`insta secrets` fetches the current branch's bundle and writes `./.env`. `insta run <cmd>`
-does the same without touching disk, injecting the bundle into the child process only.
-Credential names are per service — `DATABASE_URL`, `BUCKET_NAME`, `AWS_ACCESS_KEY_ID` —
-suffixed with the service name when a project has more than one service of a type.
+`insta secrets` fetches the current branch's **user-defined** secrets and writes `./.env`.
+`insta run <cmd>` does the same without touching disk, injecting them into the child process
+only. Provider-minted service credentials (`DATABASE_URL`, `BUCKET_NAME`,
+`AWS_ACCESS_KEY_ID`, …) are not in that bundle — they reach compute through explicit
+`insta secrets bind` rules, and the postgres connection string is read directly with
+`insta db url` (or `insta db connect` for a psql session).
 
 ### Destructive actions can require approval
 
@@ -197,6 +200,7 @@ build never reaches a production installer.
 | `insta run <cmd>` | Run a command with the branch bundle injected, nothing written to disk |
 | `insta deploy [dir]` | Deploy a source directory (built remotely) or `--image <url>` |
 | `insta compute` | `start` · `stop` · `suspend` · `status` · `set-domain` · `check-domain` · `remove-domain` |
+| `insta db` | `url` (print the postgres DSN) · `connect` (psql session) · `limits` · `stats` · `always-on` · `volume` |
 | `insta regions` | Regions available for postgres and compute |
 | `insta manifest` | Agent-legible view of every branch and its URLs |
 | `insta metrics` · `logs` · `events` | Service metrics; runtime logs (`--deploy` for deploy events); audit timeline |

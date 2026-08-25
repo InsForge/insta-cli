@@ -1,6 +1,8 @@
+import { spawn } from 'node:child_process'
+import { constants as osConstants } from 'node:os'
 import { ApiClient, ApiError, requireProject } from '../api.js'
 import { info, printJson, handleApproval } from '../util.js'
-import { parseVolumeGib } from './services.js'
+import { parseVolumeGib, q, resolveSoleService } from './services.js'
 
 type Opts = { branch?: string; group?: string; json?: boolean }
 
@@ -228,4 +230,103 @@ export async function dbVolume(opts: Opts & { size?: string }): Promise<void> {
   if (opts.json) return printJson(res.body)
   const vg = res.body?.volumeGib
   info(`postgres ${opts.group ?? 'default'}: volume ${typeof vg === 'number' ? `grown to ${vg}Gi` : `set to ${sizeGib}Gi`}`)
+}
+
+export type DbUrlResolution = { serviceName: string; url: string }
+
+// Resolve the postgres service (sole, or --group) and its connection string. Two reads: the
+// branch's services list names the service; GET /services/:id/credentials (gated secrets.read)
+// carries the value. Provider-minted credentials are canonical within their source service
+// (DATABASE_URL) and deliberately absent from the general `insta secrets` bundle, so this is the
+// read that yields the DSN. The credentials call carries no branch param — the service id is
+// already branch-scoped by the list. Returns null when the read parked on an approval
+// (handleApproval already spoke). Takes the client as an argument so tests drive it with a stub,
+// per this repo's pure-seam convention.
+export async function resolveDbUrl(
+  api: {
+    request: (m: string, p: string) => Promise<any>
+    rawRequest: (m: string, p: string) => Promise<{ status: number; body: any }>
+  },
+  projectId: string,
+  branch: string | undefined,
+  group: string | undefined,
+  json?: boolean,
+): Promise<DbUrlResolution | null> {
+  const { services } = await api.request('GET', `/projects/${projectId}/services${q(branch)}`)
+  const svc = resolveSoleService(services as Array<{ id: string; type: string; name: string }>, 'postgres', group)
+  const res = await api.rawRequest('GET', `/projects/${projectId}/services/${svc.id}/credentials`)
+  if (handleApproval(res, json)) return null
+  const url = res.body?.credentials?.DATABASE_URL
+  if (typeof url !== 'string' || !url) {
+    throw new Error(`postgres ${svc.name} has no DATABASE_URL credential yet — still provisioning? (\`insta services list\` shows status)`)
+  }
+  return { serviceName: svc.name, url }
+}
+
+// Print the postgres connection string: the bare DSN on stdout, nothing else — pipe-friendly
+// (`psql "$(insta db url)"`), like `storage get --json` keeps stdout parseable.
+export async function dbUrl(opts: Opts): Promise<void> {
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const branch = opts.branch ?? p.branch
+  const r = await resolveDbUrl(api, p.projectId, branch, opts.group, opts.json)
+  if (!r) return
+  if (opts.json) return printJson({ service: r.serviceName, branch: branch ?? null, url: r.url })
+  process.stdout.write(r.url + '\n')
+}
+
+// Decompose a postgres DSN into libpq PG* environment variables. Pure, exported for tests.
+// The credential must NOT ride in psql's argv — process arguments are visible to every local
+// user via `ps`, so a secrets.read-gated value would leak the moment the session starts. Child
+// environment is not (the `insta run` model), and PG* env is a libpq-supported mechanism, so
+// psql runs with an empty argv. `sslmode` is the only query param the platform's DSNs carry;
+// anything else would be a platform-side change this mapping should then learn about.
+export function psqlEnvFromUrl(url: string): Record<string, string> {
+  const u = new URL(url)
+  const env: Record<string, string> = {}
+  if (u.hostname) env.PGHOST = decodeURIComponent(u.hostname)
+  if (u.port) env.PGPORT = u.port
+  if (u.username) env.PGUSER = decodeURIComponent(u.username)
+  if (u.password) env.PGPASSWORD = decodeURIComponent(u.password)
+  const db = u.pathname.replace(/^\//, '')
+  if (db) env.PGDATABASE = decodeURIComponent(db)
+  const sslmode = u.searchParams.get('sslmode')
+  if (sslmode) env.PGSSLMODE = sslmode
+  return env
+}
+
+/** Core, dependency-injected for tests: spawn psql against the DSN (via PG* env, never argv), return its exit code. */
+export async function connectWithPsql(url: string, spawnImpl: typeof spawn = spawn): Promise<number> {
+  // Strip ambient PG* first: parent-env PGHOSTADDR/PGSERVICE/PGOPTIONS/PGSSL* would silently
+  // redirect or reshape the connection away from the service this command just resolved.
+  const env: NodeJS.ProcessEnv = { ...process.env }
+  // Case-insensitive: Windows env names are case-insensitive, so ambient `pgservice` redirects
+  // psql just as PGSERVICE does.
+  for (const k of Object.keys(env)) if (k.slice(0, 2).toUpperCase() === 'PG') delete env[k]
+  Object.assign(env, psqlEnvFromUrl(url))
+  return await new Promise<number>((resolve, reject) => {
+    const child = spawnImpl('psql', [], { stdio: 'inherit', env })
+    child.on('error', (e: NodeJS.ErrnoException) =>
+      reject(e.code === 'ENOENT'
+        ? new Error('psql not found on PATH — install the postgres client, or print the DSN with `insta db url`')
+        : e))
+    // Signal death reports code null — map to the conventional 128+signo (full table from
+    // os.constants) so the advertised exit-status passthrough holds for Ctrl-C'd/killed sessions.
+    child.on('close', (code, signal) =>
+      resolve(code ?? (signal ? 128 + ((osConstants.signals as Record<string, number>)[signal] ?? 0) : 1)))
+  })
+}
+
+// Open an interactive psql session on the postgres service. The DSN never touches disk or argv
+// history beyond the child process. Exits with psql's own exit code (agents rely on this, as
+// with `compute exec`).
+export async function dbConnect(opts: Opts): Promise<void> {
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const branch = opts.branch ?? p.branch
+  const r = await resolveDbUrl(api, p.projectId, branch, opts.group, opts.json)
+  if (!r) return
+  // stderr: stdout belongs to psql (the `insta run` rule).
+  process.stderr.write(`psql → postgres/${r.serviceName}${branch ? ` (branch ${branch})` : ''} — a suspended instance wakes on connect, so the first prompt can take a few seconds\n`)
+  process.exit(await connectWithPsql(r.url))
 }
