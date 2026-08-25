@@ -6,10 +6,10 @@ import { spawn } from 'node:child_process'
  *  testable. On Windows NO shell may ever parse the URL: cmd.exe splits at bare `&` (which #138
  *  fixed by quoting) but ALSO expands `%…%` sequences even inside quotes, and a percent-encoded
  *  OAuth redirect (`http%3A%2F%2F127.0.0.1…`) is nothing but such sequences. So the launch goes
- *  through PowerShell's -EncodedCommand instead: the whole `Start-Process '<url>'` line travels
- *  as base64(UTF-16LE) — no argument parsing anywhere — and the single-quoted PS literal
- *  interpolates nothing (embedded `'` doubled per PS rules). Start-Process on a URL is
- *  ShellExecute, i.e. the default browser. */
+ *  through PowerShell's -EncodedCommand: a pure-ASCII script travels as base64(UTF-16LE) — no
+ *  argument parsing anywhere — and the URL itself rides as a second base64 payload INSIDE that
+ *  script, decoded by .NET at runtime, so no URL byte ever appears in PowerShell source (see the
+ *  win32 branch). Start-Process on a URL is ShellExecute, i.e. the default browser. */
 export function openUrlSpawn(
   url: string,
   platform: NodeJS.Platform = process.platform,
