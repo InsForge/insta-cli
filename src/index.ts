@@ -237,7 +237,13 @@ compute.command('volume [service]').description("Show, attach, grow, or delete a
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeVolume(service, o)))
 
 // ---- db (postgres service controls) ----
-const db = program.command('db').description('Postgres service controls (limits / volume / always-on / scale-to-zero)')
+const db = program.command('db').description('Postgres service controls (url / connect / limits / volume / always-on / scale-to-zero)')
+db.command('url').description('Print the postgres connection string (DSN) — bare on stdout for piping, e.g. `psql "$(insta db url)"` (gated: secrets.read). Provider credentials are not in `insta secrets` — this is the command that yields the DSN')
+  .option('--json').option('--branch <branch>', 'branch (default: current)').option('--group <g>', 'postgres service name (default: the sole/default one)')
+  .action(guard((o) => dbCmd.dbUrl(o)))
+db.command('connect').description("Open an interactive psql session on the postgres service (needs psql on PATH; gated: secrets.read). A suspended instance wakes on connect — the first prompt can take a few seconds. Exits with psql's own exit code")
+  .option('--branch <branch>', 'branch (default: current)').option('--group <g>', 'postgres service name (default: the sole/default one)')
+  .action(guard((o) => dbCmd.dbConnect(o)))
 db.command('limits').description("Show or set a postgres service's resource ceiling (paid plans; insta-db-backed only). Moves both directions")
   .option('--cpu <n>', "vCPU ceiling, e.g. 2 or 2500m").option('--memory <size>', "memory ceiling, e.g. 4Gi")
   .option('--json').option('--branch <branch>', 'branch (default: current)').option('--group <g>', 'postgres service name (default: the sole/default one)')

@@ -1,6 +1,7 @@
+import { spawn } from 'node:child_process'
 import { ApiClient, ApiError, requireProject } from '../api.js'
 import { info, printJson, handleApproval } from '../util.js'
-import { parseVolumeGib } from './services.js'
+import { parseVolumeGib, q, resolveSoleService } from './services.js'
 
 type Opts = { branch?: string; group?: string; json?: boolean }
 
@@ -228,4 +229,73 @@ export async function dbVolume(opts: Opts & { size?: string }): Promise<void> {
   if (opts.json) return printJson(res.body)
   const vg = res.body?.volumeGib
   info(`postgres ${opts.group ?? 'default'}: volume ${typeof vg === 'number' ? `grown to ${vg}Gi` : `set to ${sizeGib}Gi`}`)
+}
+
+export type DbUrlResolution = { serviceName: string; url: string }
+
+// Resolve the postgres service (sole, or --group) and its connection string. Two reads: the
+// branch's services list names the service; GET /services/:id/credentials (gated secrets.read)
+// carries the value. Provider-minted credentials are canonical within their source service
+// (DATABASE_URL) and deliberately absent from the general `insta secrets` bundle, so this is the
+// read that yields the DSN. The credentials call carries no branch param — the service id is
+// already branch-scoped by the list. Returns null when the read parked on an approval
+// (handleApproval already spoke). Takes the client as an argument so tests drive it with a stub,
+// per this repo's pure-seam convention.
+export async function resolveDbUrl(
+  api: {
+    request: (m: string, p: string) => Promise<any>
+    rawRequest: (m: string, p: string) => Promise<{ status: number; body: any }>
+  },
+  projectId: string,
+  branch: string | undefined,
+  group: string | undefined,
+  json?: boolean,
+): Promise<DbUrlResolution | null> {
+  const { services } = await api.request('GET', `/projects/${projectId}/services${q(branch)}`)
+  const svc = resolveSoleService(services as Array<{ id: string; type: string; name: string }>, 'postgres', group)
+  const res = await api.rawRequest('GET', `/projects/${projectId}/services/${svc.id}/credentials`)
+  if (handleApproval(res, json)) return null
+  const url = res.body?.credentials?.DATABASE_URL
+  if (typeof url !== 'string' || !url) {
+    throw new Error(`postgres ${svc.name} has no DATABASE_URL credential yet — still provisioning? (\`insta services list\` shows status)`)
+  }
+  return { serviceName: svc.name, url }
+}
+
+// Print the postgres connection string: the bare DSN on stdout, nothing else — pipe-friendly
+// (`psql "$(insta db url)"`), like `storage get --json` keeps stdout parseable.
+export async function dbUrl(opts: Opts): Promise<void> {
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const branch = opts.branch ?? p.branch
+  const r = await resolveDbUrl(api, p.projectId, branch, opts.group, opts.json)
+  if (!r) return
+  if (opts.json) return printJson({ service: r.serviceName, branch: branch ?? null, url: r.url })
+  process.stdout.write(r.url + '\n')
+}
+
+/** Core, dependency-injected for tests: spawn psql against the DSN, return its exit code. */
+export async function connectWithPsql(url: string, spawnImpl: typeof spawn = spawn): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    const child = spawnImpl('psql', [url], { stdio: 'inherit' })
+    child.on('error', (e: NodeJS.ErrnoException) =>
+      reject(e.code === 'ENOENT'
+        ? new Error('psql not found on PATH — install the postgres client, or print the DSN with `insta db url`')
+        : e))
+    child.on('close', (code) => resolve(code ?? 1))
+  })
+}
+
+// Open an interactive psql session on the postgres service. The DSN never touches disk or argv
+// history beyond the child process. Exits with psql's own exit code (agents rely on this, as
+// with `compute exec`).
+export async function dbConnect(opts: Opts): Promise<void> {
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const branch = opts.branch ?? p.branch
+  const r = await resolveDbUrl(api, p.projectId, branch, opts.group, opts.json)
+  if (!r) return
+  // stderr: stdout belongs to psql (the `insta run` rule).
+  process.stderr.write(`psql → postgres/${r.serviceName}${branch ? ` (branch ${branch})` : ''} — a suspended instance wakes on connect, so the first prompt can take a few seconds\n`)
+  process.exit(await connectWithPsql(r.url))
 }
