@@ -124,7 +124,7 @@ const sleepSeconds = (s: number) => new Promise<void>((r) => setTimeout(r, s * 1
  *  own INSTA_CONSOLE_URL, so a misconfigured deployment mints links to a host that serves no
  *  /device page at all (live-caught on staging, #134: the landing site — the link passed Vercel
  *  SSO and 404'd). For a known environment the CLI knows the console host itself, so re-anchor
- *  the link there: path and query (the user_code) stay the server's, only the origin moves — on
+ *  the link there: path, query (the user_code) and fragment stay the server's, only the origin moves — on
  *  a correctly configured platform this is a no-op. A custom/self-hosted host (env null) is the
  *  user's deliberate choice and is never rewritten. */
 export function deviceVerificationUrl(raw: string, env: EnvName | null): string {
@@ -132,7 +132,7 @@ export function deviceVerificationUrl(raw: string, env: EnvName | null): string 
   let url: URL
   try { url = new URL(raw) } catch { return raw } // unparseable — show the server's string as-is
   const consoleOrigin = new URL(ENVS[env].console).origin
-  return url.origin === consoleOrigin ? raw : `${consoleOrigin}${url.pathname}${url.search}`
+  return url.origin === consoleOrigin ? raw : `${consoleOrigin}${url.pathname}${url.search}${url.hash}`
 }
 
 // Drives the device grant against the platform's Better Auth mount (/api/auth/device*) and

@@ -184,11 +184,16 @@ describe('deviceGrant', () => {
   })
 })
 
-// The link rewrite itself: origin-only, path + query preserved, and inert everywhere it must be.
+// The link rewrite itself: origin-only, path + query + fragment preserved, and inert everywhere it must be.
 describe('deviceVerificationUrl', () => {
   it('re-anchors a wrong-host link onto the environment console, keeping path and user_code', () => {
     expect(deviceVerificationUrl('https://staging.instacloud.com/device?user_code=AB12-CD34', 'staging'))
       .toBe(`${ENVS.staging.console}/device?user_code=AB12-CD34`)
+  })
+
+  it('keeps a fragment through the rewrite', () => {
+    expect(deviceVerificationUrl('https://staging.instacloud.com/device?user_code=AB12#approve', 'staging'))
+      .toBe(`${ENVS.staging.console}/device?user_code=AB12#approve`)
   })
 
   it('is a no-op when the platform already points at the environment console', () => {
