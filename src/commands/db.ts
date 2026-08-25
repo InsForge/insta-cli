@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { constants as osConstants } from 'node:os'
 import { ApiClient, ApiError, requireProject } from '../api.js'
 import { info, printJson, handleApproval } from '../util.js'
 import { parseVolumeGib, q, resolveSoleService } from './services.js'
@@ -302,12 +303,12 @@ export async function connectWithPsql(url: string, spawnImpl: typeof spawn = spa
       reject(e.code === 'ENOENT'
         ? new Error('psql not found on PATH — install the postgres client, or print the DSN with `insta db url`')
         : e))
-    // Signal death reports code null — map to the conventional 128+signo so the advertised
-    // exit-status passthrough holds for Ctrl-C'd/killed sessions too.
-    child.on('close', (code, signal) => resolve(code ?? (signal ? 128 + (SIGNO[signal] ?? 0) : 1)))
+    // Signal death reports code null — map to the conventional 128+signo (full table from
+    // os.constants) so the advertised exit-status passthrough holds for Ctrl-C'd/killed sessions.
+    child.on('close', (code, signal) =>
+      resolve(code ?? (signal ? 128 + ((osConstants.signals as Record<string, number>)[signal] ?? 0) : 1)))
   })
 }
-const SIGNO: Record<string, number> = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGKILL: 9, SIGTERM: 15 }
 
 // Open an interactive psql session on the postgres service. The DSN never touches disk or argv
 // history beyond the child process. Exits with psql's own exit code (agents rely on this, as
