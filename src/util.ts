@@ -2,12 +2,26 @@
 import { createInterface } from 'node:readline'
 import { spawn } from 'node:child_process'
 
+/** How to launch the default browser for `url` on `platform`. Pure so the Windows quoting is
+ *  testable. On Windows the launcher is `cmd /c start`, and cmd.exe treats a bare `&` as a
+ *  command separator — an unquoted OAuth URL gets truncated at its first query joiner (the
+ *  browser then opens `…?provider=github` with no `redirect`, and the platform rightly 400s).
+ *  Node's own arg quoting only kicks in on whitespace, so we quote the URL ourselves and pass
+ *  the line verbatim: `cmd /c start "" "<url>"` (the empty quotes are start's window title —
+ *  without them the quoted URL itself would be taken as the title). A literal `"` would end our
+ *  quoting, so it is percent-encoded first; it can never appear in a well-formed URL anyway. */
+export function openUrlSpawn(url: string, platform: NodeJS.Platform = process.platform): { cmd: string; args: string[]; verbatim: boolean } {
+  if (platform === 'win32') {
+    return { cmd: 'cmd', args: ['/c', 'start', '""', `"${url.replaceAll('"', '%22')}"`], verbatim: true }
+  }
+  return { cmd: platform === 'darwin' ? 'open' : 'xdg-open', args: [url], verbatim: false }
+}
+
 // Best-effort: open a URL in the user's default browser. Returns false if we couldn't launch.
 export function openUrl(url: string): boolean {
-  const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open'
-  const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url]
+  const { cmd, args, verbatim } = openUrlSpawn(url)
   try {
-    const child = spawn(cmd, args, { stdio: 'ignore', detached: true })
+    const child = spawn(cmd, args, { stdio: 'ignore', detached: true, windowsVerbatimArguments: verbatim })
     child.on('error', () => {})
     child.unref()
     return true

@@ -189,6 +189,7 @@ function browserOauth(apiUrl: string, provider: string): Promise<string> {
       const authorizeUrl = `${apiUrl}/auth/cli/authorize?provider=${encodeURIComponent(provider)}&redirect=${encodeURIComponent(redirect)}&state=${state}`
       info(`opening browser to authorize with ${provider}…`)
       if (!openUrl(authorizeUrl)) info(`open this URL to continue:\n  ${authorizeUrl}`)
+      info('waiting for you to finish in the browser… (times out in 2m; ctrl-c to abort)')
       timer = setTimeout(() => { server.close(); reject(new Error('timed out waiting for browser login (2m)')) }, 120_000)
     })
   })
