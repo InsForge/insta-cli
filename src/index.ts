@@ -362,10 +362,10 @@ program.command('feedback')
 
 // ---- self-update ----
 program.command('upgrade').description('Update the insta CLI to the latest release (binary or npm install)')
-  .action(guard(() => selfUpdate.upgrade()))
+  .action(guard(() => selfUpdate.upgrade(resolveVersion())))
 program.command('autoupdate [mode]').description('Show or set auto-update: on | off (default: on while pre-1.0)')
   .action(guard((mode) => selfUpdate.autoupdate(mode)))
-program.command('__update-check', { hidden: true }).action(guard(() => selfUpdate.backgroundCheck()))
+program.command('__update-check', { hidden: true }).action(guard(() => selfUpdate.backgroundCheck(resolveVersion())))
 
 selfUpdate.maybeUpdate(resolveVersion(), process.argv)
 program.parseAsync(computeArgv)
