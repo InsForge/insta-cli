@@ -246,9 +246,69 @@ describe('domainStatusLines (check-domain: every stage + where it routes)', () =
       dns: [{ type: 'A', name: 'customer.com', value: '66.66.66.66', note: 'apex → the Fly app' }],
     }
     const lines = domainStatusLines(apex)
-    expect(lines[2]).toBe('  a           unchecked   A customer.com -> 66.66.66.66')
+    expect(lines[2]).toBe('  a           unchecked   A customer.com -> 66.66.66.66 (not checked yet — re-run check-domain)')
     expect(lines.join('\n')).not.toContain('no routing record from the platform')
     expect(lines.join('\n')).not.toContain('add CNAME customer.com')
+  })
+
+  // r2d2 round 3 Critical: the blocker rule reached only the ownership TXT and the FIRST routing
+  // record. Every other record rendered from `configured` alone and blocked nothing, so a payload
+  // whose SECOND apex record was bad still ended in `serving https://…`.
+  it('apex A/AAAA pair with the AAAA missing: both routing records are judged, and it does not serve', () => {
+    const apex: DomainView = {
+      // Fly-shaped (an apex is Fly's A/AAAA path): no ownership TXT, no plane ssl/origin fields.
+      hostname: 'customer.com', flyApp: 'insta-main-api-ab12', configured: true, status: 'active',
+      service: 'api', region: 'us-east',
+      dns: [
+        { type: 'A', name: 'customer.com', value: '66.66.66.66', status: 'ok' },
+        { type: 'AAAA', name: 'customer.com', value: '2a09:8280::1', status: 'missing' },
+      ],
+    }
+    const lines = domainStatusLines(apex)
+    expect(lines[2]).toBe('  a           ok          (points at 66.66.66.66)')
+    expect(lines[3]).toBe('  aaaa        pending     add AAAA customer.com -> 2a09:8280::1')
+    expect(lines.at(-1)).toBe('  serving     not yet     (add the AAAA)')
+    expect(lines.join('\n')).not.toContain('serving     https://')
+  })
+
+  it('a mismatched second apex record blocks too', () => {
+    const apex: DomainView = {
+      hostname: 'customer.com', flyApp: 'x', configured: true, status: 'active', service: 'api', region: 'us-east',
+      dns: [
+        { type: 'A', name: 'customer.com', value: '66.66.66.66', status: 'ok' },
+        { type: 'AAAA', name: 'customer.com', value: '2a09:8280::1', status: 'mismatch' },
+      ],
+    }
+    expect(domainStatusLines(apex).at(-1)).toBe('  serving     not yet     (fix the AAAA)')
+  })
+
+  // An EXTRA record (a validation CNAME, not the routing one) that is still outstanding blocks as
+  // well — it is a record the platform told the user to publish.
+  it('an extra validation record still pending blocks serving', () => {
+    const withValidation: DomainView = {
+      ...active,
+      dns: [
+        ...active.dns,
+        { type: 'CNAME', name: '_acme-challenge.app.customer.com', value: 'app.customer.com.abc.flydns.net', note: "Let's Encrypt validation", status: 'missing' },
+      ],
+    }
+    const lines = domainStatusLines(withValidation)
+    expect(lines.join('\n')).toContain('add _acme-challenge.app.customer.com -> app.customer.com.abc.flydns.net')
+    expect(lines.at(-1)).toBe('  serving     not yet     (add the CNAME _acme-challenge.app.customer.com)')
+    expect(lines.join('\n')).not.toContain('serving     https://')
+  })
+
+  // An UNCHECKED routing status is not a pass: "we have not looked" is not "it is there".
+  it('a routing record the plane has not checked blocks, even with cert and origin ready', () => {
+    const unchecked: DomainView = {
+      ...active,
+      configured: false,
+      dns: active.dns.map((d) => (d.type === 'TXT' ? { ...d, status: 'ok' as const } : { ...d, status: undefined })),
+    }
+    const lines = domainStatusLines(unchecked)
+    expect(lines.join('\n')).toContain('unchecked')
+    expect(lines.at(-1)).toContain('CNAME unchecked')
+    expect(lines.join('\n')).not.toContain('serving     https://')
   })
 
   // An older platform may omit `dns` entirely — that is "no records", not a crash.
@@ -273,8 +333,8 @@ describe('domainStatusLines (check-domain: every stage + where it routes)', () =
     const lines = domainStatusLines(fly)
     // Fly issues no ownership TXT, so that stage is drawn as unknown rather than silently dropped.
     expect(lines[1]).toBe('  ownership   n/a         (this provider does not use an ownership TXT)')
-    expect(lines[2]).toBe('  cname       unchecked   CNAME app.customer.com -> insta-main-api-ab12.fly.dev')
-    expect(lines[3]).toBe("  cname       pending     _acme-challenge.app.customer.com -> app.customer.com.abc.flydns.net  (Let's Encrypt validation)")
+    expect(lines[2]).toBe('  cname       unchecked   CNAME app.customer.com -> insta-main-api-ab12.fly.dev (not checked yet — re-run check-domain)')
+    expect(lines[3]).toBe("  cname       unchecked   _acme-challenge.app.customer.com -> app.customer.com.abc.flydns.net  (Let's Encrypt validation) (not checked yet — re-run check-domain)")
     expect(lines[4]).toBe('  certificate pending     (provider status: Awaiting configuration)')
   })
 

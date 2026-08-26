@@ -139,15 +139,25 @@ export function domainStatusLines(r: DomainView, ctx: DomainCmdCtx = {}): string
   const records = recordsOf(r)
   const out = [`${r.hostname} -> ${targetOf(r)}`]
   const txt = records.find((d) => d.type === 'TXT')
-  // The ROUTING record for the hostname, whatever type it takes: a CNAME for a subdomain, or the
-  // A/AAAA pair an apex needs (Fly's apex path emits those). Matching only CNAME would report an
-  // apex domain's A record as "no routing record" now that a missing one is a blocker.
-  const cname = records.find((d) => d.type !== 'TXT' && d.name === r.hostname)
+  // The ROUTING records for the hostname, whatever type they take: a CNAME for a subdomain, or the
+  // A/AAAA PAIR an apex needs (Fly's apex path emits both). All of them, not the first one —
+  // a correct A beside a missing AAAA is not "routing is fine".
+  const isRouting = (d: DomainView['dns'][number]) => d.type !== 'TXT' && d.name === r.hostname
+  const routing = records.filter(isRouting)
   const blockers: string[] = []
   const stage = (label: string, state: string, detail: string) => out.push(`  ${pad(label, 12)}${pad(state, 10)}${detail ? `  ${detail}` : ''}`)
 
+  // The ONE verdict rule, applied to EVERY record the platform returned regardless of its role.
+  // A record is settled only when the platform says `ok` — or, for a provider that reports no
+  // per-record status at all (Fly), when it vouched for the whole set with `configured`. missing,
+  // mismatch and never-checked are each outstanding and each add a blocker. Applying this to only
+  // the ownership TXT and the FIRST routing record was the bug (r2d2 round 3): every other record
+  // rendered from `configured` alone and blocked nothing, so an apex whose AAAA was missing, or a
+  // still-pending validation record, could ride under a `serving https://…` line.
+  const verdictOf = (d: DomainView['dns'][number]) => d.status ?? (r.configured ? 'ok' : 'unchecked')
+
   if (txt) {
-    const st = txt.status ?? (r.configured ? 'ok' : undefined)
+    const st = verdictOf(txt)
     if (st === 'ok') stage('ownership', 'verified', '(TXT found)')
     else if (st === 'mismatch') { stage('ownership', 'mismatch', `TXT ${txt.name} has a different value — set it to ${txt.value}`); blockers.push('fix the ownership TXT') }
     else if (st === 'missing') { stage('ownership', 'pending', `add TXT ${txt.name} -> ${txt.value}`); blockers.push('add the ownership TXT') }
@@ -161,16 +171,8 @@ export function domainStatusLines(r: DomainView, ctx: DomainCmdCtx = {}): string
   } else {
     stage('ownership', 'n/a', '(this provider does not use an ownership TXT)')
   }
-  if (cname) {
-    const st = cname.status ?? (r.configured ? 'ok' : undefined)
-    // The stage is named for the record the platform actually issued, so an apex's A record is not
-    // described to the user as a CNAME they cannot create.
-    const lbl = cname.type.toLowerCase()
-    if (st === 'ok') stage(lbl, 'ok', `(points at ${cname.value})`)
-    else if (st === 'mismatch') { stage(lbl, 'mismatch', `${cname.type} ${cname.name} must point at ${cname.value}`); blockers.push(`fix the ${cname.type}`) }
-    else if (st === 'missing') { stage(lbl, 'pending', `add ${cname.type} ${cname.name} -> ${cname.value}`); blockers.push(`add the ${cname.type}`) }
-    else stage(lbl, 'unchecked', `${cname.type} ${cname.name} -> ${cname.value}`)
-  } else {
+
+  if (routing.length === 0) {
     // No routing record for the hostname — whatever ELSE came back. Keying this on an entirely
     // empty record set was the bug (r2d2 round 2): a payload carrying only the ownership TXT
     // skipped the stage and added no blocker, so a `configured: true` answer with a live cert and
@@ -178,10 +180,28 @@ export function domainStatusLines(r: DomainView, ctx: DomainCmdCtx = {}): string
     stage('cname', 'unknown', 'the platform returned no routing record for this domain — nothing to publish yet; ask an operator')
     blockers.push('no routing record from the platform')
   }
+  for (const d of routing) {
+    const st = verdictOf(d)
+    // The stage is named for the record the platform actually issued, so an apex's A record is not
+    // described to the user as a CNAME they cannot create.
+    const lbl = d.type.toLowerCase()
+    if (st === 'ok') stage(lbl, 'ok', `(points at ${d.value})`)
+    else if (st === 'mismatch') { stage(lbl, 'mismatch', `${d.type} ${d.name} must point at ${d.value}`); blockers.push(`fix the ${d.type}`) }
+    else if (st === 'missing') { stage(lbl, 'pending', `add ${d.type} ${d.name} -> ${d.value}`); blockers.push(`add the ${d.type}`) }
+    else { stage(lbl, 'unchecked', `${d.type} ${d.name} -> ${d.value} (not checked yet — re-run check-domain)`); blockers.push(`${d.type} unchecked`) }
+  }
 
+  // Everything else the platform returned — a Let's Encrypt validation CNAME, any extra record.
+  // Same rule, no exemption: an outstanding record is outstanding whatever its role.
   for (const d of records) {
-    if (d === txt || d === cname) continue
-    stage(d.type.toLowerCase(), r.configured ? 'ok' : 'pending', `${d.name} -> ${d.value}${d.note ? `  (${d.note})` : ''}`)
+    if (d === txt || isRouting(d)) continue
+    const st = verdictOf(d)
+    const lbl = d.type.toLowerCase()
+    const where = `${d.name} -> ${d.value}${d.note ? `  (${d.note})` : ''}`
+    if (st === 'ok') stage(lbl, 'ok', where)
+    else if (st === 'mismatch') { stage(lbl, 'mismatch', `${d.type} ${d.name} must point at ${d.value}`); blockers.push(`fix the ${d.type} ${d.name}`) }
+    else if (st === 'missing') { stage(lbl, 'pending', `add ${where}`); blockers.push(`add the ${d.type} ${d.name}`) }
+    else { stage(lbl, 'unchecked', `${where} (not checked yet — re-run check-domain)`); blockers.push(`${d.type} ${d.name} unchecked`) }
   }
 
   const ssl = r.ssl ?? (r.configured ? 'active' : undefined)
