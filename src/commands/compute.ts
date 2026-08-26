@@ -91,6 +91,25 @@ export async function computeStatus(serviceName: string | undefined, opts: LifeO
 // ourselves, before commander ever parses it, removes the ambiguity; this is the only place in the
 // whole CLI a bare `--` has this meaning, so nothing else is affected. Exported for a direct,
 // network-free unit test — this split is the seam most likely to regress.
+const takesValue = (token: string): boolean => token === '--branch' || token === '--timeout'
+const isKnownFlag = (token: string): boolean =>
+  token.startsWith('--branch=') || token.startsWith('--timeout=') || token === '--json' || token === '--help' || token === '-h'
+
+// How many BARE operands sit in argv[from, to)? `insta compute exec [service] -- <command>` allows
+// at most one (the optional service) ahead of a real separator, so two or more prove the `--` at
+// `to` is NOT the separator — it is the remote command's own `--`, left behind after the shim ate
+// the real one. Mirrors the recovery scan's token classification so the two always agree.
+function operandsBefore(argv: string[], from: number, to: number): number {
+  let operands = 0
+  for (let cursor = from; cursor < to; cursor++) {
+    const token = argv[cursor]!
+    if (takesValue(token)) { cursor++; continue }
+    if (isKnownFlag(token)) continue
+    operands++
+  }
+  return operands
+}
+
 export function splitExecArgs(
   argv: string[],
   platform: NodeJS.Platform = process.platform,
@@ -98,7 +117,13 @@ export function splitExecArgs(
   const i = argv.findIndex((a, idx) => a === 'compute' && argv[idx + 1] === 'exec')
   if (i === -1) return { argv }
   const dash = argv.indexOf('--', i + 2)
-  if (dash !== -1) return { argv: argv.slice(0, dash), command: argv.slice(dash + 1) }
+  // The remote command may contain its own `--`, and the PowerShell shim strips only the FIRST
+  // one. So on win32 a surviving `--` is not proof of a separator: if two or more operands sit
+  // ahead of it, the separator was the one that got eaten and THIS `--` belongs to the remote
+  // argv — splitting here would drop the real first command token. Fall through to recovery,
+  // which starts the command at the second operand and carries the `--` along untouched.
+  const isSeparator = dash !== -1 && (platform !== 'win32' || operandsBefore(argv, i + 2, dash) <= 1)
+  if (isSeparator) return { argv: argv.slice(0, dash), command: argv.slice(dash + 1) }
   if (platform !== 'win32') return { argv }
 
   // npm's generated PowerShell shim consumes a bare `--` before forwarding $args to node. When
@@ -109,14 +134,14 @@ export function splitExecArgs(
   let sawService = false
   for (let cursor = i + 2; cursor < argv.length; cursor++) {
     const token = argv[cursor]!
-    if (token === '--branch' || token === '--timeout') {
+    if (takesValue(token)) {
       if (sawService) {
         return { argv: argv.slice(0, cursor), command: argv.slice(cursor), windowsFallback: true, windowsAmbiguous: true }
       }
       cursor++
       continue
     }
-    if (token.startsWith('--branch=') || token.startsWith('--timeout=') || token === '--json' || token === '--help' || token === '-h') {
+    if (isKnownFlag(token)) {
       if (sawService) {
         return { argv: argv.slice(0, cursor), command: argv.slice(cursor), windowsFallback: true, windowsAmbiguous: true }
       }

@@ -68,6 +68,65 @@ describe('splitExecArgs', () => {
     expect(splitExecArgs(argv)).toEqual({ argv: ['node', 'insta', 'compute', 'exec', 'myservice'], command: [] })
   })
 
+  // The remote command may carry its own `--`, and the PowerShell shim strips only the FIRST one.
+  // A surviving `--` is therefore not proof of a separator: splitting on it would drop the real
+  // first command token (`echo`) and violate the byte-for-byte remote-argv contract.
+  it('preserves a remote literal -- that outlived the PowerShell shim', () => {
+    // `insta compute exec app -- echo --` through insta.ps1 reaches node as:
+    const argv = ['node', 'insta', 'compute', 'exec', 'app', 'echo', '--']
+    expect(splitExecArgs(argv, 'win32')).toEqual({
+      argv: ['node', 'insta', 'compute', 'exec', 'app'],
+      command: ['echo', '--'],
+      windowsFallback: true,
+    })
+  })
+
+  it('preserves a remote -- in the MIDDLE of a recovered command', () => {
+    const argv = ['node', 'insta', 'compute', 'exec', 'app', 'sh', '-c', '--', 'echo hi']
+    expect(splitExecArgs(argv, 'win32')).toEqual({
+      argv: ['node', 'insta', 'compute', 'exec', 'app'],
+      command: ['sh', '-c', '--', 'echo hi'],
+      windowsFallback: true,
+    })
+  })
+
+  // The whole point: both Windows entry points must hand the platform the SAME remote argv.
+  it('lands on the same remote argv whether the shim kept the separator or ate it', () => {
+    const remote = ['echo', '--', 'hi']
+    const viaCmd = ['node', 'insta', 'compute', 'exec', 'app', '--', ...remote] // insta.cmd keeps --
+    const viaPowerShell = ['node', 'insta', 'compute', 'exec', 'app', ...remote] // insta.ps1 ate it
+    expect(splitExecArgs(viaCmd, 'win32').command).toEqual(remote)
+    expect(splitExecArgs(viaPowerShell, 'win32').command).toEqual(remote)
+  })
+
+  it('counts option VALUES as options, not operands, when locating the separator', () => {
+    // `--branch prod` must not read as two operands, or the real separator below looks remote.
+    const kept = ['node', 'insta', 'compute', 'exec', '--branch', 'prod', 'app', '--', 'echo', '--']
+    expect(splitExecArgs(kept, 'win32')).toEqual({
+      argv: ['node', 'insta', 'compute', 'exec', '--branch', 'prod', 'app'],
+      command: ['echo', '--'],
+    })
+    const eaten = ['node', 'insta', 'compute', 'exec', '--branch', 'prod', 'app', 'echo', '--']
+    expect(splitExecArgs(eaten, 'win32')).toEqual({
+      argv: ['node', 'insta', 'compute', 'exec', '--branch', 'prod', 'app'],
+      command: ['echo', '--'],
+      windowsFallback: true,
+    })
+  })
+
+  // One shape stays irreducibly ambiguous: a single operand followed by `--` parses validly BOTH
+  // ways (service `printenv` + command `PORT`, or shim-eaten separator + command `printenv -- PORT`).
+  // We take the separator reading, which is what every non-PowerShell shell means. When that
+  // reading is wrong, resolveComputeServiceId fails loudly ("compute service not found: printenv")
+  // rather than running the wrong command — degradation to an error, never to silent corruption.
+  it('takes the separator reading for the one shape that parses both ways', () => {
+    const argv = ['node', 'insta', 'compute', 'exec', 'printenv', '--', 'PORT']
+    expect(splitExecArgs(argv, 'win32')).toEqual({
+      argv: ['node', 'insta', 'compute', 'exec', 'printenv'],
+      command: ['PORT'],
+    })
+  })
+
   it('preserves a command token that itself looks like a flag', () => {
     const argv = ['node', 'insta', 'compute', 'exec', '--', '--help']
     expect(splitExecArgs(argv)).toEqual({ argv: ['node', 'insta', 'compute', 'exec'], command: ['--help'] })
