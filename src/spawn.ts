@@ -9,6 +9,20 @@ export const isRunnableFile = (path: string, win: boolean): boolean => {
   } catch { return false }
 }
 
+/** Read an environment variable the way Windows itself does: case-insensitively.
+ *  `process.env` is already case-insensitive on win32, but a COPY of it (`{ ...process.env }`,
+ *  which every caller that adds a variable makes) is an ordinary object that keeps whatever
+ *  casing Windows used — and Windows overwhelmingly spells it `Path`, not `PATH`. Reading
+ *  `env.PATH` off such a copy yields undefined, nothing resolves, and the caller falls back to
+ *  spawning the bare `.cmd` shim this module exists to avoid. */
+export function envVar(env: NodeJS.ProcessEnv, name: string, win: boolean): string | undefined {
+  const direct = env[name]
+  if (direct !== undefined || !win) return direct
+  const wanted = name.toLowerCase()
+  for (const [key, value] of Object.entries(env)) if (key.toLowerCase() === wanted) return value
+  return undefined
+}
+
 /** Resolve a bare command name to its absolute PATH location (PATHEXT-aware on Windows).
  *  cmd.exe searches the CURRENT DIRECTORY before PATH for bare names, so callers must pass
  *  the absolute shim path to the cmd.exe wrapper below. */
@@ -18,8 +32,8 @@ export function whichOnPath(
   platform: NodeJS.Platform = process.platform,
 ): string | null {
   const win = platform === 'win32'
-  const exts = win ? [...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';'), ''] : ['']
-  for (const dir of (env.PATH ?? '').split(win ? ';' : ':')) {
+  const exts = win ? [...(envVar(env, 'PATHEXT', win) ?? '.COM;.EXE;.BAT;.CMD').split(';'), ''] : ['']
+  for (const dir of (envVar(env, 'PATH', win) ?? '').split(win ? ';' : ':')) {
     if (!dir) continue
     for (const ext of exts) {
       const path = join(dir, bin + ext)

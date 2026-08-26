@@ -12,7 +12,7 @@
 import { test, expect, beforeEach } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, win32 } from 'node:path'
 import * as up from '../src/commands/upgrade.js'
 
 let cacheFile: string
@@ -44,6 +44,32 @@ test('Windows npm upgrades re-enter npm through node instead of spawning the .cm
     args: [npmCli, 'install', '-g', 'insta@0.0.48'],
     env,
   })
+})
+
+// The post-upgrade probe (`observeInstalled`) hands resolveRunSpec a COPY of the environment
+// (`{ ...process.env, INSTA_NO_AUTOUPDATE: '1' }`). On Windows that copy is an ordinary object
+// carrying Windows' own casing — `Path`, not `PATH` — so a PATH lookup that only reads `env.PATH`
+// resolves nothing and the probe spawns the bare `insta` .cmd shim this PR exists to stop.
+test('the Windows version probe resolves the installed shim through a copied `Path` environment', () => {
+  const shimBin = mkdtempSync(join(tmpdir(), 'insta-shim-'))
+  const shim = join(shimBin, 'insta.CMD')
+  writeFileSync(shim, '@echo off\n')
+  const cmdExe = win32.join(process.env.SYSTEMROOT ?? process.env.windir ?? 'C:\\Windows', 'System32', 'cmd.exe')
+  const wrapped = { cmd: cmdExe, args: ['/d', '/s', '/c', shim, '--version'] }
+
+  // Windows' real casing, as a spread of process.env preserves it.
+  const copied = { Path: shimBin, PATHEXT: '.CMD', INSTA_NO_AUTOUPDATE: '1' }
+  expect(up.resolveRunSpec({ cmd: 'insta', args: ['--version'], env: copied }, '', 'C:\\Program Files\\nodejs\\node.exe', 'win32'))
+    .toEqual({ ...wrapped, env: copied })
+
+  // PATHEXT is just as case-free on Windows, and either spelling of PATH must work.
+  const mixed = { PATH: shimBin, PathExt: '.CMD' }
+  expect(up.resolveRunSpec({ cmd: 'insta', args: ['--version'], env: mixed }, '', 'C:\\Program Files\\nodejs\\node.exe', 'win32'))
+    .toEqual({ ...wrapped, env: mixed })
+
+  // POSIX stays case-SENSITIVE: a stray `Path` must not be mistaken for `PATH` there.
+  expect(up.resolveRunSpec({ cmd: 'insta', args: ['--version'], env: { Path: shimBin } }, '', '/usr/bin/node', 'linux'))
+    .toEqual({ cmd: 'insta', args: ['--version'], env: { Path: shimBin } })
 })
 
 function fakeRegistry(
