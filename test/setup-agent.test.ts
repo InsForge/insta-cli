@@ -9,10 +9,13 @@ import { ENVS } from '../src/env.js'
 // with either set would change the plan under these tests. Clear and restore around every test.
 const ambient: Record<string, string | undefined> = {}
 beforeEach(() => {
-  for (const k of ['INSTA_ENV', 'INSTA_API_URL']) { ambient[k] = process.env[k]; delete process.env[k] }
+  for (const k of ['INSTA_ENV', 'INSTA_API_URL', 'INSTA_MCP_URL', 'INSTA_SKILLS_REPO']) {
+    ambient[k] = process.env[k]
+    delete process.env[k]
+  }
 })
 afterEach(() => {
-  for (const k of ['INSTA_ENV', 'INSTA_API_URL']) {
+  for (const k of ['INSTA_ENV', 'INSTA_API_URL', 'INSTA_MCP_URL', 'INSTA_SKILLS_REPO']) {
     if (ambient[k] === undefined) delete process.env[k]; else process.env[k] = ambient[k]
   }
 })

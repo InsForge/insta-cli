@@ -20,6 +20,18 @@ posixTest('findDurableOnPath finds a real global shim and ignores npx cache entr
   expect(findDurableOnPath('insta', { PATH: `${npxBin}:${globalBin}` }, 'linux')).toBe(true)
 })
 
+test('findDurableOnPath ignores an npx cache shim on Windows but finds a global insta.cmd', () => {
+  const globalBin = mkdtempSync(join(tmpdir(), 'insta-win-global-'))
+  const npxBin = join(mkdtempSync(join(tmpdir(), 'insta-win-npx-')), 'node_modules', '.bin')
+  mkdirSync(npxBin, { recursive: true })
+  writeFileSync(join(npxBin, 'insta.CMD'), '@echo off\n')
+  const env = { PATH: `${npxBin};${globalBin}`, PATHEXT: '.COM;.EXE;.BAT;.CMD' }
+
+  expect(findDurableOnPath('insta', env, 'win32')).toBe(false)
+  writeFileSync(join(globalBin, 'insta.CMD'), '@echo off\n')
+  expect(findDurableOnPath('insta', env, 'win32')).toBe(true)
+})
+
 posixTest('findDurableOnPath rejects POSIX PATH hits that could not actually run', () => {
   const bin = mkdtempSync(join(tmpdir(), 'insta-noexec-'))
   writeFileSync(join(bin, 'insta'), 'not a program\n', { mode: 0o644 }) // no exec bit
