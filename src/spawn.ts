@@ -39,6 +39,7 @@ export function resolveSpawnable(
   execPath = process.execPath,
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
+  systemRoot: string = process.env.SYSTEMROOT ?? process.env.windir ?? 'C:\\Windows',
 ): { cmd: string; args: string[] } {
   const execIsNode = /(^|[\\/])node(\.exe)?$/i.test(execPath)
   if ((cmd === 'npm' || cmd === 'npx') && execIsNode) {
@@ -56,7 +57,12 @@ export function resolveSpawnable(
   const bareShim = !/[\\/]/.test(cmd) && !/\.exe$/i.test(cmd)
   if (platform === 'win32' && bareShim && !args.some((arg) => /[&|<>^%"]/.test(arg))) {
     const absolute = whichOnPath(cmd, env, platform)
-    if (absolute) return { cmd: 'cmd.exe', args: ['/d', '/s', '/c', absolute, ...args] }
+    // The resolved path itself also becomes cmd.exe input. If a PATH directory contains a shell
+    // metacharacter, fail via the caller's normal bare-spawn fallback rather than interpret it.
+    // Pin cmd.exe to System32 too: CreateProcess-style lookup checks cwd before PATH.
+    if (absolute && !/[&|<>^%"]/.test(absolute)) {
+      return { cmd: join(systemRoot, 'System32', 'cmd.exe'), args: ['/d', '/s', '/c', absolute, ...args] }
+    }
   }
   return { cmd, args }
 }
