@@ -1,5 +1,5 @@
 import { existsSync, statSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, win32 } from 'node:path'
 
 export const isRunnableFile = (path: string, win: boolean): boolean => {
   try {
@@ -61,7 +61,7 @@ export function resolveSpawnable(
     // metacharacter, fail via the caller's normal bare-spawn fallback rather than interpret it.
     // Pin cmd.exe to System32 too: CreateProcess-style lookup checks cwd before PATH.
     if (absolute && !/[&|<>^%"]/.test(absolute)) {
-      return { cmd: join(systemRoot, 'System32', 'cmd.exe'), args: ['/d', '/s', '/c', absolute, ...args] }
+      return { cmd: win32.join(systemRoot, 'System32', 'cmd.exe'), args: ['/d', '/s', '/c', absolute, ...args] }
     }
   }
   return { cmd, args }
