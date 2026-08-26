@@ -53,7 +53,9 @@ export function openUrl(url: string): boolean {
 
 export class CliExit extends Error {
   constructor() {
-    super('CLI exit')
+    // Preserve the observable error used by direct command-unit tests that previously mocked
+    // process.exit(1) by throwing `Error('exit 1')`.
+    super('exit 1')
     this.name = 'CliExit'
   }
 }
