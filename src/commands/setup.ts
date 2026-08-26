@@ -534,8 +534,12 @@ export async function setupAgent(
       try {
         await link(opts.project)
       } catch (e) {
-        info(`  project link failed (${e instanceof Error ? e.message : String(e)}) — run \`insta project link ${opts.project}\` to retry`)
+        // Stop here — like the skill-install failure above, finishing with the success summary
+        // and a cheerful `next:` after an error is mixed messaging. Setup itself did succeed,
+        // so say exactly that alongside the retry command.
+        info(`  project link failed (${e instanceof Error ? e.message : String(e)}) — agent setup itself is done; run \`insta project link ${opts.project}\` to retry the link`)
         process.exitCode = 1
+        return
       }
     }
   }
