@@ -2,26 +2,49 @@
 import { createInterface } from 'node:readline'
 import { spawn } from 'node:child_process'
 
-/** How to launch the default browser for `url` on `platform`. Pure so the Windows quoting is
- *  testable. On Windows the launcher is `cmd /c start`, and cmd.exe treats a bare `&` as a
- *  command separator — an unquoted OAuth URL gets truncated at its first query joiner (the
- *  browser then opens `…?provider=github` with no `redirect`, and the platform rightly 400s).
- *  Node's own arg quoting only kicks in on whitespace, so we quote the URL ourselves and pass
- *  the line verbatim: `cmd /c start "" "<url>"` (the empty quotes are start's window title —
- *  without them the quoted URL itself would be taken as the title). A literal `"` would end our
- *  quoting, so it is percent-encoded first; it can never appear in a well-formed URL anyway. */
-export function openUrlSpawn(url: string, platform: NodeJS.Platform = process.platform): { cmd: string; args: string[]; verbatim: boolean } {
+/** How to launch the default browser for `url` on `platform`. Pure so the Windows encoding is
+ *  testable. On Windows NO shell may ever parse the URL: cmd.exe splits at bare `&` (which #138
+ *  fixed by quoting) but ALSO expands `%…%` sequences even inside quotes, and a percent-encoded
+ *  OAuth redirect (`http%3A%2F%2F127.0.0.1…`) is nothing but such sequences. So the launch goes
+ *  through PowerShell's -EncodedCommand: a pure-ASCII script travels as base64(UTF-16LE) — no
+ *  argument parsing anywhere — and the URL itself rides as a second base64 payload INSIDE that
+ *  script, decoded by .NET at runtime, so no URL byte ever appears in PowerShell source (see the
+ *  win32 branch). Start-Process on a URL is ShellExecute, i.e. the default browser. */
+export function openUrlSpawn(
+  url: string,
+  platform: NodeJS.Platform = process.platform,
+  // Absolute path, not bare `powershell`: CreateProcess-style lookup searches the current
+  // directory before PATH, so a planted powershell.exe beside the user's shell would win.
+  systemRoot: string = process.env.SYSTEMROOT ?? process.env.windir ?? 'C:\\Windows',
+): { cmd: string; args: string[] } {
   if (platform === 'win32') {
-    return { cmd: 'cmd', args: ['/c', 'start', '""', `"${url.replaceAll('"', '%22')}"`], verbatim: true }
+    // The URL never appears in PowerShell SOURCE at all: it travels as base64 inside the script
+    // and is decoded by .NET at runtime. Interpolating it into a quoted literal is not enough —
+    // PowerShell honors smart quotes (U+2018–U+201B) as string delimiters too, so ASCII-only
+    // escaping still leaves a breakout. The script below is pure ASCII by construction (the
+    // base64 alphabet), so no byte of any URL can terminate anything.
+    const urlB64 = Buffer.from(url, 'utf8').toString('base64')
+    const script = `Start-Process ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${urlB64}')))`
+    return {
+      cmd: `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
+      args: ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    }
   }
-  return { cmd: platform === 'darwin' ? 'open' : 'xdg-open', args: [url], verbatim: false }
+  return { cmd: platform === 'darwin' ? 'open' : 'xdg-open', args: [url] }
 }
 
-// Best-effort: open a URL in the user's default browser. Returns false if we couldn't launch.
+// ShellExecute-family launchers (Start-Process/open/xdg-open) run ANY target they're handed —
+// a UNC path is an execution, not a navigation — so only web URLs may reach them.
+export const isWebUrl = (url: string): boolean => /^https?:\/\//i.test(url)
+
+// Best-effort: open a URL in the user's default browser. Returns false if we couldn't launch —
+// but a launcher that starts and THEN fails (ENOENT arrives on the async 'error' event) still
+// reads as true, so callers must not treat true as proof the browser opened.
 export function openUrl(url: string): boolean {
-  const { cmd, args, verbatim } = openUrlSpawn(url)
+  if (!isWebUrl(url)) return false
+  const { cmd, args } = openUrlSpawn(url)
   try {
-    const child = spawn(cmd, args, { stdio: 'ignore', detached: true, windowsVerbatimArguments: verbatim })
+    const child = spawn(cmd, args, { stdio: 'ignore', detached: true })
     child.on('error', () => {})
     child.unref()
     return true

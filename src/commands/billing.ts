@@ -74,9 +74,12 @@ export async function billingPortal(opts: OrgOpt & { open?: boolean; json?: bool
   presentUrl(url, 'Manage billing in your browser:', opts.open)
 }
 
-// Print the URL and, unless --no-open, try to open it in the browser.
+// Print the URL and, unless --no-open, try to open it in the browser. The message says
+// "opening", not "opened": a launcher that starts and then fails reports it asynchronously,
+// so openUrl's true return is an attempt, not a confirmation (see util.ts) — and the URL is
+// already printed above for exactly that case.
 function presentUrl(url: string, label: string, open?: boolean): void {
   info(label)
   info(`  ${url}`)
-  if (open !== false && openUrl(url)) info('(opened in your default browser)')
+  if (open !== false && openUrl(url)) info('(opening in your default browser…)')
 }
