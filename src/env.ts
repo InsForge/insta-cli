@@ -15,6 +15,12 @@ export type EnvName = 'prod' | 'staging'
 export type EnvHosts = {
   api: string
   mcp: string
+  // The console (web UI) origin for this environment — where a human approves things in a
+  // browser. The device-login verification link is re-anchored onto this host (see
+  // deviceVerificationUrl in commands/auth.ts): the platform builds that link from its own
+  // INSTA_CONSOLE_URL, and a misconfigured deployment mints links to a host that serves no
+  // /device page at all (live-caught on staging: the landing site, insta-cli#134).
+  console: string
   // The agent-skill source passed to `npx skills add`, as `owner/repo` or `owner/repo#ref`.
   // Staging pins the integration branch so a staging install gets the skill text that documents
   // the staging control plane, rather than whatever is published on the default branch.
@@ -31,11 +37,13 @@ export const ENVS: Record<EnvName, EnvHosts> = {
   prod: {
     api: 'https://api.instacloud.com',
     mcp: 'https://mcp.instacloud.com/mcp',
+    console: 'https://console.instacloud.com',
     skills: 'InsForge/insta-skills',
   },
   staging: {
     api: 'https://api.staging.instacloud.com',
     mcp: 'https://mcp.staging.instacloud.com/mcp',
+    console: 'https://console.staging.instacloud.com',
     skills: 'InsForge/insta-skills#devel',
   },
 }
