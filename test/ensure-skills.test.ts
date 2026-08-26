@@ -1,8 +1,19 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, test } from 'vitest'
+import { afterEach, beforeEach, expect, test } from 'vitest'
 import { installSkills, ensureGitignore } from '../src/ensure-skills.js'
+import { ENVS } from '../src/env.js'
+
+let originalApiUrl: string | undefined
+beforeEach(() => {
+  originalApiUrl = process.env.INSTA_API_URL
+  process.env.INSTA_API_URL = ENVS.prod.api
+})
+afterEach(() => {
+  if (originalApiUrl === undefined) delete process.env.INSTA_API_URL
+  else process.env.INSTA_API_URL = originalApiUrl
+})
 
 function fakeRun() {
   const calls: Array<{ cmd: string; args: string[] }> = []

@@ -5,8 +5,9 @@ import { test, expect, vi } from 'vitest'
 import { ensureCliInstalled, findDurableOnPath, resolveSpawnable, setupAgent, SETUP_ARGS } from '../src/commands/setup.js'
 
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version as string
+const posixTest = process.platform === 'win32' ? test.skip : test
 
-test('findDurableOnPath finds a real global shim and ignores npx cache entries', () => {
+posixTest('findDurableOnPath finds a real global shim and ignores npx cache entries', () => {
   const globalBin = mkdtempSync(join(tmpdir(), 'insta-bin-'))
   const npxBin = join(mkdtempSync(join(tmpdir(), 'insta-npx-')), 'node_modules', '.bin')
   mkdirSync(npxBin, { recursive: true })
@@ -19,7 +20,7 @@ test('findDurableOnPath finds a real global shim and ignores npx cache entries',
   expect(findDurableOnPath('insta', { PATH: `${npxBin}:${globalBin}` }, 'linux')).toBe(true)
 })
 
-test('findDurableOnPath rejects POSIX PATH hits that could not actually run', () => {
+posixTest('findDurableOnPath rejects POSIX PATH hits that could not actually run', () => {
   const bin = mkdtempSync(join(tmpdir(), 'insta-noexec-'))
   writeFileSync(join(bin, 'insta'), 'not a program\n', { mode: 0o644 }) // no exec bit
   expect(findDurableOnPath('insta', { PATH: bin }, 'linux')).toBe(false)
