@@ -5,8 +5,9 @@ import { join } from 'node:path'
 import { makePromptSource, planSetupEnv, setupAgent, shouldOfferLogin, registerMcp, SETUP_ARGS, MCP_SERVER_NAME, DEFAULT_MCP_URL } from '../src/commands/setup.js'
 import { ENVS } from '../src/env.js'
 
-// setupAgent's default planner inputs read $INSTA_ENV / $INSTA_API_URL — a developer or CI shell
-// with either set would change the plan under these tests. Clear and restore around every test.
+// Setup resolves its API environment, MCP URL, and skill source from INSTA_ENV, INSTA_API_URL,
+// INSTA_MCP_URL, and INSTA_SKILLS_REPO. Clear and restore all four around every test so a
+// developer or CI shell cannot change these assertions.
 const ambient: Record<string, string | undefined> = {}
 beforeEach(() => {
   for (const k of ['INSTA_ENV', 'INSTA_API_URL', 'INSTA_MCP_URL', 'INSTA_SKILLS_REPO']) {
