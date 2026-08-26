@@ -337,18 +337,17 @@ describe('config + env use', () => {
     expect(c.accessToken).toBe('a')
   })
 
-  // `die` exits the process, so trap it rather than letting it take the test worker down with it.
+  // `die` aborts the command and records exit 1 without forcing Node to tear down active handles.
   it('env use rejects an unknown name', async () => {
     vi.resetModules()
     const { envUse } = await import('../src/commands/env.js')
-    const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
-      throw new Error(`exit ${code}`)
-    }) as never)
     const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const previousExitCode = process.exitCode
     try {
       await expect(envUse('stagng')).rejects.toThrow(/exit 1/)
+      expect(process.exitCode).toBe(1)
     } finally {
-      exit.mockRestore()
+      process.exitCode = previousExitCode
       err.mockRestore()
     }
   })
