@@ -135,6 +135,7 @@ describe('isEnvName', () => {
 describe('config + env use', () => {
   let home: string
   const origHome = process.env.HOME
+  const origUserProfile = process.env.USERPROFILE
   const origEnv = process.env.INSTA_ENV
   const origApi = process.env.INSTA_API_URL
   const origMcp = process.env.INSTA_MCP_URL
@@ -147,7 +148,7 @@ describe('config + env use', () => {
   }
   const readConfig = async () => JSON.parse(await readFile(configFile(), 'utf8'))
 
-  // config.ts resolves $HOME at import time, so each test needs a fresh module registry.
+  // config.ts resolves the OS home at import time, so each test needs a fresh module registry.
   const freshConfig = async () => {
     vi.resetModules()
     return await import('../src/config.js')
@@ -156,6 +157,7 @@ describe('config + env use', () => {
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), 'insta-env-'))
     process.env.HOME = home
+    process.env.USERPROFILE = home
     delete process.env.INSTA_ENV
     delete process.env.INSTA_API_URL
     delete process.env.INSTA_MCP_URL
@@ -164,6 +166,7 @@ describe('config + env use', () => {
 
   afterEach(() => {
     if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome
+    if (origUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = origUserProfile
     if (origEnv === undefined) delete process.env.INSTA_ENV; else process.env.INSTA_ENV = origEnv
     if (origApi === undefined) delete process.env.INSTA_API_URL; else process.env.INSTA_API_URL = origApi
     if (origMcp === undefined) delete process.env.INSTA_MCP_URL; else process.env.INSTA_MCP_URL = origMcp
@@ -337,18 +340,17 @@ describe('config + env use', () => {
     expect(c.accessToken).toBe('a')
   })
 
-  // `die` exits the process, so trap it rather than letting it take the test worker down with it.
+  // `die` aborts the command and records exit 1 without forcing Node to tear down active handles.
   it('env use rejects an unknown name', async () => {
     vi.resetModules()
     const { envUse } = await import('../src/commands/env.js')
-    const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
-      throw new Error(`exit ${code}`)
-    }) as never)
     const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const previousExitCode = process.exitCode
     try {
       await expect(envUse('stagng')).rejects.toThrow(/exit 1/)
+      expect(process.exitCode).toBe(1)
     } finally {
-      exit.mockRestore()
+      process.exitCode = previousExitCode
       err.mockRestore()
     }
   })

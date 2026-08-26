@@ -6,19 +6,22 @@
 // Stack skills (tigris/better-auth) intentionally stay per-project: their presence in a
 // project doubles as its stack manifest — that install happens on `project create|link`.
 import { spawn } from 'node:child_process'
-import { closeSync, createReadStream, existsSync, openSync, readFileSync, statSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { closeSync, createReadStream, openSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import os from 'node:os'
 import { createInterface } from 'node:readline'
 import { ApiClient } from '../api.js'
 import { readPersistedGlobal, resolveEnv, type GlobalConfig } from '../config.js'
 import { DEFAULT_ENV, ENVS, ENV_NAMES, envForApiUrl, envFromEnvVar, isEnvName, mcpServerName, type EnvName } from '../env.js'
 import { info } from '../util.js'
+import { isRunnableFile, resolveSpawnable } from '../spawn.js'
 import { loginOauth } from './auth.js'
 import { projectLink } from './project.js'
 import { envUse } from './env.js'
 import { installAgentConfigs } from './mcp.js'
 import { detectChannel, type Channel } from './upgrade.js'
+
+export { resolveSpawnable, whichOnPath } from '../spawn.js'
 
 // The `skills` tool we shell out to prints a clack UI: a frame-by-frame clone spinner, an
 // "Installing to all N agents" banner, a full N-line install-path box, and a third-party
@@ -102,35 +105,6 @@ export type Runner = (cmd: string, args: string[]) => Promise<{ ok: boolean; out
 // access() answers "can THIS process exec it", which for root is always yes, so a root-run
 // setup would wrongly treat a non-executable file as a durable install. On Windows execute
 // permission is extension-driven, so existence of a regular file is the right check.
-const isRunnableFile = (p: string, win: boolean): boolean => {
-  try {
-    const st = statSync(p)
-    if (!st.isFile()) return false
-    return win || (st.mode & 0o111) !== 0
-  } catch { return false }
-}
-
-/** Resolve a bare command name to its absolute PATH location (PATHEXT-aware on Windows).
- *  cmd.exe searches the CURRENT DIRECTORY before PATH for bare names, so handing it a bare
- *  `claude` would let a claude.cmd planted in the project directory shadow the real CLI —
- *  the cmd.exe wrapper below only ever passes absolute paths. */
-export function whichOnPath(
-  bin: string,
-  env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
-): string | null {
-  const win = platform === 'win32'
-  const exts = win ? [...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';'), ''] : ['']
-  for (const dir of (env.PATH ?? '').split(win ? ';' : ':')) {
-    if (!dir) continue
-    for (const ext of exts) {
-      const p = join(dir, bin + ext)
-      if (isRunnableFile(p, win)) return p
-    }
-  }
-  return null
-}
-
 export function findDurableOnPath(
   bin: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -187,59 +161,6 @@ export async function ensureCliInstalled(
   if (/EACCES|permission denied/i.test(res.output ?? '')) {
     info('    (permission error: the npm prefix is system-owned — use a Node version manager, or elevate that one command)')
   }
-}
-
-// ---- Windows-safe spawning for npm/npx ----
-// On Windows `npm`/`npx` are .cmd shims, which spawn() without a shell refuses (Node docs:
-// spawning .bat/.cmd needs a shell or cmd.exe). Rather than a shell (argument-quoting hazards),
-// re-enter them as node scripts: the CLI script named by npm_execpath (swapped between
-// npm-cli.js and npx-cli.js as needed), else the one shipped beside the running node, else the
-// bare name (POSIX, where PATH shims resolve fine). Applied ONCE, inside the default runner,
-// so every `run('npm'|'npx', …)` call site benefits and nothing is ever resolved twice.
-export function resolveSpawnable(
-  cmd: string,
-  args: string[],
-  npmExecpath = process.env.npm_execpath,
-  execPath = process.execPath,
-  platform: NodeJS.Platform = process.platform,
-  env: NodeJS.ProcessEnv = process.env,
-): { cmd: string; args: string[] } {
-  // Node re-entry is only valid when THIS process runs on node. On the native-binary channel
-  // execPath is the compiled `insta` executable — and npm scripts export npm_execpath to their
-  // children — so re-entering blindly would spawn `insta npx-cli.js …`. A non-node execPath
-  // sends npm/npx down the generic shim path below instead.
-  const execIsNode = /(^|[\\/])node(\.exe)?$/i.test(execPath)
-  if ((cmd === 'npm' || cmd === 'npx') && execIsNode) {
-    if (npmExecpath && /(^|[\\/])np[mx](-cli)?\.[cm]?js$/.test(npmExecpath)) {
-      const cli = npmExecpath.replace(/np[mx](-cli)?(\.[cm]?js)$/, `${cmd}$1$2`)
-      if (existsSync(cli)) return { cmd: execPath, args: [cli, ...args] }
-    }
-    const nodeDir = dirname(execPath)
-    const besideNode = platform === 'win32'
-      ? join(nodeDir, 'node_modules', 'npm', 'bin', `${cmd}-cli.js`)
-      : join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', `${cmd}-cli.js`)
-    if (existsSync(besideNode)) return { cmd: execPath, args: [besideNode, ...args] }
-  }
-  // Generic shim path — every non-npm CLI we shell out to (claude), plus npm/npx themselves
-  // when node isn't resolvable (native binary channel). On Windows these are .cmd shims, which
-  // spawn() refuses without a shell, so route them through cmd.exe. Guards, in order:
-  // - BARE names only: an absolute path or anything .exe (node.exe from a resolved npm/npx
-  //   invocation passing back through here) is directly spawnable and must NOT see cmd.exe.
-  // - The name is resolved to its ABSOLUTE PATH location first: cmd.exe searches the current
-  //   directory before PATH, so a bare name would let a shim planted in the project dir
-  //   shadow the real CLI. No PATH hit → pass through (spawn fails; callers degrade).
-  // - No manual quoting: libuv already wraps spaced args when building the child command
-  //   line — pre-quoting would be quoted AGAIN and arrive as literal quote characters.
-  // - That leaves cmd.exe metacharacters unprotectable, so an arg carrying one (e.g. a
-  //   custom INSTA_MCP_URL with `&`) skips the wrapper: the bare-shim spawn fails and every
-  //   caller degrades gracefully (probe → not-installed; registration → manual-add
-  //   fallback). Never hand metacharacters to a shell.
-  const bareShim = !/[\\/]/.test(cmd) && !/\.exe$/i.test(cmd)
-  if (platform === 'win32' && bareShim && !args.some((a) => /[&|<>^%"]/.test(a))) {
-    const abs = whichOnPath(cmd, env, platform)
-    if (abs) return { cmd: 'cmd.exe', args: ['/d', '/s', '/c', abs, ...args] }
-  }
-  return { cmd, args }
 }
 
 // Capture stdout+stderr silently (don't stream) so we can print our own clean summary.

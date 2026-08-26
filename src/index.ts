@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { Command } from 'commander'
 import { ApiError } from './api.js'
-import { die } from './util.js'
+import { CliExit, fail } from './util.js'
 import * as auth from './commands/auth.js'
 import * as envCmd_ from './commands/env.js'
 import { ENV_NAMES } from './env.js'
@@ -30,9 +30,10 @@ import { billing, billingUpgrade, billingPortal } from './commands/billing.js'
 import * as selfUpdate from './commands/upgrade.js'
 import * as feedbackCmd from './commands/feedback.js'
 
-function onError(e: unknown): never {
-  if (e instanceof ApiError) die(`${e.message} (HTTP ${e.status})`)
-  die(e instanceof Error ? e.message : String(e))
+function onError(e: unknown): void {
+  if (e instanceof CliExit) return
+  if (e instanceof ApiError) return fail(`${e.message} (HTTP ${e.status})`)
+  fail(e instanceof Error ? e.message : String(e))
 }
 
 // Wrap an async action so rejections surface as clean CLI errors.

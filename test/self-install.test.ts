@@ -5,8 +5,9 @@ import { test, expect, vi } from 'vitest'
 import { ensureCliInstalled, findDurableOnPath, resolveSpawnable, setupAgent, SETUP_ARGS } from '../src/commands/setup.js'
 
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version as string
+const posixTest = process.platform === 'win32' ? test.skip : test
 
-test('findDurableOnPath finds a real global shim and ignores npx cache entries', () => {
+posixTest('findDurableOnPath finds a real global shim and ignores npx cache entries', () => {
   const globalBin = mkdtempSync(join(tmpdir(), 'insta-bin-'))
   const npxBin = join(mkdtempSync(join(tmpdir(), 'insta-npx-')), 'node_modules', '.bin')
   mkdirSync(npxBin, { recursive: true })
@@ -19,7 +20,19 @@ test('findDurableOnPath finds a real global shim and ignores npx cache entries',
   expect(findDurableOnPath('insta', { PATH: `${npxBin}:${globalBin}` }, 'linux')).toBe(true)
 })
 
-test('findDurableOnPath rejects POSIX PATH hits that could not actually run', () => {
+test('findDurableOnPath ignores an npx cache shim on Windows but finds a global insta.cmd', () => {
+  const globalBin = mkdtempSync(join(tmpdir(), 'insta-win-global-'))
+  const npxBin = join(mkdtempSync(join(tmpdir(), 'insta-win-npx-')), 'node_modules', '.bin')
+  mkdirSync(npxBin, { recursive: true })
+  writeFileSync(join(npxBin, 'insta.CMD'), '@echo off\n')
+  const env = { PATH: `${npxBin};${globalBin}`, PATHEXT: '.COM;.EXE;.BAT;.CMD' }
+
+  expect(findDurableOnPath('insta', env, 'win32')).toBe(false)
+  writeFileSync(join(globalBin, 'insta.CMD'), '@echo off\n')
+  expect(findDurableOnPath('insta', env, 'win32')).toBe(true)
+})
+
+posixTest('findDurableOnPath rejects POSIX PATH hits that could not actually run', () => {
   const bin = mkdtempSync(join(tmpdir(), 'insta-noexec-'))
   writeFileSync(join(bin, 'insta'), 'not a program\n', { mode: 0o644 }) // no exec bit
   expect(findDurableOnPath('insta', { PATH: bin }, 'linux')).toBe(false)
@@ -157,8 +170,8 @@ test('resolveSpawnable re-enters npm/npx as node scripts so Windows .cmd shims a
   const claudeShim = join(shimBin, 'claude.CMD')
   writeFileSync(claudeShim, '@echo off\n')
   const winEnv = { PATH: shimBin, PATHEXT: '.COM;.EXE;.BAT;.CMD' }
-  expect(resolveSpawnable('claude', ['mcp', 'add', '--header', 'Authorization: Bearer x'], npmCli, winNode, 'win32', winEnv))
-    .toEqual({ cmd: 'cmd.exe', args: ['/d', '/s', '/c', claudeShim, 'mcp', 'add', '--header', 'Authorization: Bearer x'] })
+  expect(resolveSpawnable('claude', ['mcp', 'add', '--header', 'Authorization: Bearer x'], npmCli, winNode, 'win32', winEnv, 'C:\\Windows'))
+    .toEqual({ cmd: 'C:\\Windows\\System32\\cmd.exe', args: ['/d', '/s', '/c', claudeShim, 'mcp', 'add', '--header', 'Authorization: Bearer x'] })
   // Not on PATH → passthrough; the bare spawn fails and the probe treats it as not-installed.
   expect(resolveSpawnable('claude', ['--version'], npmCli, winNode, 'win32', { PATH: '' }))
     .toEqual({ cmd: 'claude', args: ['--version'] })
@@ -166,6 +179,13 @@ test('resolveSpawnable re-enters npm/npx as node scripts so Windows .cmd shims a
   // such args skip it and the callers' best-effort degradation handles the failed bare spawn.
   expect(resolveSpawnable('claude', ['mcp', 'add', 'x', 'https://mcp.example.com/mcp?a=1&b=2'], npmCli, winNode, 'win32', winEnv))
     .toEqual({ cmd: 'claude', args: ['mcp', 'add', 'x', 'https://mcp.example.com/mcp?a=1&b=2'] })
+  // The absolute shim path is cmd.exe input too. A metacharacter in a PATH directory must not
+  // become a shell operator; skip the wrapper and let the caller degrade on a failed bare spawn.
+  const hostileBin = join(mkdtempSync(join(tmpdir(), 'insta-shim-')), 'has&meta')
+  mkdirSync(hostileBin)
+  writeFileSync(join(hostileBin, 'claude.CMD'), '@echo off\n')
+  expect(resolveSpawnable('claude', ['--version'], npmCli, winNode, 'win32', { PATH: hostileBin, PATHEXT: '.CMD' }, 'C:\\Windows'))
+    .toEqual({ cmd: 'claude', args: ['--version'] })
   // On POSIX, non-npm commands and unresolvable environments pass through untouched.
   expect(resolveSpawnable('claude', ['--version'], npmCli, '/fake/bin/node', 'linux'))
     .toEqual({ cmd: 'claude', args: ['--version'] })
