@@ -10,9 +10,9 @@
 // Namespace import on purpose: several of these APIs are new, and a namespace import makes the
 // pre-fix run fail as readable assertions rather than an ESM binding error that kills the file.
 import { test, expect, beforeEach } from 'vitest'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import * as up from '../src/commands/upgrade.js'
 
 let cacheFile: string
@@ -25,6 +25,26 @@ beforeEach(() => {
 
 // The registry as it actually looks today: `latest` is 0.0.47, `next` is a prerelease.
 const DIST_TAGS = { next: '0.0.23-rc.1', latest: '0.0.47' }
+
+test('Windows npm upgrades re-enter npm through node instead of spawning the .cmd shim', () => {
+  const nodeDir = mkdtempSync(join(tmpdir(), 'insta-up-node-'))
+  const node = join(nodeDir, 'node.exe')
+  const npmCli = join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  mkdirSync(dirname(npmCli), { recursive: true })
+  writeFileSync(npmCli, '')
+  const env = { PATH: nodeDir }
+
+  expect(up.resolveRunSpec(
+    { cmd: 'npm', args: ['install', '-g', 'insta@0.0.48'], env },
+    '',
+    node,
+    'win32',
+  )).toEqual({
+    cmd: node,
+    args: [npmCli, 'install', '-g', 'insta@0.0.48'],
+    env,
+  })
+})
 
 function fakeRegistry(
   tags: Record<string, string> | null,

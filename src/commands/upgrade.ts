@@ -22,6 +22,7 @@ import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { readGlobal, writeGlobal } from '../config.js'
+import { resolveSpawnable } from '../spawn.js'
 import { info } from '../util.js'
 
 const INSTALL_SH = 'https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh'
@@ -40,6 +41,16 @@ export type CheckCache = { checkedAt: number; latest: string; lastAutoAt?: numbe
 export type Fetcher = (url: string, init?: RequestInit) => Promise<Response>
 export type RunSpec = { cmd: string; args: string[]; env: NodeJS.ProcessEnv }
 export type Runner = (spec: RunSpec) => Promise<void>
+
+export function resolveRunSpec(
+  spec: RunSpec,
+  npmExecpath = spec.env.npm_execpath,
+  execPath = process.execPath,
+  platform: NodeJS.Platform = process.platform,
+): RunSpec {
+  const resolved = resolveSpawnable(spec.cmd, spec.args, npmExecpath, execPath, platform, spec.env)
+  return { ...spec, ...resolved }
+}
 
 const cachePath = (): string => process.env.INSTA_UPDATE_CACHE ?? join(homedir(), '.insta', 'update-check.json')
 
@@ -202,7 +213,8 @@ export function autoEnabled(home = homedir()): boolean {
 
 const spawnRun: Runner = ({ cmd, args, env }) =>
   new Promise<void>((resolve, reject) => {
-    const p = spawn(cmd, args, { stdio: 'inherit', env })
+    const resolved = resolveRunSpec({ cmd, args, env })
+    const p = spawn(resolved.cmd, resolved.args, { stdio: 'inherit', env })
     p.on('error', reject)
     p.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`upgrade failed (exit ${code})`))))
   })
@@ -218,7 +230,9 @@ const observeInstalled: Observer = (channel, installDir) =>
     let out = ''
     try {
       // INSTA_NO_AUTOUPDATE: the child must not kick off yet another upgrade while we are reading it.
-      const p = spawn(cmd, ['--version'], { stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, INSTA_NO_AUTOUPDATE: '1' } })
+      const env: NodeJS.ProcessEnv = { ...process.env, INSTA_NO_AUTOUPDATE: '1' }
+      const resolved = resolveRunSpec({ cmd, args: ['--version'], env })
+      const p = spawn(resolved.cmd, resolved.args, { stdio: ['ignore', 'pipe', 'ignore'], env })
       p.stdout.on('data', (d) => (out += String(d)))
       p.on('error', () => resolve(null))
       p.on('close', () => {
