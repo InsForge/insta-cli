@@ -5,14 +5,18 @@ import { join } from 'node:path'
 import { makePromptSource, planSetupEnv, setupAgent, shouldOfferLogin, registerMcp, SETUP_ARGS, MCP_SERVER_NAME, DEFAULT_MCP_URL } from '../src/commands/setup.js'
 import { ENVS } from '../src/env.js'
 
-// setupAgent's default planner inputs read $INSTA_ENV / $INSTA_API_URL — a developer or CI shell
-// with either set would change the plan under these tests. Clear and restore around every test.
+// Setup resolves its API environment, MCP URL, and skill source from INSTA_ENV, INSTA_API_URL,
+// INSTA_MCP_URL, and INSTA_SKILLS_REPO. Clear and restore all four around every test so a
+// developer or CI shell cannot change these assertions.
 const ambient: Record<string, string | undefined> = {}
 beforeEach(() => {
-  for (const k of ['INSTA_ENV', 'INSTA_API_URL']) { ambient[k] = process.env[k]; delete process.env[k] }
+  for (const k of ['INSTA_ENV', 'INSTA_API_URL', 'INSTA_MCP_URL', 'INSTA_SKILLS_REPO']) {
+    ambient[k] = process.env[k]
+    delete process.env[k]
+  }
 })
 afterEach(() => {
-  for (const k of ['INSTA_ENV', 'INSTA_API_URL']) {
+  for (const k of ['INSTA_ENV', 'INSTA_API_URL', 'INSTA_MCP_URL', 'INSTA_SKILLS_REPO']) {
     if (ambient[k] === undefined) delete process.env[k]; else process.env[k] = ambient[k]
   }
 })
@@ -22,6 +26,15 @@ afterEach(() => {
 const storedProd = async () => ({ apiUrl: ENVS.prod.api })
 const noSwitch = async (name: string) => { throw new Error(`unexpected env switch to ${name}`) }
 const withStored = { readStored: storedProd, switchEnv: noSwitch }
+const withProdOverride = async <T>(fn: () => Promise<T>): Promise<T> => {
+  const previous = process.env.INSTA_API_URL
+  process.env.INSTA_API_URL = ENVS.prod.api
+  try { return await fn() }
+  finally {
+    if (previous === undefined) delete process.env.INSTA_API_URL
+    else process.env.INSTA_API_URL = previous
+  }
+}
 const callSetup = (
   opts: Parameters<typeof setupAgent>[0],
   run: Parameters<typeof setupAgent>[1],
@@ -32,7 +45,8 @@ const callSetup = (
 
 test('setup agent installs the insta skill user-globally for all agents', async () => {
   const runs: string[][] = []
-  await callSetup({ yes: true }, async (_cmd, args) => { runs.push(args); return { ok: true, output: '' } })
+  await withProdOverride(() =>
+    callSetup({ yes: true }, async (_cmd, args) => { runs.push(args); return { ok: true, output: '' } }))
   expect(runs[0]).toEqual(SETUP_ARGS)
   expect(SETUP_ARGS).toContain('-g')          // user-level, not per-project
   expect(SETUP_ARGS).toContain('*')           // every agent dir
@@ -189,6 +203,7 @@ test('--mcp-token + interactive login registers MCP with the token exactly once,
 })
 
 test('setupAgent surfaces a disagreeing $INSTA_ENV the same way (INSTA_ENV=staging + --env prod)', async () => {
+  delete process.env.INSTA_API_URL
   process.env.INSTA_ENV = 'staging'
   const runs: string[][] = []
   await expect(callSetup({ yes: true, env: 'prod' }, async (_cmd, args) => { runs.push(args); return { ok: true, output: '' } }))
@@ -380,10 +395,10 @@ test('the summary still notes skill + MCP when only Claude Code has MCP', async 
 test('registerMcp is idempotent — an existing registration is left alone (no token minted)', async () => {
   const runs: string[][] = []
   let minted = 0
-  await registerMcp(
+  await withProdOverride(() => registerMcp(
     async (_cmd, args) => { runs.push(args); return { ok: true, output: '' } },
     async () => { minted++; return 'insta_x_y' },
-  )
+  ))
   expect(runs.map((a) => a.join(' '))).toEqual(['--version', `mcp get ${MCP_SERVER_NAME}`])
   expect(minted).toBe(0)
 })
@@ -391,14 +406,14 @@ test('registerMcp is idempotent — an existing registration is left alone (no t
 test('registerMcp defaults to OAuth: adds the server with NO auth header and mints nothing', async () => {
   const runs: string[][] = []
   let minted = 0
-  await registerMcp(
+  await withProdOverride(() => registerMcp(
     async (_cmd, args) => {
       runs.push(args)
       // version probe ok; `mcp get` says not registered; `mcp add` ok
       return { ok: !(args[0] === 'mcp' && args[1] === 'get'), output: '' }
     },
     async () => { minted++; return 'insta_x_y' },
-  )
+  ))
   const add = runs.find((a) => a[0] === 'mcp' && a[1] === 'add')!
   expect(add).toBeDefined()
   expect(add.join(' ')).toContain(`--transport http --scope user ${MCP_SERVER_NAME} ${DEFAULT_MCP_URL}`)
@@ -408,11 +423,11 @@ test('registerMcp defaults to OAuth: adds the server with NO auth header and min
 
 test('registerMcp --mcp-token mints a durable token into the Authorization header (headless)', async () => {
   const runs: string[][] = []
-  await registerMcp(
+  await withProdOverride(() => registerMcp(
     async (_cmd, args) => { runs.push(args); return { ok: !(args[0] === 'mcp' && args[1] === 'get'), output: '' } },
     async () => 'insta_abc_secret',
     true,
-  )
+  ))
   const add = runs.find((a) => a[0] === 'mcp' && a[1] === 'add')!
   expect(add.join(' ')).toContain(`--transport http --scope user ${MCP_SERVER_NAME} ${DEFAULT_MCP_URL}`)
   expect(add.join(' ')).toContain('Authorization: Bearer insta_abc_secret')

@@ -9,6 +9,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { installObserve } from '../src/observe/install.js'
 
+const posixTest = process.platform === 'win32' ? test.skip : test
+
 function fakeAssets(): string {
   const d = mkdtempSync(join(tmpdir(), 'obs-assets-'))
   writeFileSync(join(d, 'hook.js'), '// hook')
@@ -30,7 +32,7 @@ test('claude hook entry is a single shell-string command with $CLAUDE_PROJECT_DI
 // .claude/settings.json is often committed while ./.insta stays local-only, so a fresh clone
 // (cloud code session, teammate checkout) has the hook registered but no hook.js — the command
 // must no-op there, not spam MODULE_NOT_FOUND after every tool call. Found live (2026-07-15).
-test('hook command exits 0 when .insta/observe/hook.js is absent, runs it when present', () => {
+posixTest('hook command exits 0 when .insta/observe/hook.js is absent, runs it when present', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'obs-proj-'))
   mkdirSync(join(cwd, '.claude'), { recursive: true })
   installObserve({ cwd, assetDir: fakeAssets() })

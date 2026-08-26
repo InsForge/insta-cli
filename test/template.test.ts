@@ -352,21 +352,30 @@ describe('deployMode', () => {
   // never expands it, and a quoted target never reaches the shell that would.
   describe('~ expansion', () => {
     const origHome = process.env.HOME
-    afterEach(() => { if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome })
+    const origUserProfile = process.env.USERPROFILE
+    afterEach(() => {
+      if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome
+      if (origUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = origUserProfile
+    })
+
+    const setHome = (home: string) => {
+      process.env.HOME = home
+      process.env.USERPROFILE = home
+    }
 
     it('expands a leading ~/ to the home directory', () => {
       const root = manifestDir('tpl')
-      process.env.HOME = root
+      setHome(root)
       expect(deployMode('~/tpl')).toEqual({ kind: 'local', dir: join(root, 'tpl') })
     })
     it('expands a bare ~ to the home directory itself', () => {
       const root = manifestDir('tpl')
-      process.env.HOME = join(root, 'tpl')
+      setHome(join(root, 'tpl'))
       expect(deployMode('~')).toEqual({ kind: 'local', dir: join(root, 'tpl') })
     })
     it('still reads a bare word as a registry code, ~ or no ~', () => {
       const root = manifestDir('tpl')
-      process.env.HOME = root
+      setHome(root)
       expect(deployMode('tpl')).toEqual({ kind: 'registry', code: 'tpl' })
     })
     // ~user needs a passwd lookup; leaving it literal beats guessing another user's home.
