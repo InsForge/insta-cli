@@ -27,7 +27,28 @@ describe('splitExecArgs', () => {
 
   it('leaves argv untouched (command undefined) when there is no -- at all', () => {
     const argv = ['node', 'insta', 'compute', 'exec', 'myservice']
-    expect(splitExecArgs(argv)).toEqual({ argv })
+    expect(splitExecArgs(argv, 'linux')).toEqual({ argv })
+  })
+
+  it('recovers a command after the npm PowerShell shim consumed --', () => {
+    const argv = ['node', 'insta', 'compute', 'exec', 'app', 'printenv', 'PORT']
+    expect(splitExecArgs(argv, 'win32')).toEqual({
+      argv: ['node', 'insta', 'compute', 'exec', 'app'],
+      command: ['printenv', 'PORT'],
+    })
+  })
+
+  it('keeps CLI options before the recovered PowerShell command', () => {
+    const argv = ['node', 'insta', 'compute', 'exec', 'app', '--branch', 'prod', '--timeout=60', 'echo', '--json']
+    expect(splitExecArgs(argv, 'win32')).toEqual({
+      argv: ['node', 'insta', 'compute', 'exec', 'app', '--branch', 'prod', '--timeout=60'],
+      command: ['echo', '--json'],
+    })
+  })
+
+  it('does not infer the missing separator outside Windows', () => {
+    const argv = ['node', 'insta', 'compute', 'exec', 'app', 'echo', 'hi']
+    expect(splitExecArgs(argv, 'linux')).toEqual({ argv })
   })
 
   it('supports a command that is itself empty after --', () => {

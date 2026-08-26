@@ -91,12 +91,35 @@ export async function computeStatus(serviceName: string | undefined, opts: LifeO
 // ourselves, before commander ever parses it, removes the ambiguity; this is the only place in the
 // whole CLI a bare `--` has this meaning, so nothing else is affected. Exported for a direct,
 // network-free unit test — this split is the seam most likely to regress.
-export function splitExecArgs(argv: string[]): { argv: string[]; command?: string[] } {
+export function splitExecArgs(
+  argv: string[],
+  platform: NodeJS.Platform = process.platform,
+): { argv: string[]; command?: string[] } {
   const i = argv.findIndex((a, idx) => a === 'compute' && argv[idx + 1] === 'exec')
   if (i === -1) return { argv }
   const dash = argv.indexOf('--', i + 2)
-  if (dash === -1) return { argv }
-  return { argv: argv.slice(0, dash), command: argv.slice(dash + 1) }
+  if (dash !== -1) return { argv: argv.slice(0, dash), command: argv.slice(dash + 1) }
+  if (platform !== 'win32') return { argv }
+
+  // npm's generated PowerShell shim consumes a bare `--` before forwarding $args to node. When
+  // that happens, recover the command boundary after the optional service and any CLI options.
+  // Once the first command token is found, every remaining token is copied verbatim — including
+  // flags such as --json that belong to the remote command rather than this CLI.
+  let sawService = false
+  for (let cursor = i + 2; cursor < argv.length; cursor++) {
+    const token = argv[cursor]!
+    if (token === '--branch' || token === '--timeout') {
+      cursor++
+      continue
+    }
+    if (token.startsWith('--branch=') || token.startsWith('--timeout=') || token === '--json' || token === '--help' || token === '-h') continue
+    if (!sawService) {
+      sawService = true
+      continue
+    }
+    return { argv: argv.slice(0, cursor), command: argv.slice(cursor) }
+  }
+  return { argv }
 }
 
 // The --timeout override, through a throwing parser like every other user-typed number in this
