@@ -190,7 +190,7 @@ sec.command('tree').description('Show secrets as project → branch → service 
   .action(guard((o) => secretsCmd.secretsTree(o)))
 
 // ---- build (pre-push verification — local, offline, deploys nothing) ----
-program.command('build [dir]').description('Verify a source directory would build before deploying: detection plan + the Dockerfile that would be used (yours, or nixpacks-generated) + static checks. Local and offline — no login needed, nothing pushed. Exit 1 when the verdict is failed')
+program.command('build [dir]').description('Verify a source directory would build before deploying: detection plan + the Dockerfile (yours, or the one nixpacks would generate for the GitHub lane — `insta deploy <dir>` needs your own) + static checks. Local and offline — no login needed, nothing pushed. Exit 1 when the verdict is failed')
   .option('--explain', 'include the Dockerfile content in the output')
   .option('--port <p>', 'port the app listens on (else the Dockerfile EXPOSE)')
   .option('--json')

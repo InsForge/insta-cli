@@ -158,6 +158,59 @@ describe('buildReport', () => {
     expect(r.plan.envKeys).toEqual(['DATABASE_URL'])
     expect(r.dockerfile.source).toBe('nixpacks')
     expect(r.dockerfile.content).toContain('FROM node:18')
+    // NOT 'deployable': `insta deploy <dir>` refuses a directory with no Dockerfile of its own, so a
+    // verifier that blessed this directory would promise exactly what deploy rejects.
+    expect(r.verdict).toBe('needs-attention')
+  })
+
+  it('a nixpacks-only dir is never blessed as deployable — the dockerfile check names the lane split', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'insta-build-'))
+    writeFileSync(join(dir, 'package.json'), '{"name":"app","scripts":{"start":"node i.js"}}')
+    const r = await buildReport(dir, { port: '3000' }, { runner: nixpacksFake(PLAN), nixpacksAvailable: true })
+    const df = r.checks.find((c) => c.id === 'dockerfile')!
+    expect(df.status).toBe('fail')
+    // Warning, not critical: the plan is real (the GitHub lane does build it), so this must not
+    // exit 1 — it must only stop short of "deployable".
+    expect(df.severity).toBe('warning')
+    expect(df.detail).toContain('insta deploy <dir>')
+    expect(df.detail).toContain('GitHub-connected repos only')
+    expect(df.nextAction).toContain(join(dir, 'Dockerfile'))
+    expect(df.nextAction).toContain('GitHub')
+    // Must NOT tell the user to save the generated Dockerfile: it COPYs .nixpacks/ support files
+    // this directory has no copy of, so that advice would be a second false promise.
+    expect(df.nextAction).not.toMatch(/save the generated/i)
+    expect(r.verdict).toBe('needs-attention')
+  })
+
+  it('--explain labels a nixpacks Dockerfile as not standalone (it COPYs .nixpacks/ support files)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'insta-build-'))
+    writeFileSync(join(dir, 'package.json'), '{"name":"app","scripts":{"start":"node i.js"}}')
+    const generated = 'FROM node:18\nCOPY .nixpacks/nixpkgs-deadbeef.nix .nixpacks/nixpkgs-deadbeef.nix\nCMD ["npm","start"]\n'
+    const r = await buildReport(dir, { port: '3000' }, { runner: nixpacksFake(PLAN, generated), nixpacksAvailable: true })
+    const text = renderReport(r, true).join('\n')
+    expect(text).toContain('not standalone')
+    expect(text).toContain('.nixpacks/')
+    expect(text).toContain('COPY .nixpacks/nixpkgs-deadbeef.nix')
+  })
+
+  it('a user Dockerfile is dumped by --explain with no not-standalone caveat', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'insta-build-'))
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM node:20\nEXPOSE 3000\nCMD ["npm","start"]\n')
+    const runner: BuildRunner = async () => { throw new Error('nixpacks must not run when a Dockerfile exists') }
+    const r = await buildReport(dir, {}, { runner, nixpacksAvailable: true })
+    const text = renderReport(r, true).join('\n')
+    expect(text).toContain('FROM node:20')
+    expect(text).not.toContain('not standalone')
+  })
+
+  it('a user Dockerfile still passes the check outright (the honest case is unchanged)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'insta-build-'))
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM node:20\nEXPOSE 3000\nCMD ["npm","start"]\n')
+    const runner: BuildRunner = async () => { throw new Error('nixpacks must not run when a Dockerfile exists') }
+    const r = await buildReport(dir, {}, { runner, nixpacksAvailable: true })
+    const df = r.checks.find((c) => c.id === 'dockerfile')!
+    expect(df.status).toBe('pass')
+    expect(df.severity).toBe('critical')
     expect(r.verdict).toBe('deployable')
   })
 
@@ -212,8 +265,26 @@ describe('renderReport', () => {
     const text = renderReport(r, false).join('\n')
     expect(text).toContain('nixpacks')
     expect(text).toContain('--port flag')
-    expect(text).toContain('verdict: deployable')
+    expect(text).toContain('verdict: needs-attention')
     expect(text).not.toContain('FROM node:18') // Dockerfile content only with --explain
     expect(renderReport(r, true).join('\n')).toContain('FROM node:18')
+  })
+
+  it('the builder line itself carries the lane caveat — "builder: nixpacks" alone reads as a promise', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'insta-build-'))
+    writeFileSync(join(dir, 'package.json'), '{}')
+    const r = await buildReport(dir, { port: '3000' }, { runner: nixpacksFake(PLAN), nixpacksAvailable: true })
+    const builderLine = renderReport(r, false).find((l) => l.trim().startsWith('builder:'))!
+    expect(builderLine).toContain('nixpacks')
+    expect(builderLine).toContain('needs a Dockerfile')
+  })
+
+  it('a dockerfile-builder report keeps a clean builder line (no caveat where none applies)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'insta-build-'))
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM node:20\nEXPOSE 3000\nCMD ["npm","start"]\n')
+    const runner: BuildRunner = async () => { throw new Error('nixpacks must not run when a Dockerfile exists') }
+    const r = await buildReport(dir, {}, { runner, nixpacksAvailable: true })
+    const builderLine = renderReport(r, false).find((l) => l.trim().startsWith('builder:'))!
+    expect(builderLine.trim()).toBe('builder: dockerfile')
   })
 })
