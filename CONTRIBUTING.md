@@ -46,9 +46,12 @@ Two conventions worth knowing before you write code:
 ## Pull requests
 
 `main` is protected. Branch from `origin/main` using a `feat/*`, `fix/*` or `docs/*` prefix
-and open a PR against `main`; merges are squashed. Two checks must pass: `ci` (typecheck
-plus vitest) and `cubic` (an AI reviewer — its comments are not the required approval). A
-PR needs one approving review, and you cannot approve your own.
+and open a PR against `main`; merges are squashed. The `ci` workflow runs the gate on both
+platforms — `test` (ubuntu-latest) and `test-windows` (windows-latest), each running typecheck
+plus the full vitest suite — and `cubic` is an AI reviewer whose comments are not the required
+approval. Both `ci` jobs are expected green before merge; a Windows-only failure is a real
+failure (the CLI shells out to npm/npx shims that behave differently there). A PR needs one
+approving review, and you cannot approve your own.
 
 Maintainers: the internal review and release runbook is in
 `.claude/skills/developing-insta-cli/SKILL.md`.
