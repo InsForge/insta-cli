@@ -283,7 +283,10 @@ fi
 echo "Next steps:"
 echo "  insta login --oauth github     # connect to the cloud (or run insta-oss locally to skip)"
 echo "  insta project create demo      # postgres + storage + compute, provisioned in one shot"
-echo "  insta deploy . --port 3000     # ship your app and get a live URL"
+# A directory deploy needs a Dockerfile in the directory (there is no local no-Dockerfile lane), so
+# the banner says so rather than recommending a command that errors for a Dockerfile-less app.
+echo "  insta build .                  # check what would ship (Dockerfile, start command, port)"
+echo "  insta deploy . --port 3000     # ship your app -- needs a Dockerfile -- and get a live URL"
 echo "  insta branch create preview    # clone db + storage + app into an isolated env"
 echo
 echo "Your coding agents now know InstaCloud — you can just ask them to do the above."

@@ -34,6 +34,26 @@ export function dockerfileExposedPort(dockerfile: string): number | undefined {
   return port
 }
 
+// A directory deploy builds the Dockerfile IN the directory — there is no no-Dockerfile lane here.
+// The nixpacks (no-Dockerfile) lane is real but server-side: it runs on the build gateway for
+// GitHub-connected repos only, and nothing reachable from `insta deploy <dir>` can enter it. So the
+// dead-end message names every way forward instead of the bare "add one".
+//
+// It deliberately does NOT say "save the Dockerfile `insta build --explain` prints": that file is
+// not standalone — it COPYs `.nixpacks/nixpkgs-<hash>.nix` support files nixpacks writes beside it,
+// which the source dir does not have. Pointing at it would swap one false promise for another. The
+// detected install/start commands ARE reusable, so the message points at those.
+// Pure, so it's unit-tested.
+export function noDockerfileMessage(absDir: string): string {
+  return [
+    `no Dockerfile at ${join(absDir, 'Dockerfile')} — a directory deploy builds the Dockerfile in the directory.`,
+    'Options:',
+    `  - add a Dockerfile to ${absDir} (\`insta build ${absDir}\` prints the install/start commands nixpacks detected, as a starting point)`,
+    '  - deploy a prebuilt image instead: `insta deploy --image <url>`',
+    "  - connect the app's GitHub repo in the console — that lane builds Dockerfile-less repos with nixpacks server-side",
+  ].join('\n')
+}
+
 // Deploy either a prebuilt image (`--image`) or a source directory (positional `<dir>`, built
 // remotely on Fly and pushed with a short-lived platform-minted token). Exactly one mode.
 export async function deploy(dir: string | undefined, opts: DeployOpts): Promise<void> {
@@ -92,7 +112,7 @@ export async function buildFromSource(
   run: BuildRunner = opts.json ? stderrBuildRunner : defaultBuildRunner,
 ): Promise<string> {
   const absDir = resolve(process.cwd(), dir)
-  if (!existsSync(join(absDir, 'Dockerfile'))) die(`no Dockerfile at ${join(absDir, 'Dockerfile')} — add one, or use --image <url>`)
+  if (!existsSync(join(absDir, 'Dockerfile'))) die(noDockerfileMessage(absDir))
   const log = note(opts)
 
   let tok

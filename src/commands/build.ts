@@ -171,14 +171,33 @@ export async function buildReport(
   const envKeys = existsSync(envExample) ? envKeysFromDotEnvExample(readFileSync(envExample, 'utf8')) : []
 
   const checks: BuildCheck[] = []
-  checks.push({
-    id: 'dockerfile',
-    severity: 'critical',
-    status: dockerfile.source ? 'pass' : 'fail',
-    title: 'Dockerfile',
-    detail: dockerfileDetail,
-    ...(dockerfile.source ? {} : { nextAction: `add a Dockerfile at ${userDockerfilePath}, or install nixpacks (https://nixpacks.com/docs/install) so insta can generate one` }),
-  })
+  // Only a Dockerfile IN the directory passes. A nixpacks-generated one is a real plan, but it is
+  // not a plan `insta deploy <dir>` can execute: that path builds the directory's own Dockerfile and
+  // dies without one, and the nixpacks lane runs server-side for GitHub-connected repos only. This
+  // check used to pass on the generated Dockerfile, so a verifier said "deployable" about a
+  // directory `deploy` refuses — the whole point of the command is to not do that.
+  checks.push(
+    dockerfile.source === 'nixpacks'
+      ? {
+          id: 'dockerfile',
+          severity: 'warning',
+          status: 'fail',
+          title: 'Dockerfile',
+          detail: `${dockerfileDetail} — but \`insta deploy <dir>\` builds the directory's own Dockerfile; the nixpacks lane runs server-side for GitHub-connected repos only`,
+          // NOT "save the generated Dockerfile here": it is not standalone (it COPYs the
+          // .nixpacks/nixpkgs-<hash>.nix support files nixpacks writes beside it, which this
+          // directory does not have). The detected commands above are the reusable part.
+          nextAction: `to deploy this directory, write a Dockerfile at ${userDockerfilePath} — the detected install/start commands above are the starting point; or connect the repo on GitHub to use the nixpacks lane`,
+        }
+      : {
+          id: 'dockerfile',
+          severity: 'critical',
+          status: dockerfile.source ? 'pass' : 'fail',
+          title: 'Dockerfile',
+          detail: dockerfileDetail,
+          ...(dockerfile.source ? {} : { nextAction: `add a Dockerfile at ${userDockerfilePath}, or install nixpacks (https://nixpacks.com/docs/install) so insta can show you the one it would generate` }),
+        },
+  )
 
   if (builder === 'dockerfile') {
     const hasCmd = /^\s*(CMD|ENTRYPOINT)\s/im.test(dockerfile.content ?? '')
@@ -228,7 +247,10 @@ const MARK = { pass: '✓', fail: '✗', skip: '·' } as const
 export function renderReport(r: BuildReport, explain: boolean): string[] {
   const lines: string[] = []
   lines.push(`plan for ${r.dir}:`)
-  lines.push(`  builder: ${r.plan.builder ?? 'none'}${r.plan.providers.length ? ` (providers: ${r.plan.providers.join(', ')})` : ''}`)
+  // The builder line is the first thing read (and the thing an agent scrapes), so it carries the
+  // lane caveat too — "builder: nixpacks" on its own reads as a promise `insta deploy <dir>` breaks.
+  const lane = r.plan.builder === 'nixpacks' ? ' — GitHub lane only; `insta deploy <dir>` needs a Dockerfile' : ''
+  lines.push(`  builder: ${r.plan.builder ?? 'none'}${r.plan.providers.length ? ` (providers: ${r.plan.providers.join(', ')})` : ''}${lane}`)
   if (r.plan.installCommand) lines.push(`  install: ${r.plan.installCommand}`)
   if (r.plan.buildCommand) lines.push(`  build:   ${r.plan.buildCommand}`)
   if (r.plan.startCommand) lines.push(`  start:   ${r.plan.startCommand}`)
@@ -242,6 +264,10 @@ export function renderReport(r: BuildReport, explain: boolean): string[] {
   }
   if (explain && r.dockerfile.content) {
     lines.push(`dockerfile (${r.dockerfile.source}):`)
+    // A nixpacks Dockerfile is shown for inspection, NOT for copying: it COPYs the
+    // .nixpacks/nixpkgs-<hash>.nix support files nixpacks generates beside it, so saving this text
+    // alone as ./Dockerfile produces a build that fails on the missing COPY.
+    if (r.dockerfile.source === 'nixpacks') lines.push('  # for inspection — not standalone: it COPYs .nixpacks/ support files generated alongside it')
     for (const l of r.dockerfile.content.trimEnd().split('\n')) lines.push(`  ${l}`)
   }
   lines.push(`verdict: ${r.verdict}`)
