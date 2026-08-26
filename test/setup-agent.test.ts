@@ -219,6 +219,105 @@ test('setup agent on a staging-persisted machine switches to prod BEFORE install
   expect(order[1]).toBe('ensure')
 })
 
+// ---- --project: the console one-liner links inside the same process (no shell joiner) ----
+
+const linkFlow = (answers: { ask: boolean; loginOk?: boolean }, events: string[]) => ({
+  ask: async () => { events.push('ask'); return answers.ask },
+  login: async () => { if (answers.loginOk === false) throw new Error('browser exploded'); events.push('login') },
+  stdinTty: true,
+  stdoutTty: true,
+})
+
+test('--project links after login on a fresh interactive machine (login → link, same process)', async () => {
+  const events: string[] = []
+  await setupAgent(
+    { yes: false, project: 'proj_123' },
+    async () => ({ ok: true, output: '' }),
+    undefined, async () => [], async () => {},
+    async () => ({ apiUrl: ENVS.prod.api }), noSwitch, // no session
+    linkFlow({ ask: true }, events),
+    async (id) => { events.push(`link:${id}`) },
+  )
+  expect(events).toEqual(['ask', 'login', 'link:proj_123'])
+})
+
+test('--project already logged in links without prompting', async () => {
+  const events: string[] = []
+  await setupAgent(
+    { yes: true, project: 'proj_123' },
+    async () => ({ ok: true, output: '' }),
+    undefined, async () => [], async () => {},
+    async () => ({ apiUrl: ENVS.prod.api, user: { id: 'u', email: 't@e.com', name: 'T' } }), noSwitch,
+    linkFlow({ ask: true }, events),
+    async (id) => { events.push(`link:${id}`) },
+  )
+  expect(events).toEqual(['link:proj_123'])
+})
+
+// Each no-session path: the link is skipped with the manual two-command hint, exit stays 0
+// (matching the declined-login best-effort philosophy).
+const expectLinkSkipped = async (
+  opts: Parameters<typeof setupAgent>[0],
+  flow: ReturnType<typeof linkFlow>,
+  expectedEvents: string[],
+) => {
+  const prev = process.exitCode
+  let out = ''
+  const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c) => { out += String(c); return true })
+  const events: string[] = []
+  try {
+    await setupAgent(
+      opts,
+      async () => ({ ok: true, output: '' }),
+      undefined, async () => [], async () => {},
+      async () => ({ apiUrl: ENVS.prod.api }), noSwitch, // no session
+      { ...flow, ask: async () => { events.push('ask'); return false } },
+      async (id) => { events.push(`link:${id}`) },
+    )
+  } finally { spy.mockRestore() }
+  expect(events).toEqual(expectedEvents) // never a link
+  expect(out).toContain('run `insta login`, then `insta project link proj_123`')
+  expect(process.exitCode).toBe(prev)
+}
+
+test('--project with -y and no session skips the link with the manual hint, exit 0', async () => {
+  await expectLinkSkipped({ yes: true, project: 'proj_123' }, linkFlow({ ask: false }, []), [])
+})
+
+test('--project with an interactive DECLINE skips the link the same way', async () => {
+  await expectLinkSkipped({ yes: false, project: 'proj_123' }, linkFlow({ ask: false }, []), ['ask'])
+})
+
+test('--project on a non-TTY (agents/CI) never prompts and skips the link the same way', async () => {
+  await expectLinkSkipped(
+    { yes: false, project: 'proj_123' },
+    { ...linkFlow({ ask: false }, []), stdinTty: false, stdoutTty: false },
+    [], // no prompt at all
+  )
+})
+
+test('--project link failure (bad id / no access) exits 1 and STOPS — no success summary after the error', async () => {
+  const prev = process.exitCode
+  let out = ''
+  const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c) => { out += String(c); return true })
+  try {
+    await setupAgent(
+      { yes: true, project: 'proj_bad' },
+      async () => ({ ok: true, output: '' }),
+      undefined, async () => [], async () => {},
+      async () => ({ apiUrl: ENVS.prod.api, user: { id: 'u', email: 't@e.com', name: 'T' } }), noSwitch,
+      linkFlow({ ask: true }, []),
+      async () => { throw new Error('project not found') },
+    )
+  } finally { spy.mockRestore() }
+  expect(out).toContain('project link failed (project not found) — agent setup itself is done; run `insta project link proj_bad` to retry the link')
+  expect(process.exitCode).toBe(1)
+  // Mixed messaging guard: after an error, no cheerful summary or next-step line follows.
+  expect(out).not.toContain('ready to use InstaCloud')
+  expect(out).not.toContain('next:')
+  process.exitCode = prev
+})
+
 // ---- output copy: one combined MCP line + a next: that makes sense (user feedback 2026-08-20) ----
 
 const captureSetupOutput = async (installConfigs: () => Promise<string[]>): Promise<string> => {

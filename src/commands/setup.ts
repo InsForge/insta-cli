@@ -15,6 +15,7 @@ import { readPersistedGlobal, resolveEnv, type GlobalConfig } from '../config.js
 import { DEFAULT_ENV, ENVS, ENV_NAMES, envForApiUrl, envFromEnvVar, isEnvName, mcpServerName, type EnvName } from '../env.js'
 import { info } from '../util.js'
 import { loginOauth } from './auth.js'
+import { projectLink } from './project.js'
 import { envUse } from './env.js'
 import { installAgentConfigs } from './mcp.js'
 import { detectChannel, type Channel } from './upgrade.js'
@@ -448,7 +449,7 @@ export type LoginFlow = {
 }
 
 export async function setupAgent(
-  opts: { yes?: boolean; mcpToken?: boolean; env?: string },
+  opts: { yes?: boolean; mcpToken?: boolean; env?: string; project?: string },
   run: Runner = defaultRunner,
   mint?: TokenMinter,
   installConfigs: (agent?: string) => Promise<string[]> = installAgentConfigs,
@@ -461,6 +462,7 @@ export async function setupAgent(
     stdinTty: canPromptViaTty(),
     stdoutTty: !!process.stdout.isTTY,
   },
+  link: (id: string) => Promise<void> = projectLink,
 ): Promise<void> {
   if (!opts.yes && !process.stdout.isTTY) {
     info('non-interactive shell — assuming -y')
@@ -515,6 +517,29 @@ export async function setupAgent(
       } catch (e) {
         info(`  login did not complete (${e instanceof Error ? e.message : String(e)}) — no problem, setup itself is done.`)
         info('  on a remote/SSH machine the browser flow cannot call back here — use `insta login --device` instead.')
+      }
+    }
+  }
+  // --project: link this directory inside the SAME process. The console's connect panel used to
+  // print `setup agent && insta project link <id>` as one paste — but no shell joiner survives
+  // every Windows shell, and in shells without bracketed paste the queued link line is eaten as
+  // the answer to the login prompt above (console PR #290). Carrying the id as a flag is the one
+  // form where "one line" is safe. Linking needs the session: without one the manual command is
+  // the hint, never a hang; a failed link (bad id, no access) is a REAL error — the link is the
+  // entire point of the flag — so it sets the exit code instead of pretending setup succeeded.
+  if (opts.project) {
+    if (!loggedIn) {
+      info(`  not logged in — project not linked; run \`insta login\`, then \`insta project link ${opts.project}\``)
+    } else {
+      try {
+        await link(opts.project)
+      } catch (e) {
+        // Stop here — like the skill-install failure above, finishing with the success summary
+        // and a cheerful `next:` after an error is mixed messaging. Setup itself did succeed,
+        // so say exactly that alongside the retry command.
+        info(`  project link failed (${e instanceof Error ? e.message : String(e)}) — agent setup itself is done; run \`insta project link ${opts.project}\` to retry the link`)
+        process.exitCode = 1
+        return
       }
     }
   }
