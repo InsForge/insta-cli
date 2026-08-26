@@ -139,7 +139,10 @@ export function domainStatusLines(r: DomainView, ctx: DomainCmdCtx = {}): string
   const records = recordsOf(r)
   const out = [`${r.hostname} -> ${targetOf(r)}`]
   const txt = records.find((d) => d.type === 'TXT')
-  const cname = records.find((d) => d.type === 'CNAME' && d.name === r.hostname)
+  // The ROUTING record for the hostname, whatever type it takes: a CNAME for a subdomain, or the
+  // A/AAAA pair an apex needs (Fly's apex path emits those). Matching only CNAME would report an
+  // apex domain's A record as "no routing record" now that a missing one is a blocker.
+  const cname = records.find((d) => d.type !== 'TXT' && d.name === r.hostname)
   const blockers: string[] = []
   const stage = (label: string, state: string, detail: string) => out.push(`  ${pad(label, 12)}${pad(state, 10)}${detail ? `  ${detail}` : ''}`)
 
@@ -160,11 +163,18 @@ export function domainStatusLines(r: DomainView, ctx: DomainCmdCtx = {}): string
   }
   if (cname) {
     const st = cname.status ?? (r.configured ? 'ok' : undefined)
-    if (st === 'ok') stage('cname', 'ok', `(points at ${cname.value})`)
-    else if (st === 'mismatch') { stage('cname', 'mismatch', `CNAME ${cname.name} must point at ${cname.value}`); blockers.push('fix the CNAME') }
-    else if (st === 'missing') { stage('cname', 'pending', `add CNAME ${cname.name} -> ${cname.value}`); blockers.push('add the CNAME') }
-    else stage('cname', 'unchecked', `CNAME ${cname.name} -> ${cname.value}`)
-  } else if (records.length === 0) {
+    // The stage is named for the record the platform actually issued, so an apex's A record is not
+    // described to the user as a CNAME they cannot create.
+    const lbl = cname.type.toLowerCase()
+    if (st === 'ok') stage(lbl, 'ok', `(points at ${cname.value})`)
+    else if (st === 'mismatch') { stage(lbl, 'mismatch', `${cname.type} ${cname.name} must point at ${cname.value}`); blockers.push(`fix the ${cname.type}`) }
+    else if (st === 'missing') { stage(lbl, 'pending', `add ${cname.type} ${cname.name} -> ${cname.value}`); blockers.push(`add the ${cname.type}`) }
+    else stage(lbl, 'unchecked', `${cname.type} ${cname.name} -> ${cname.value}`)
+  } else {
+    // No routing record for the hostname — whatever ELSE came back. Keying this on an entirely
+    // empty record set was the bug (r2d2 round 2): a payload carrying only the ownership TXT
+    // skipped the stage and added no blocker, so a `configured: true` answer with a live cert and
+    // a confirmed origin printed `serving` for a hostname with nothing pointing at us.
     stage('cname', 'unknown', 'the platform returned no routing record for this domain — nothing to publish yet; ask an operator')
     blockers.push('no routing record from the platform')
   }

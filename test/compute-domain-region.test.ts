@@ -220,6 +220,37 @@ describe('domainStatusLines (check-domain: every stage + where it routes)', () =
     expect(lines.at(-1)).toContain('no ownership TXT from the platform')
   })
 
+  // The PARTIAL case (r2d2 round 2 Critical): records came back, but not the routing one. Keying
+  // the "no routing record" stage on an entirely empty set let a payload carrying only the
+  // ownership TXT skip the stage and add no blocker — so a configured answer with a live cert and
+  // a confirmed origin printed a URL for a hostname with nothing pointing at us.
+  it('records present but NO routing record: the stage is still drawn, blocks, and never says serving', () => {
+    const txtOnly: DomainView = {
+      ...bound, configured: true, status: 'active', ssl: 'active',
+      dns: [{ type: 'TXT', name: '_insta-verify.app.customer.com', value: 'insta-verify=tok123', status: 'ok' }],
+      origin: 'prod-use1-origin.instacloud-dns.com', edgeOrigin: 'prod-use1-origin.instacloud-dns.com', originOk: true,
+    }
+    const lines = domainStatusLines(txtOnly)
+    expect(lines[1]).toBe('  ownership   verified    (TXT found)')
+    expect(lines[2]).toBe('  cname       unknown     the platform returned no routing record for this domain — nothing to publish yet; ask an operator')
+    expect(lines.at(-1)).toBe('  serving     not yet     (no routing record from the platform)')
+    expect(lines.join('\n')).not.toContain('serving     https://')
+  })
+
+  // ...and the mirror: an APEX domain's routing record is an A, not a CNAME. Now that a missing
+  // routing record blocks, matching only CNAME would report a correct apex as having none.
+  it('an apex A record counts as the routing record, and is named as an A', () => {
+    const apex: DomainView = {
+      hostname: 'customer.com', flyApp: 'insta-main-api-ab12', configured: false, status: 'Awaiting configuration',
+      service: 'api', region: 'us-east',
+      dns: [{ type: 'A', name: 'customer.com', value: '66.66.66.66', note: 'apex → the Fly app' }],
+    }
+    const lines = domainStatusLines(apex)
+    expect(lines[2]).toBe('  a           unchecked   A customer.com -> 66.66.66.66')
+    expect(lines.join('\n')).not.toContain('no routing record from the platform')
+    expect(lines.join('\n')).not.toContain('add CNAME customer.com')
+  })
+
   // An older platform may omit `dns` entirely — that is "no records", not a crash.
   it('a platform answer with no dns field at all is read as no records', () => {
     const { dns: _d, ...noDns } = bound
