@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, afterEach, afterAll } from 'vitest'
-import { serializeEnv, handleApproval, nextActionsLines, isWebUrl, openUrl, openUrlSpawn } from '../src/util.js'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { CliExit, die, serializeEnv, handleApproval, nextActionsLines, isWebUrl, openUrl, openUrlSpawn } from '../src/util.js'
 
 // The OAuth authorize URL is hostile to BOTH Windows shells: cmd.exe splits an unquoted line at
 // every bare `&` (the tester-reported "querystring must have required property 'redirect'"), and
@@ -71,16 +71,44 @@ describe('serializeEnv', () => {
   })
 })
 
+describe('die', () => {
+  it('records exit 1 and aborts the command without forcing process.exit()', () => {
+    const stderr: string[] = []
+    const previousExitCode = process.exitCode
+    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation((c: any) => { stderr.push(String(c)); return true })
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+    try {
+      expect(() => die('boom')).toThrow(CliExit)
+      expect(exitSpy).not.toHaveBeenCalled()
+      expect(stderr.join('')).toBe('error: boom\n')
+      expect(process.exitCode).toBe(1)
+    } finally {
+      exitSpy.mockRestore()
+      errSpy.mockRestore()
+      process.exitCode = previousExitCode
+    }
+  })
+})
+
 // A pending gate is a diagnostic, not a result: the hint must go to stderr (stdout may be
 // redirected into a creds file or a JSON parser) and the process must exit non-zero — 2, distinct
 // from die()'s generic 1, so scripts/agents can branch on "approvable, re-run after approval".
 describe('handleApproval', () => {
   const stdout: string[] = []
   const stderr: string[] = []
-  const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation((c: any) => { stdout.push(String(c)); return true })
-  const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation((c: any) => { stderr.push(String(c)); return true })
-  afterEach(() => { stdout.length = 0; stderr.length = 0; process.exitCode = undefined })
-  afterAll(() => { outSpy.mockRestore(); errSpy.mockRestore() })
+  let outSpy: ReturnType<typeof vi.spyOn>
+  let errSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    outSpy = vi.spyOn(process.stdout, 'write').mockImplementation((c: any) => { stdout.push(String(c)); return true })
+    errSpy = vi.spyOn(process.stderr, 'write').mockImplementation((c: any) => { stderr.push(String(c)); return true })
+  })
+  afterEach(() => {
+    stdout.length = 0
+    stderr.length = 0
+    process.exitCode = undefined
+    outSpy.mockRestore()
+    errSpy.mockRestore()
+  })
 
   const gated = { status: 202, body: { status: 'approval_required', action: 'deploy', approvalId: 'a1' } }
 

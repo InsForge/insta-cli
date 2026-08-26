@@ -170,8 +170,8 @@ test('resolveSpawnable re-enters npm/npx as node scripts so Windows .cmd shims a
   const claudeShim = join(shimBin, 'claude.CMD')
   writeFileSync(claudeShim, '@echo off\n')
   const winEnv = { PATH: shimBin, PATHEXT: '.COM;.EXE;.BAT;.CMD' }
-  expect(resolveSpawnable('claude', ['mcp', 'add', '--header', 'Authorization: Bearer x'], npmCli, winNode, 'win32', winEnv))
-    .toEqual({ cmd: 'cmd.exe', args: ['/d', '/s', '/c', claudeShim, 'mcp', 'add', '--header', 'Authorization: Bearer x'] })
+  expect(resolveSpawnable('claude', ['mcp', 'add', '--header', 'Authorization: Bearer x'], npmCli, winNode, 'win32', winEnv, 'C:\\Windows'))
+    .toEqual({ cmd: 'C:\\Windows\\System32\\cmd.exe', args: ['/d', '/s', '/c', claudeShim, 'mcp', 'add', '--header', 'Authorization: Bearer x'] })
   // Not on PATH → passthrough; the bare spawn fails and the probe treats it as not-installed.
   expect(resolveSpawnable('claude', ['--version'], npmCli, winNode, 'win32', { PATH: '' }))
     .toEqual({ cmd: 'claude', args: ['--version'] })
@@ -179,6 +179,13 @@ test('resolveSpawnable re-enters npm/npx as node scripts so Windows .cmd shims a
   // such args skip it and the callers' best-effort degradation handles the failed bare spawn.
   expect(resolveSpawnable('claude', ['mcp', 'add', 'x', 'https://mcp.example.com/mcp?a=1&b=2'], npmCli, winNode, 'win32', winEnv))
     .toEqual({ cmd: 'claude', args: ['mcp', 'add', 'x', 'https://mcp.example.com/mcp?a=1&b=2'] })
+  // The absolute shim path is cmd.exe input too. A metacharacter in a PATH directory must not
+  // become a shell operator; skip the wrapper and let the caller degrade on a failed bare spawn.
+  const hostileBin = join(mkdtempSync(join(tmpdir(), 'insta-shim-')), 'has&meta')
+  mkdirSync(hostileBin)
+  writeFileSync(join(hostileBin, 'claude.CMD'), '@echo off\n')
+  expect(resolveSpawnable('claude', ['--version'], npmCli, winNode, 'win32', { PATH: hostileBin, PATHEXT: '.CMD' }, 'C:\\Windows'))
+    .toEqual({ cmd: 'claude', args: ['--version'] })
   // On POSIX, non-npm commands and unresolvable environments pass through untouched.
   expect(resolveSpawnable('claude', ['--version'], npmCli, '/fake/bin/node', 'linux'))
     .toEqual({ cmd: 'claude', args: ['--version'] })

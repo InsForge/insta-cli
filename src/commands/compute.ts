@@ -4,50 +4,331 @@ import { resolveComputeServiceId, q, parseVolumeGib } from './services.js'
 
 type Opts = { branch?: string; group?: string; json?: boolean }
 
-// Attach a developer-owned custom domain to a branch's compute service. Fly issues the cert + routes
-// it; the platform returns the DNS records to set in your OWN zone.
-export async function setDomain(host: string, opts: Opts): Promise<void> {
-  const api = await ApiClient.load()
-  const p = await requireProject()
-  const res = await api.rawRequest('POST', `/projects/${p.projectId}/compute/domain`, { hostname: host, branch: opts.branch ?? p.branch, group: opts.group })
-  if (handleApproval(res, opts.json)) return
-  printDomain(res.body, opts.json)
+// ---- custom domains (bring your own hostname) ----
+//
+// A compute service's region is fixed at creation (`insta services add compute --region`), and a
+// custom hostname routes in the router of the region that OWNS the service. So the region is
+// DETECTED from the service, never chosen for the domain — the customer's DNS is one region-agnostic
+// CNAME target either way — and every line below names it so the user knows where traffic lands.
+
+// The `services list` row fields these commands read. `port === 0` is a worker: no HTTP endpoint,
+// so no hostname can ever serve from it.
+export type ComputeRow = { id: string; type: string; name: string; status?: string; region?: string | null; domain?: string | null; port?: number | null }
+
+export const isWorker = (s: ComputeRow): boolean => s.port === 0
+
+// One line per compute service for the disambiguation error: name, region, default URL, status —
+// enough to pick one without a second command. Pure, exported for tests.
+export function computeChoiceLine(s: ComputeRow, w = { name: 8, region: 12 }): string {
+  const target = isWorker(s)
+    ? '(no HTTP endpoint — worker, cannot serve a domain)'
+    : `${s.domain ? `https://${s.domain}` : '(no default URL yet)'}${s.status ? `  (${s.status})` : ''}`
+  return `  ${s.name.padEnd(w.name)} ${(s.region ?? '-').padEnd(w.region)} ${target}`
 }
 
-// Re-check a custom domain's cert status + required DNS records.
-export async function checkDomain(host: string, opts: Opts): Promise<void> {
-  const api = await ApiClient.load()
-  const p = await requireProject()
-  const qs = new URLSearchParams({ hostname: host })
-  if (opts.branch ?? p.branch) qs.set('branch', opts.branch ?? p.branch)
-  if (opts.group) qs.set('group', opts.group)
-  printDomain(await api.request('GET', `/projects/${p.projectId}/compute/domain?${qs}`), opts.json)
+// Which compute service a hostname binds to. Exactly one compute service → it, no flag needed.
+// Several → never guess (a wrong pick routes the customer's hostname to the wrong app in the wrong
+// region): refuse with the list and require --group. With --group: must exist and must not be a
+// worker. Pure, exported for tests.
+export function resolveDomainTarget(services: ComputeRow[], host: string, group?: string): ComputeRow {
+  const compute = services.filter((s) => s.type === 'compute')
+  if (group) {
+    const svc = compute.find((s) => s.name === group)
+    if (!svc) throw new Error(`compute service not found: ${group}${compute.length ? ` (have: ${compute.map((s) => s.name).join(', ')})` : ''}`)
+    if (isWorker(svc)) throw new Error(`${svc.name} is a worker (port 0) — it has no HTTP endpoint, so ${host} cannot serve from it`)
+    return svc
+  }
+  if (compute.length === 0) throw new Error('no compute service in this project (add one with `insta services add compute <name>`)')
+  if (compute.length === 1) {
+    const only = compute[0]!
+    if (isWorker(only)) throw new Error(`${only.name} is a worker (port 0) — it has no HTTP endpoint, so ${host} cannot serve from it`)
+    return only
+  }
+  const w = { name: Math.max(4, ...compute.map((s) => s.name.length)), region: Math.max(6, ...compute.map((s) => (s.region ?? '-').length)) }
+  throw new Error([
+    `this project has ${compute.length} compute services; pass --group to choose which one serves ${host}:`,
+    ...compute.map((s) => computeChoiceLine(s, w)),
+  ].join('\n'))
 }
 
-export async function removeDomain(host: string, opts: Opts): Promise<void> {
-  const api = await ApiClient.load()
-  const p = await requireProject()
-  const res = await api.rawRequest('DELETE', `/projects/${p.projectId}/compute/domain`, { hostname: host, branch: opts.branch ?? p.branch, group: opts.group })
+// The platform's /compute/domain answer. `service`/`region` are the platform's own row; `ssl`,
+// `dns[].status` and the origin trio are the compute plane's report and are ABSENT when its daemon
+// does not report them (older builds) — the renderers say so rather than inventing a value.
+export type DomainView = {
+  hostname: string; flyApp: string; configured: boolean; status: string
+  dns: Array<{ type: string; name: string; value: string; note?: string; status?: string }>
+  service?: string | null; region?: string | null
+  ssl?: string; errorReason?: string
+  origin?: string; edgeOrigin?: string; originOk?: boolean
+}
+
+const targetOf = (r: DomainView) => `${r.service ?? r.flyApp}${r.region ? ` (${r.region})` : ''}`
+const pad = (s: string, n: number) => s.padEnd(n)
+// An older platform may omit `dns` entirely; every reader treats that as "no records", not a crash.
+const recordsOf = (r: DomainView) => r.dns ?? []
+
+// How a printed follow-up command must be spelled so it reaches the SAME service on the SAME
+// branch the user just acted on. Without these, a suggested command run in a multi-service project
+// dies on the very ambiguity error this feature exists to raise, and a --branch invocation would
+// silently check the linked branch instead (cubic P2 ×2).
+export type DomainCmdCtx = { group?: string; branch?: string }
+const flags = (c: DomainCmdCtx = {}) =>
+  `${c.group ? ` --group ${c.group}` : ''}${c.branch ? ` --branch ${c.branch}` : ''}`
+
+// After set-domain: exactly what to do next, from the records the platform returned — never a
+// hand-built template. No records = say so; a template here would send the customer publishing
+// values the plane never issued. Pure, exported for tests.
+export function domainGuidanceLines(r: DomainView, ctx: DomainCmdCtx = {}): string[] {
+  const records = recordsOf(r)
+  const out = [`${r.hostname} -> ${targetOf(r)}`]
+  if (!records.length) {
+    out.push('  the platform returned NO DNS records for this domain — the compute plane has no custom-domain CNAME target configured (or is misconfigured)')
+    out.push('  nothing to publish yet: ask an operator before adding any DNS record')
+    return out
+  }
+  const nameW = Math.max(...records.map((d) => d.name.length))
+  out.push('add these DNS records at your DNS provider:')
+  for (const d of records) out.push(`  ${pad(d.type, 6)} ${pad(d.name, nameW)} -> ${d.value}`)
+  out.push(`then: insta compute check-domain ${r.hostname}${flags(ctx)}`)
+  return out
+}
+
+// Whether this provider reports an edge routing target AT ALL. The compute plane's domain view
+// always carries an `ssl` status, so a plane answer without `origin` is a daemon too old to report
+// where the hostname resolves — we cannot confirm routing, and must not call it serving. A Fly
+// answer carries no `ssl` and has no per-hostname origin concept, so its own verdict stands
+// (r2d2 round 1 Critical: "no target reported" was previously treated as ready for both).
+const reportsOrigin = (r: DomainView) => r.ssl !== undefined
+
+// Where the hostname actually resolves — the region-specific origin the plane requested vs what
+// Cloudflare holds. Each shape carries its action; absent fields are reported as absent.
+export function domainResolveLine(r: DomainView): { line: string; ready: boolean } {
+  const region = r.region ?? 'this region'
+  if (r.origin === undefined) {
+    if (reportsOrigin(r)) {
+      return {
+        line: `  ${pad('resolves to', 12)}UNCONFIRMED — ${region}'s daemon does not report the edge routing target, so where ${r.hostname} lands cannot be verified from here (update the region's daemon)`,
+        ready: false,
+      }
+    }
+    return { line: `  ${pad('resolves to', 12)}(this provider does not report an edge routing target)`, ready: true }
+  }
+  if (r.origin === '') {
+    return {
+      line: `  ${pad('resolves to', 12)}NOT READY — ${region} has no edge origin configured; ${r.hostname} would fall to the zone default. Ask an operator to set cf-custom-origin for ${region}`,
+      ready: false,
+    }
+  }
+  if (r.edgeOrigin && r.edgeOrigin !== r.origin) {
+    return {
+      line: `  ${pad('resolves to', 12)}${r.edgeOrigin} — Cloudflare routes ${r.hostname} to ${r.edgeOrigin}, but this service is in ${region} (${r.origin}); it is attached elsewhere — remove it there first`,
+      ready: false,
+    }
+  }
+  if (r.originOk === false) {
+    return { line: `  ${pad('resolves to', 12)}${r.origin}   (${region} router)   pending — Cloudflare does not hold this hostname yet`, ready: false }
+  }
+  return { line: `  ${pad('resolves to', 12)}${r.origin}   (${region} router)   ok`, ready: true }
+}
+
+// check-domain: every stage, what each still needs, and where it routes. Pure, exported for tests.
+export function domainStatusLines(r: DomainView, ctx: DomainCmdCtx = {}): string[] {
+  if (r.status === 'not added') {
+    return [`${r.hostname} is not attached to ${targetOf(r)} — attach it with: insta compute set-domain ${r.hostname}${flags(ctx)}`]
+  }
+  const records = recordsOf(r)
+  const out = [`${r.hostname} -> ${targetOf(r)}`]
+  const txt = records.find((d) => d.type === 'TXT')
+  // The ROUTING records for the hostname, whatever type they take: a CNAME for a subdomain, or the
+  // A/AAAA PAIR an apex needs (Fly's apex path emits both). All of them, not the first one —
+  // a correct A beside a missing AAAA is not "routing is fine".
+  const isRouting = (d: DomainView['dns'][number]) => d.type !== 'TXT' && d.name === r.hostname
+  const routing = records.filter(isRouting)
+  const blockers: string[] = []
+  const stage = (label: string, state: string, detail: string) => out.push(`  ${pad(label, 12)}${pad(state, 10)}${detail ? `  ${detail}` : ''}`)
+
+  // The ONE verdict rule, applied to EVERY record the platform returned regardless of its role.
+  // A record is settled only when the platform says `ok` — or, for a provider that reports no
+  // per-record status at all (Fly), when it vouched for the whole set with `configured`. missing,
+  // mismatch and never-checked are each outstanding and each add a blocker. Applying this to only
+  // the ownership TXT and the FIRST routing record was the bug (r2d2 round 3): every other record
+  // rendered from `configured` alone and blocked nothing, so an apex whose AAAA was missing, or a
+  // still-pending validation record, could ride under a `serving https://…` line.
+  const verdictOf = (d: DomainView['dns'][number]) => d.status ?? (r.configured ? 'ok' : 'unchecked')
+
+  if (txt) {
+    const st = verdictOf(txt)
+    if (st === 'ok') stage('ownership', 'verified', '(TXT found)')
+    else if (st === 'mismatch') { stage('ownership', 'mismatch', `TXT ${txt.name} has a different value — set it to ${txt.value}`); blockers.push('fix the ownership TXT') }
+    else if (st === 'missing') { stage('ownership', 'pending', `add TXT ${txt.name} -> ${txt.value}`); blockers.push('add the ownership TXT') }
+    else { stage('ownership', 'unchecked', `TXT ${txt.name} -> ${txt.value} (the plane has not checked it yet — re-run check-domain)`); blockers.push('ownership unchecked') }
+  } else if (reportsOrigin(r)) {
+    // The stage is drawn even with no record to draw it from: an omitted stage reads as "not
+    // required", when in fact the platform told us nothing to publish (cubic P2). Only the plane
+    // proves ownership by TXT, so only a plane answer missing one is a problem.
+    stage('ownership', 'unknown', 'the platform returned no ownership TXT for this domain — nothing to publish yet; ask an operator')
+    blockers.push('no ownership TXT from the platform')
+  } else {
+    stage('ownership', 'n/a', '(this provider does not use an ownership TXT)')
+  }
+
+  if (routing.length === 0) {
+    // No routing record for the hostname — whatever ELSE came back. Keying this on an entirely
+    // empty record set was the bug (r2d2 round 2): a payload carrying only the ownership TXT
+    // skipped the stage and added no blocker, so a `configured: true` answer with a live cert and
+    // a confirmed origin printed `serving` for a hostname with nothing pointing at us.
+    stage('cname', 'unknown', 'the platform returned no routing record for this domain — nothing to publish yet; ask an operator')
+    blockers.push('no routing record from the platform')
+  }
+  for (const d of routing) {
+    const st = verdictOf(d)
+    // The stage is named for the record the platform actually issued, so an apex's A record is not
+    // described to the user as a CNAME they cannot create.
+    const lbl = d.type.toLowerCase()
+    if (st === 'ok') stage(lbl, 'ok', `(points at ${d.value})`)
+    else if (st === 'mismatch') { stage(lbl, 'mismatch', `${d.type} ${d.name} must point at ${d.value}`); blockers.push(`fix the ${d.type}`) }
+    else if (st === 'missing') { stage(lbl, 'pending', `add ${d.type} ${d.name} -> ${d.value}`); blockers.push(`add the ${d.type}`) }
+    else { stage(lbl, 'unchecked', `${d.type} ${d.name} -> ${d.value} (not checked yet — re-run check-domain)`); blockers.push(`${d.type} unchecked`) }
+  }
+
+  // Everything else the platform returned — a Let's Encrypt validation CNAME, any extra record.
+  // Same rule, no exemption: an outstanding record is outstanding whatever its role.
+  for (const d of records) {
+    if (d === txt || isRouting(d)) continue
+    const st = verdictOf(d)
+    const lbl = d.type.toLowerCase()
+    const where = `${d.name} -> ${d.value}${d.note ? `  (${d.note})` : ''}`
+    if (st === 'ok') stage(lbl, 'ok', where)
+    else if (st === 'mismatch') { stage(lbl, 'mismatch', `${d.type} ${d.name} must point at ${d.value}`); blockers.push(`fix the ${d.type} ${d.name}`) }
+    else if (st === 'missing') { stage(lbl, 'pending', `add ${where}`); blockers.push(`add the ${d.type} ${d.name}`) }
+    else { stage(lbl, 'unchecked', `${where} (not checked yet — re-run check-domain)`); blockers.push(`${d.type} ${d.name} unchecked`) }
+  }
+
+  const ssl = r.ssl ?? (r.configured ? 'active' : undefined)
+  if (ssl === 'active') stage('certificate', 'active', '(edge TLS issued)')
+  else if (ssl === 'external') stage('certificate', 'external', '(this plane manages no edge certificate for custom domains)')
+  else if (ssl === undefined) { stage('certificate', 'pending', `(provider status: ${r.status})`); blockers.push('certificate') }
+  else { stage('certificate', 'pending', `(${ssl} — issues once ownership is verified)`); blockers.push('certificate') }
+
+  const resolve = domainResolveLine(r)
+  out.push(resolve.line)
+  // An error STATE is a blocker whether or not the plane sent a reason with it (cubic P2): a row
+  // that says `error` has not been observed serving, and saying otherwise is the blackhole lie.
+  if (r.status === 'error') {
+    stage('error', r.status, r.errorReason || '(the plane reported an error state with no reason)')
+    blockers.push('the plane reports an error state')
+  } else if (r.errorReason) {
+    stage('error', r.status, r.errorReason)
+    blockers.push(r.errorReason)
+  }
+
+  // An unconfirmed routing target is one blocker among the others, not a headline that hides them:
+  // a user fixing their DNS needs the whole outstanding list, not whichever item sorted first.
+  if (!resolve.ready) blockers.push('confirm the routing target above')
+
+  // `serving` is claimed only when every stage above agreed: the provider says configured, the
+  // routing target is confirmed, and NOTHING is outstanding. A blocker beside a `configured: true`
+  // answer means the record set and the verdict disagree — report the disagreement, never paper
+  // over it with a URL the user would then trust (cubic P1).
+  if (r.configured && blockers.length === 0) stage('serving', `https://${r.hostname}`, '')
+  else stage('serving', 'not yet', blockers.length ? `(${blockers.join(', ')})` : `(${r.status})`)
+  return out
+}
+
+// The platform's 409: the hostname is already bound elsewhere. Domains are never MOVED — the only
+// path is unbind there, then bind here — so the hint names the release step. Three shapes:
+//   owner named and present in this project → the exact remove-domain command;
+//   owner named but NOT in this project's services → it is held by a deleted (or other-project)
+//     service: an operator must release it (the plane has no self-serve orphan release yet);
+//   owner not named (today's plane) → the generic release instruction.
+// Pure, exported for tests.
+export function domainConflictMessage(host: string, e: ApiError, services: ComputeRow[], ctx: DomainCmdCtx = {}): string {
+  const m = /already attached to (\S+)(?: in (\S+))?;/.exec(e.message)
+  const owner = m?.[1] && m[1] !== 'another' ? m[1] : undefined
+  const region = m?.[2]
+  // The release command must name the OWNER's group, and the branch the user is working on — a
+  // command that defaults back to the linked branch would release nothing (cubic P2).
+  const release = (group: string) => `insta compute remove-domain ${host}${flags({ group, branch: ctx.branch })}`
+  if (owner) {
+    const here = services.find((s) => s.type === 'compute' && s.name === owner)
+    if (here) return `${host} is already attached to ${owner}${region ? ` (${region})` : here.region ? ` (${here.region})` : ''} — domains are not moved; release it first: ${release(owner)}, then re-run set-domain`
+    return `${host} is already attached to ${owner}${region ? ` in ${region}` : ''}, which is not a service in this project — it is held by a deleted service (or one in another project); ask an operator to release the hostname before re-binding it`
+  }
+  return `${host} is already attached to another compute service — domains are not moved; release it there first (${release('<that service>')}) or, if that service was deleted, ask an operator to release the hostname`
+}
+
+// Resolve branch + target service, so every domain verb names the service AND its region, and an
+// ambiguous project is refused with the list instead of the platform's `default` fallback picking
+// one silently.
+async function domainTarget(api: DomainApi, projectId: string, branch: string | undefined, host: string, group?: string): Promise<{ target: ComputeRow; services: ComputeRow[] }> {
+  const { services } = await api.request('GET', `/projects/${projectId}/services${q(branch)}`)
+  return { target: resolveDomainTarget(services, host, group), services }
+}
+
+// The API surface these three verbs use, so the command-level flow — preflight service lookup,
+// explicit `group` on every call, --json passthrough, 409 mapping — is testable without a network
+// mock (r2d2 round 1 Suggestion). Production passes a real ApiClient.
+export type DomainApi = Pick<ApiClient, 'request' | 'rawRequest'>
+export type DomainDeps = { api: DomainApi; project: { projectId: string; branch?: string } }
+async function domainDeps(deps?: DomainDeps): Promise<DomainDeps> {
+  if (deps) return deps
+  const [api, project] = [await ApiClient.load(), await requireProject()]
+  return { api, project }
+}
+
+// Attach a developer-owned custom domain to a branch's compute service. The plane issues the edge
+// cert + routes the hostname in the service's region; the platform returns the DNS records to set
+// in your OWN zone, which are printed verbatim as the next step.
+export async function setDomain(host: string, opts: Opts, deps?: DomainDeps): Promise<void> {
+  const { api, project: p } = await domainDeps(deps)
+  const branch = opts.branch ?? p.branch
+  const { target, services } = await domainTarget(api, p.projectId, branch, host, opts.group)
+  const ctx: DomainCmdCtx = { group: target.name, branch: opts.branch }
+  let res
+  try { res = await api.rawRequest('POST', `/projects/${p.projectId}/compute/domain`, { hostname: host, branch, group: target.name }) }
+  catch (e) { throw e instanceof ApiError && e.status === 409 ? new Error(domainConflictMessage(host, e, services, ctx)) : e }
   if (handleApproval(res, opts.json)) return
-  renderRemoveDomain(res.body, opts.json)
+  if (opts.json) return printJson(res.body)
+  for (const line of domainGuidanceLines(withRow(res.body, target), ctx)) info(line)
+}
+
+// Re-check a custom domain: every stage (ownership TXT, routing CNAME, edge certificate, where it
+// resolves) and what each still needs.
+export async function checkDomain(host: string, opts: Opts, deps?: DomainDeps): Promise<void> {
+  const { api, project: p } = await domainDeps(deps)
+  const branch = opts.branch ?? p.branch
+  const { target, services } = await domainTarget(api, p.projectId, branch, host, opts.group)
+  const ctx: DomainCmdCtx = { group: target.name, branch: opts.branch }
+  const qs = new URLSearchParams({ hostname: host, group: target.name })
+  if (branch) qs.set('branch', branch)
+  let r
+  try { r = await api.request('GET', `/projects/${p.projectId}/compute/domain?${qs}`) }
+  catch (e) { throw e instanceof ApiError && e.status === 409 ? new Error(domainConflictMessage(host, e, services, ctx)) : e }
+  if (opts.json) return printJson(r)
+  for (const line of domainStatusLines(withRow(r, target), ctx)) info(line)
+}
+
+export async function removeDomain(host: string, opts: Opts, deps?: DomainDeps): Promise<void> {
+  const { api, project: p } = await domainDeps(deps)
+  const branch = opts.branch ?? p.branch
+  const { target } = await domainTarget(api, p.projectId, branch, host, opts.group)
+  const res = await api.rawRequest('DELETE', `/projects/${p.projectId}/compute/domain`, { hostname: host, branch, group: target.name })
+  if (handleApproval(res, opts.json)) return
+  renderRemoveDomain(res.body, opts.json, target)
+}
+
+// An older platform answers without service/region; the CLI already holds the row it resolved the
+// target from, so the human lines never lose the region. --json stays the platform body verbatim.
+export function withRow(r: DomainView, row: ComputeRow): DomainView {
+  return { ...r, service: r.service ?? row.name, region: r.region ?? row.region ?? null }
 }
 
 // Split out (same pattern as applyExecResult) so the --json contract — stdout carries the platform
 // response, never prose — is unit-testable without a network mock.
-export function renderRemoveDomain(body: any, json?: boolean): void {
+export function renderRemoveDomain(body: any, json?: boolean, row?: ComputeRow): void {
   if (json) return printJson(body)
-  info(`removed custom domain ${body.hostname} from ${body.flyApp}`)
-}
-
-function printDomain(r: any, json?: boolean): void {
-  if (json) return printJson(r)
-  info(`${r.hostname} → ${r.flyApp}`)
-  info(`  status: ${r.status}${r.configured ? ' ✓ configured' : ''}`)
-  if (r.dns?.length) {
-    info('  set these DNS records at your domain registrar:')
-    for (const d of r.dns) info(`    ${String(d.type).padEnd(5)} ${d.name}  →  ${d.value}${d.note ? `   # ${d.note}` : ''}`)
-  }
-  if (!r.configured) info('  once DNS propagates, Fly issues the cert — re-check with `insta compute check-domain`')
+  const region = body.region ?? row?.region
+  info(`removed custom domain ${body.hostname} from ${body.service ?? row?.name ?? body.flyApp}${region ? ` (${region})` : ''}`)
 }
 
 // ---- lifecycle (start/stop/suspend/status) ----
