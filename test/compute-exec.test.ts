@@ -4,7 +4,7 @@
 // volume.test.ts): the network-touching orchestration itself is untested here, same as
 // computeStart/computeVolume/computeLimits.
 import { describe, it, expect, vi, afterEach, afterAll } from 'vitest'
-import { splitExecArgs, parseTimeoutSec, execRequestBody, computeExec, applyExecResult } from '../src/commands/compute.js'
+import { splitExecArgs, resolveExecTarget, parseTimeoutSec, execRequestBody, computeExec, applyExecResult } from '../src/commands/compute.js'
 
 describe('splitExecArgs', () => {
   it('splits the command out at the first literal -- after `compute exec`', () => {
@@ -35,14 +35,26 @@ describe('splitExecArgs', () => {
     expect(splitExecArgs(argv, 'win32')).toEqual({
       argv: ['node', 'insta', 'compute', 'exec', 'app'],
       command: ['printenv', 'PORT'],
+      windowsFallback: true,
     })
   })
 
   it('keeps CLI options before the recovered PowerShell command', () => {
-    const argv = ['node', 'insta', 'compute', 'exec', 'app', '--branch', 'prod', '--timeout=60', 'echo', '--json']
+    const argv = ['node', 'insta', 'compute', 'exec', '--branch', 'prod', '--timeout=60', 'app', 'echo', '--json']
     expect(splitExecArgs(argv, 'win32')).toEqual({
-      argv: ['node', 'insta', 'compute', 'exec', 'app', '--branch', 'prod', '--timeout=60'],
+      argv: ['node', 'insta', 'compute', 'exec', '--branch', 'prod', '--timeout=60', 'app'],
       command: ['echo', '--json'],
+      windowsFallback: true,
+    })
+  })
+
+  it('preserves ambiguous flags after the service and refuses to guess their boundary', () => {
+    const argv = ['node', 'insta', 'compute', 'exec', 'app', '--json']
+    expect(splitExecArgs(argv, 'win32')).toEqual({
+      argv: ['node', 'insta', 'compute', 'exec', 'app'],
+      command: ['--json'],
+      windowsFallback: true,
+      windowsAmbiguous: true,
     })
   })
 
@@ -59,6 +71,22 @@ describe('splitExecArgs', () => {
   it('preserves a command token that itself looks like a flag', () => {
     const argv = ['node', 'insta', 'compute', 'exec', '--', '--help']
     expect(splitExecArgs(argv)).toEqual({ argv: ['node', 'insta', 'compute', 'exec'], command: ['--help'] })
+  })
+})
+
+describe('resolveExecTarget', () => {
+  const services = [{ id: 'svc_1', type: 'compute', name: 'app' }]
+
+  it('keeps an explicit service that exists', () => {
+    expect(resolveExecTarget(services, 'app', ['printenv', 'PORT'], true)).toEqual({
+      serviceName: 'app', command: ['printenv', 'PORT'],
+    })
+  })
+
+  it('recovers an omitted service by restoring the first command token', () => {
+    expect(resolveExecTarget(services, 'printenv', ['PORT'], true)).toEqual({
+      serviceName: undefined, command: ['printenv', 'PORT'],
+    })
   })
 })
 
@@ -91,6 +119,10 @@ describe('computeExec validation (throws before any network/config access)', () 
   })
   it('rejects an invalid --timeout', async () => {
     await expect(computeExec('svc', ['echo'], { timeout: '9999' })).rejects.toThrow(/invalid timeout/)
+  })
+  it('rejects ambiguous PowerShell flags before any network/config access', async () => {
+    await expect(computeExec('svc', ['--json'], {}, { windowsFallback: true, windowsAmbiguous: true }))
+      .rejects.toThrow(/PowerShell removed.*insta\.cmd/)
   })
 })
 

@@ -94,7 +94,7 @@ export async function computeStatus(serviceName: string | undefined, opts: LifeO
 export function splitExecArgs(
   argv: string[],
   platform: NodeJS.Platform = process.platform,
-): { argv: string[]; command?: string[] } {
+): { argv: string[]; command?: string[]; windowsFallback?: boolean; windowsAmbiguous?: boolean } {
   const i = argv.findIndex((a, idx) => a === 'compute' && argv[idx + 1] === 'exec')
   if (i === -1) return { argv }
   const dash = argv.indexOf('--', i + 2)
@@ -102,24 +102,46 @@ export function splitExecArgs(
   if (platform !== 'win32') return { argv }
 
   // npm's generated PowerShell shim consumes a bare `--` before forwarding $args to node. When
-  // that happens, recover the command boundary after the optional service and any CLI options.
-  // Once the first command token is found, every remaining token is copied verbatim — including
-  // flags such as --json that belong to the remote command rather than this CLI.
+  // that happens, keep CLI options before the tentative service and split at the next operand.
+  // The service candidate is checked against the real service list later, which recovers the
+  // omitted-service form. A CLI-looking token after the candidate is inherently ambiguous, so it
+  // is preserved and marked for a clear insta.cmd fallback rather than silently dropped.
   let sawService = false
   for (let cursor = i + 2; cursor < argv.length; cursor++) {
     const token = argv[cursor]!
     if (token === '--branch' || token === '--timeout') {
+      if (sawService) {
+        return { argv: argv.slice(0, cursor), command: argv.slice(cursor), windowsFallback: true, windowsAmbiguous: true }
+      }
       cursor++
       continue
     }
-    if (token.startsWith('--branch=') || token.startsWith('--timeout=') || token === '--json' || token === '--help' || token === '-h') continue
+    if (token.startsWith('--branch=') || token.startsWith('--timeout=') || token === '--json' || token === '--help' || token === '-h') {
+      if (sawService) {
+        return { argv: argv.slice(0, cursor), command: argv.slice(cursor), windowsFallback: true, windowsAmbiguous: true }
+      }
+      continue
+    }
     if (!sawService) {
       sawService = true
       continue
     }
-    return { argv: argv.slice(0, cursor), command: argv.slice(cursor) }
+    return { argv: argv.slice(0, cursor), command: argv.slice(cursor), windowsFallback: true }
   }
-  return { argv }
+  return sawService ? { argv, windowsFallback: true } : { argv }
+}
+
+export function resolveExecTarget(
+  services: Array<{ id: string; type: string; name: string }>,
+  serviceName: string | undefined,
+  command: string[] | undefined,
+  windowsFallback = false,
+): { serviceName: string | undefined; command: string[] | undefined } {
+  if (!windowsFallback || !serviceName) return { serviceName, command }
+  const namedService = services.some((service) => service.type === 'compute' && service.name === serviceName)
+  return namedService
+    ? { serviceName, command }
+    : { serviceName: undefined, command: [serviceName, ...(command ?? [])] }
 }
 
 // The --timeout override, through a throwing parser like every other user-typed number in this
@@ -139,6 +161,7 @@ export function execRequestBody(command: string[], timeoutSec?: number): Record<
 }
 
 type ExecOpts = LifeOpts & { timeout?: string }
+type ExecRecovery = { windowsFallback?: boolean; windowsAmbiguous?: boolean }
 
 // Renders the exec response and sets process.exitCode — split out of computeExec as a pure function
 // of (res, json) so it's unit-testable without a network mock, same as handleApproval's own
@@ -176,15 +199,29 @@ export function applyExecResult(res: { status: number; body: any }, json?: boole
 // code becomes this process's own exit code (--json still passes it through, it just skips the
 // split-stream output), since agents scripting this rely on it. Waking a scaled-to-zero machine is
 // expected — it adds latency and bills as uptime, it is not an error.
-export async function computeExec(serviceName: string | undefined, command: string[] | undefined, opts: ExecOpts): Promise<void> {
-  if (!command || command.length === 0) throw new Error('usage: insta compute exec [service] -- <command> [args…] (see --help)')
+export async function computeExec(
+  serviceName: string | undefined,
+  command: string[] | undefined,
+  opts: ExecOpts,
+  recovery: ExecRecovery = {},
+): Promise<void> {
+  if (recovery.windowsAmbiguous) {
+    throw new Error('PowerShell removed the `--` separator and the remaining flags are ambiguous — put CLI options before [service], or run `insta.cmd compute exec [service] -- <command> [args…]`')
+  }
+  if (!recovery.windowsFallback && (!command || command.length === 0)) {
+    throw new Error('usage: insta compute exec [service] -- <command> [args…] (see --help)')
+  }
   const timeoutSec = opts.timeout !== undefined ? parseTimeoutSec(opts.timeout) : undefined
   const api = await ApiClient.load()
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
   const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
-  const id = resolveComputeServiceId(services, serviceName)
-  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/exec`, execRequestBody(command, timeoutSec))
+  const target = resolveExecTarget(services, serviceName, command, !!recovery.windowsFallback)
+  if (!target.command || target.command.length === 0) {
+    throw new Error('usage: insta compute exec [service] -- <command> [args…] (see --help)')
+  }
+  const id = resolveComputeServiceId(services, target.serviceName)
+  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/exec`, execRequestBody(target.command, timeoutSec))
   applyExecResult(res, opts.json)
 }
 
