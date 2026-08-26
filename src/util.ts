@@ -51,9 +51,24 @@ export function openUrl(url: string): boolean {
   } catch { return false }
 }
 
-export function die(msg: string): never {
+export class CliExit extends Error {
+  constructor() {
+    super('CLI exit')
+    this.name = 'CliExit'
+  }
+}
+
+export function fail(msg: string): void {
   process.stderr.write(`error: ${msg}\n`)
-  process.exit(1)
+  process.exitCode = 1
+}
+
+// Stop the current command without forcing Node to tear down active libuv handles. On Windows,
+// process.exit() can race the detached update-check child and abort in src\win\async.c with
+// UV_HANDLE_CLOSING. The guard absorbs CliExit after fail() records the intended exit status.
+export function die(msg: string): never {
+  fail(msg)
+  throw new CliExit()
 }
 
 export function printJson(v: unknown): void {

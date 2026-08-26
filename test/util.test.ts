@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, afterAll } from 'vitest'
-import { serializeEnv, handleApproval, nextActionsLines, isWebUrl, openUrl, openUrlSpawn } from '../src/util.js'
+import { CliExit, die, serializeEnv, handleApproval, nextActionsLines, isWebUrl, openUrl, openUrlSpawn } from '../src/util.js'
 
 // The OAuth authorize URL is hostile to BOTH Windows shells: cmd.exe splits an unquoted line at
 // every bare `&` (the tester-reported "querystring must have required property 'redirect'"), and
@@ -83,6 +83,18 @@ describe('handleApproval', () => {
   afterAll(() => { outSpy.mockRestore(); errSpy.mockRestore() })
 
   const gated = { status: 202, body: { status: 'approval_required', action: 'deploy', approvalId: 'a1' } }
+
+  it('die records exit 1 and aborts the command without forcing process.exit()', () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+    try {
+      expect(() => die('boom')).toThrow(CliExit)
+      expect(exitSpy).not.toHaveBeenCalled()
+      expect(stderr.join('')).toBe('error: boom\n')
+      expect(process.exitCode).toBe(1)
+    } finally {
+      exitSpy.mockRestore()
+    }
+  })
 
   it('202: returns true, hint on stderr, stdout untouched, exit code 2', () => {
     expect(handleApproval(gated)).toBe(true)
