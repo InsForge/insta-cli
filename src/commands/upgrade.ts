@@ -207,9 +207,33 @@ const spawnRun: Runner = ({ cmd, args, env }) =>
     p.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`upgrade failed (exit ${code})`))))
   })
 
+// Ask the freshly installed CLI what version it is. This is the ONLY thing the upgrade report may
+// quote: the installer can exit 0 without changing anything (its "already current?" short-circuit
+// against GitHub's /releases/latest), so "what we asked for" and "what is on disk" can differ.
+// Returns null when the binary can't be run or prints nothing version-shaped — never a guess.
+export type Observer = (channel: Channel, installDir: string) => Promise<string | null>
+const observeInstalled: Observer = (channel, installDir) =>
+  new Promise((resolve) => {
+    const cmd = channel === 'binary' ? join(installDir, 'insta') : 'insta'
+    let out = ''
+    try {
+      // INSTA_NO_AUTOUPDATE: the child must not kick off yet another upgrade while we are reading it.
+      const p = spawn(cmd, ['--version'], { stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, INSTA_NO_AUTOUPDATE: '1' } })
+      p.stdout.on('data', (d) => (out += String(d)))
+      p.on('error', () => resolve(null))
+      p.on('close', () => {
+        const last = out.trim().split('\n').pop()?.trim().replace(/^v/, '')
+        resolve(isStableVersion(last) ? last : null)
+      })
+    } catch {
+      resolve(null)
+    }
+  })
+
 export type UpgradeDeps = {
   fetchImpl?: Fetcher
   run?: Runner
+  observe?: Observer
   channel?: Channel
   /** Pre-resolved target (the background path already asked). Omit to resolve live. */
   latest?: string | null
@@ -222,8 +246,13 @@ export type UpgradeDeps = {
 //
 // ALWAYS resolves the target live: an explicitly requested upgrade must never be answered out of
 // ~/.insta/update-check.json, or the documented remedy for a stale cache would itself be stale.
-// It also rewrites that cache with what it learned, so the file can never claim an older `latest`
-// than the binary sitting next to it.
+//
+// NEVER REPORTS A VERSION IT DID NOT OBSERVE. After any install path it reads the installed
+// binary's actual `--version` and prints the transition from THAT. In the drift case (npm's tag
+// ahead of GitHub Releases) the pinned install 404s and the unpinned retry legitimately exits 0
+// having installed nothing — the honest line is "still 0.0.45", not "upgraded → 0.0.47". The
+// cache is rewritten from the observed version too: it then says the newest version THIS channel
+// can actually install, and the start-up nudge stops advertising a build the user cannot get.
 export async function upgrade(current: string, deps: UpgradeDeps = {}): Promise<void> {
   const say = deps.report ?? info
   const channel = deps.channel ?? detectChannel()
@@ -247,11 +276,12 @@ export async function upgrade(current: string, deps: UpgradeDeps = {}): Promise<
 
   say(`upgrading insta ${current} → ${latest ?? 'latest'} via ${channel} …`)
   const run = deps.run ?? spawnRun
+  const installDir = deps.installDir ?? dirname(process.execPath)
 
   if (channel === 'npm') {
     await run({ cmd: 'npm', args: ['install', '-g', `insta@${latest ?? 'latest'}`], env: process.env })
   } else {
-    const shellEnv = { ...process.env, INSTA_INSTALL_DIR: deps.installDir ?? dirname(process.execPath) }
+    const shellEnv = { ...process.env, INSTA_INSTALL_DIR: installDir }
     const sh = { cmd: 'sh', args: ['-c', `curl -fsSL ${INSTALL_SH} | sh`] }
     if (!latest) {
       await run({ ...sh, env: shellEnv })
@@ -261,17 +291,35 @@ export async function upgrade(current: string, deps: UpgradeDeps = {}): Promise<
         // channels cannot land on different builds.
         await run({ ...sh, env: { ...shellEnv, INSTA_VERSION: `v${latest}` } })
       } catch (e) {
-        // Release assets can lag the npm tag; fall back to the newest published release rather
-        // than leaving the user stranded on an old build.
+        // Release assets can lag the npm tag. Retry unpinned so the user at least gets the newest
+        // binary that IS published — and let the observation below say what that turned out to be.
         say(`pinned install of v${latest} failed (${(e as Error).message}) — retrying with the newest published release`)
         await run({ ...sh, env: shellEnv })
       }
     }
   }
 
-  // The installer prints its own generic onboarding banner; without this line the user is left
-  // guessing whether anything actually changed.
-  say(`✓ insta upgraded ${current} → ${latest ?? 'the newest release'} (run \`insta --version\` to confirm)`)
+  // Report only what is actually on disk now. The installer prints its own generic onboarding
+  // banner and can exit 0 without changing anything, so its exit code proves nothing.
+  const observed = await (deps.observe ?? observeInstalled)(channel, installDir)
+  if (!observed) {
+    say(`insta install finished, but the installed version could not be read — run \`insta --version\` to confirm`)
+    return
+  }
+  writeCache({ ...(readCache() ?? { checkedAt: 0, latest: observed }), checkedAt: now, latest: observed })
+  if (cmpSemver(observed, current) > 0) {
+    say(`✓ insta upgraded ${current} → ${observed}`)
+    return
+  }
+  const target = latest ?? 'the newest release'
+  if (channel === 'binary') {
+    say(
+      `insta is still ${observed} — the newest release (${target}) is published on npm but its binary assets are not on GitHub Releases yet; ` +
+        `try again later or install via npm (npm i -g insta@latest)`,
+    )
+  } else {
+    say(`insta is still ${observed} — npm reports ${target} as latest but the install did not change the version; try again later`)
+  }
 }
 
 export type CheckDeps = {

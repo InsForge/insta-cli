@@ -145,6 +145,9 @@ test('backgroundCheck nudges instead of upgrading when autoupdate is off', async
 
 // ---- 5. explicit `insta upgrade` bypasses the cache and hits both channels identically ----
 
+// An observer standing in for `<installDir>/insta --version` on the freshly installed binary.
+const installed = (v: string | null): up.Observer => async () => v
+
 test('insta upgrade ignores the cache and installs npm’s latest on the binary channel', async () => {
   const now = 2_000_000_000_000
   up.writeCache({ checkedAt: now, latest: '0.0.45' }) // maximally fresh, and wrong
@@ -155,6 +158,7 @@ test('insta upgrade ignores the cache and installs npm’s latest on the binary 
     channel: 'binary',
     now,
     installDir: '/home/u/.insta/bin',
+    observe: installed('0.0.47'),
     run: async (spec) => {
       runs.push(spec)
     },
@@ -175,6 +179,7 @@ test('insta upgrade installs the same resolved version on the npm channel', asyn
     fetchImpl,
     channel: 'npm',
     now: 2_000_000_000_000,
+    observe: installed('0.0.47'),
     run: async (spec) => {
       runs.push(spec)
     },
@@ -206,6 +211,7 @@ test('a pinned binary install that fails falls back to the newest published rele
     channel: 'binary',
     now: 2_000_000_000_000,
     installDir: '/home/u/.insta/bin',
+    observe: installed('0.0.45'),
     run: async (spec) => {
       runs.push(spec)
       if (spec.env.INSTA_VERSION) throw new Error('download failed')
@@ -225,11 +231,125 @@ test('insta upgrade still upgrades when the registry is unreachable', async () =
     fetchImpl: boom,
     channel: 'npm',
     now: 2_000_000_000_000,
+    observe: installed('0.0.47'),
     run: async (spec) => {
       runs.push(spec)
     },
   })
   expect(runs[0].args).toEqual(['install', '-g', 'insta@latest'])
+})
+
+// ---- 5b. the report quotes what is ON DISK, never what was asked for ----
+
+// The v0.0.46-style drift, end to end: npm's dist-tag is ahead of GitHub Releases. The pinned
+// install 404s; the unpinned retry hits install.sh's "already current?" short-circuit (current
+// v0.0.45 == GitHub /releases/latest v0.0.45), installs nothing, exits 0.
+function driftInstaller(runs: up.RunSpec[]): up.Runner {
+  return async (spec) => {
+    runs.push(spec)
+    if (spec.env.INSTA_VERSION) throw new Error('upgrade failed (exit 1)') // asset 404
+    // unpinned: "✓ insta v0.0.45 already installed — up to date", exit 0, nothing written
+  }
+}
+
+test('drift: the fallback that installed nothing reports "still 0.0.45" with the npm hint, not "→ 0.0.47"', async () => {
+  const { fetchImpl } = fakeRegistry(DIST_TAGS)
+  const runs: up.RunSpec[] = []
+  const out: string[] = []
+  const now = 2_000_000_000_000
+  await up.upgrade('0.0.45', {
+    fetchImpl,
+    channel: 'binary',
+    now,
+    installDir: '/home/u/.insta/bin',
+    run: driftInstaller(runs),
+    observe: installed('0.0.45'), // what `insta --version` really says afterwards
+    report: (m) => out.push(m),
+  })
+  expect(runs).toHaveLength(2) // pinned, then unpinned
+  const text = out.join('\n')
+  expect(text).not.toMatch(/upgraded 0\.0\.45 → 0\.0\.47/)
+  expect(text).not.toMatch(/✓ insta upgraded/)
+  expect(text).toMatch(/insta is still 0\.0\.45/)
+  expect(text).toMatch(/0\.0\.47.*published on npm/)
+  expect(text).toMatch(/binary assets are not on GitHub Releases yet/)
+  expect(text).toMatch(/npm i -g insta@latest/)
+  // The cache carries the OBSERVED version — the newest this channel could actually install —
+  // so start-up does not keep advertising a build the user cannot get.
+  expect(JSON.parse(readFileSync(cacheFile, 'utf8'))).toMatchObject({ latest: '0.0.45', checkedAt: now })
+})
+
+test('happy pinned path: the report quotes the observed transition', async () => {
+  const { fetchImpl } = fakeRegistry(DIST_TAGS)
+  const out: string[] = []
+  const runs: up.RunSpec[] = []
+  await up.upgrade('0.0.45', {
+    fetchImpl,
+    channel: 'binary',
+    now: 2_000_000_000_000,
+    installDir: '/home/u/.insta/bin',
+    run: async (spec) => {
+      runs.push(spec)
+    },
+    observe: installed('0.0.47'),
+    report: (m) => out.push(m),
+  })
+  expect(runs).toHaveLength(1)
+  expect(out.join('\n')).toMatch(/✓ insta upgraded 0\.0\.45 → 0\.0\.47/)
+  expect(JSON.parse(readFileSync(cacheFile, 'utf8'))).toMatchObject({ latest: '0.0.47' })
+})
+
+test('the report names the version the installer actually left, even when it differs from latest', async () => {
+  // Pinned 0.0.47 failed; unpinned landed 0.0.46 (a release that exists on GitHub but is behind npm).
+  const { fetchImpl } = fakeRegistry(DIST_TAGS)
+  const out: string[] = []
+  const runs: up.RunSpec[] = []
+  await up.upgrade('0.0.45', {
+    fetchImpl,
+    channel: 'binary',
+    now: 2_000_000_000_000,
+    run: driftInstaller(runs),
+    observe: installed('0.0.46'),
+    report: (m) => out.push(m),
+  })
+  const text = out.join('\n')
+  expect(text).toMatch(/✓ insta upgraded 0\.0\.45 → 0\.0\.46/)
+  // the pre-install "upgrading … → 0.0.47" line states intent; the OUTCOME line must not claim it
+  expect(text).not.toMatch(/upgraded .* → 0\.0\.47/)
+  expect(JSON.parse(readFileSync(cacheFile, 'utf8'))).toMatchObject({ latest: '0.0.46' })
+})
+
+test('when the installed version cannot be read, no transition is claimed', async () => {
+  const { fetchImpl } = fakeRegistry(DIST_TAGS)
+  const out: string[] = []
+  await up.upgrade('0.0.45', {
+    fetchImpl,
+    channel: 'binary',
+    now: 2_000_000_000_000,
+    run: async () => {},
+    observe: installed(null),
+    report: (m) => out.push(m),
+  })
+  const text = out.join('\n')
+  expect(text).not.toMatch(/✓ insta upgraded/)
+  expect(text).toMatch(/could not be read/)
+  expect(text).toMatch(/insta --version/)
+})
+
+test('npm channel: an install that did not change the version says so instead of claiming latest', async () => {
+  const { fetchImpl } = fakeRegistry(DIST_TAGS)
+  const out: string[] = []
+  await up.upgrade('0.0.45', {
+    fetchImpl,
+    channel: 'npm',
+    now: 2_000_000_000_000,
+    run: async () => {},
+    observe: installed('0.0.45'),
+    report: (m) => out.push(m),
+  })
+  const text = out.join('\n')
+  expect(text).toMatch(/insta is still 0\.0\.45/)
+  expect(text).not.toMatch(/✓ insta upgraded/)
 })
 
 // ---- 6. installed NEWER than the cached `latest` (the state a fresh `insta upgrade` leaves) ----
@@ -248,7 +368,7 @@ test('a successful upgrade rewrites the cache instead of leaving it claiming the
   up.writeCache({ checkedAt: stamped, latest: '0.0.45', lastAutoAt: 1_787_613_328_905 })
   const { fetchImpl } = fakeRegistry(DIST_TAGS)
   const now = 2_000_000_000_000
-  await up.upgrade('0.0.45', { fetchImpl, channel: 'binary', now, run: async () => {} })
+  await up.upgrade('0.0.45', { fetchImpl, channel: 'binary', now, run: async () => {}, observe: installed('0.0.47') })
   const after = JSON.parse(readFileSync(cacheFile, 'utf8'))
   expect(after.latest).toBe('0.0.47')
   expect(after.checkedAt).toBe(now)
@@ -259,7 +379,7 @@ test('even a no-op upgrade refreshes the cache (it still learned the true latest
   up.writeCache({ checkedAt: 1, latest: '0.0.45' })
   const { fetchImpl } = fakeRegistry(DIST_TAGS)
   const now = 2_000_000_000_000
-  await up.upgrade('0.0.47', { fetchImpl, channel: 'binary', now, run: async () => {} })
+  await up.upgrade('0.0.47', { fetchImpl, channel: 'binary', now, run: async () => {}, observe: installed('0.0.47') })
   expect(JSON.parse(readFileSync(cacheFile, 'utf8'))).toMatchObject({ latest: '0.0.47', checkedAt: now })
 })
 
@@ -273,6 +393,7 @@ test('insta upgrade reports what it upgraded from and to', async () => {
     channel: 'binary',
     now: 2_000_000_000_000,
     run: async () => {},
+    observe: installed('0.0.47'),
     report: (m) => out.push(m),
   })
   // The installer prints a generic onboarding banner, so the transition must be stated by us.
