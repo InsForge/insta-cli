@@ -385,17 +385,23 @@ const names = (flags: string) => flags.split(/[ ,|]+/).filter((t) => t.startsWit
 const TAKES_VALUE = new Set(EXEC_OPTIONS.filter(([f]) => /[<[]/.test(f)).flatMap(([f]) => names(f)))
 const BARE = new Set(EXEC_OPTIONS.filter(([f]) => !/[<[]/.test(f)).flatMap(([f]) => names(f)))
 
-// Index of the first token that is not one of `compute exec`'s own options. Everything from there
-// on is PAYLOAD — the optional service plus the remote command — and nothing inside it is ever
-// interpreted, so the remote command keeps its own flags (`ls -la`, `sh -c …`) untouched.
-function payloadStart(argv: string[], from: number): number {
-  for (let cursor = from; cursor < argv.length; cursor++) {
+const isExecOption = (t: string) =>
+  TAKES_VALUE.has(t) || BARE.has(t) || (t.includes('=') && TAKES_VALUE.has(t.slice(0, t.indexOf('='))))
+
+// Separate `compute exec`'s OWN options (with their values) from everything else. Options may sit
+// on either side of the service name, so this is a partition, not a prefix. Everything that is not
+// an option is PAYLOAD — the optional service plus the remote command — and is never interpreted
+// further, so the remote command keeps its own flags (`ls -la`, `sh -c …`) untouched.
+function partitionExecArgs(argv: string[], from: number, to: number = argv.length) {
+  const options: string[] = []
+  const payload: string[] = []
+  for (let cursor = from; cursor < to; cursor++) {
     const token = argv[cursor]!
-    if (TAKES_VALUE.has(token)) { cursor++; continue }
-    if (BARE.has(token) || (token.includes('=') && TAKES_VALUE.has(token.slice(0, token.indexOf('='))))) continue
-    return cursor
+    if (!isExecOption(token)) { payload.push(token); continue }
+    options.push(token)
+    if (TAKES_VALUE.has(token) && cursor + 1 < to) options.push(argv[++cursor]!)
   }
-  return argv.length
+  return { options, payload }
 }
 
 // Where does THIS process's `compute exec` command start? Only the command path counts: `compute`
@@ -425,21 +431,21 @@ export function splitExecArgs(
   const i = execCommandIndex(argv)
   if (i === -1) return { argv }
   const dash = argv.indexOf('--', i + 2)
-  const start = payloadStart(argv, i + 2)
-  // A separator that survived is the payload's first token (service omitted) or its second
-  // (service given) — nowhere else. Deeper than that it is the remote command's OWN `--`: npm's
-  // PowerShell shim strips only the first one, so the real separator is already gone.
-  if (dash !== -1 && (platform !== 'win32' || dash <= start + 1)) {
-    return { argv: argv.slice(0, dash), command: argv.slice(dash + 1) }
+  if (dash !== -1) {
+    // A separator that survived has at most ONE operand ahead of it — the optional service. Two or
+    // more mean this `--` is the remote command's own: npm's PowerShell shim strips only the first,
+    // so the real separator is already gone and splitting here would drop a command token.
+    const ahead = partitionExecArgs(argv, i + 2, dash).payload.length
+    if (platform !== 'win32' || ahead <= 1) return { argv: argv.slice(0, dash), command: argv.slice(dash + 1) }
   }
   if (platform !== 'win32') return { argv }
+  const { options, payload } = partitionExecArgs(argv, i + 2)
   // Nothing to recover, and `--help` is local: neither should cost the service-list round-trip the
-  // fallback needs. Help also wins over recovery — it is what this command's own usage error
-  // points at; the cost is that a remote command taking `--help` as an argument needs `insta.cmd`
-  // (or the `sh -c` form) on PowerShell.
-  const payload = argv.slice(start)
+  // fallback needs. Help also wins over recovery — it is what this command's own usage error points
+  // at; the cost is that a remote command taking `--help` as an argument needs `insta.cmd` (or the
+  // `sh -c` form) on PowerShell.
   if (payload.length === 0 || payload.some((t) => t === '--help' || t === '-h')) return { argv }
-  return { argv: argv.slice(0, start), command: payload, windowsFallback: true }
+  return { argv: [...argv.slice(0, i + 2), ...options], command: payload, windowsFallback: true }
 }
 
 // The separator is gone, so the payload arrives undivided and only the service list can split it:

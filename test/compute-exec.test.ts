@@ -12,9 +12,14 @@ describe('splitExecArgs', () => {
   // ---- the separator survived (every platform, and Windows through cmd.exe / the .exe) ----
 
   it('splits at the literal -- and keeps CLI options on the CLI side', () => {
-    expect(splitExecArgs(A('myservice', '--branch', 'prod', '--', 'echo', 'hi', '--flag'))).toEqual({
-      argv: A('myservice', '--branch', 'prod'), command: ['echo', 'hi', '--flag'],
-    })
+    // Options sit on EITHER side of the service name, so a `--` after them is still the separator.
+    // Asserted on both platforms: reading this as a Windows fallback would swallow the separator.
+    // (Caught by the windows-latest CI lane, which runs this file with process.platform = win32.)
+    for (const platform of ['linux', 'win32'] as const) {
+      expect(splitExecArgs(A('myservice', '--branch', 'prod', '--', 'echo', 'hi', '--flag'), platform)).toEqual({
+        argv: A('myservice', '--branch', 'prod'), command: ['echo', 'hi', '--flag'],
+      })
+    }
     expect(splitExecArgs(A('--', 'echo', 'hi'))).toEqual({ argv: A(), command: ['echo', 'hi'] })
     expect(splitExecArgs(A('--', '--help'))).toEqual({ argv: A(), command: ['--help'] })
     expect(splitExecArgs(A('myservice', '--'))).toEqual({ argv: A('myservice'), command: [] })
