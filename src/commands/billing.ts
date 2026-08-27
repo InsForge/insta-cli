@@ -36,13 +36,14 @@ export function billingLines(s: BillingOverview, org?: string): string[] {
   ]
   if (s.subscriptionStatus) lines.push(`subscription: ${s.subscriptionStatus}`)
   if (s.billingStatus === 'suspended') {
-    // Four states, and each one's advice is a dead end for the other three. Tier first: only a free
-    // org can spend a prepaid wallet, and waiting for the next cycle genuinely fixes that one.
+    // Four causes, five messages, and every one is a dead end for the others. Tier first: only a
+    // free org can spend a prepaid wallet, and waiting for the next cycle genuinely fixes that one.
     // (Tier, not subscriptionStatus, because rows written before non-payment suspended carry
     // `unpaid` beside tier 'free' and survive with no migration.) Then the status splits the paid
-    // branch: an invoice to settle, a subscription to replace, or — when it reads healthy — a
-    // suspension that outlived its cause, which is what a recovery whose compute failed to restart
-    // looks like, and where telling them to pay means re-settling a paid invoice.
+    // branch three ways: an invoice to settle, a subscription to replace, or — when it reads
+    // healthy — a suspension that outlived its cause, which is what a recovery whose compute failed
+    // to restart looks like, and where telling them to pay means re-settling a paid invoice. The
+    // replace case is the one that splits again, because enterprise has no self-serve checkout.
     //
     // EVERY command here carries the caller's --org. `billing` and the command being suggested
     // resolve the target independently, so a hint that drops the flag acts on a different org than
