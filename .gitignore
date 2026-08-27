@@ -15,3 +15,7 @@ coverage/
 !.claude/skills/
 .claude/skills/*
 !.claude/skills/developing-insta-cli/
+
+# Next.js turbopack trace output — this is not a Next app, but a stray build here
+# has twice been swept into a commit by `git add -A`.
+.next/

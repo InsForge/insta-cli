@@ -321,7 +321,7 @@ program.command('usage').description('Usage for the current billing cycle by bil
 const bill = program.command('billing').description('Current billing cycle overview (tier / used / included / overage / credits / forecast + per-dimension & per-project breakdown)')
   .option('--org <id>', 'target org (default: linked project\'s org)').option('--json')
   .action(guard((o) => billing(o)))
-bill.command('upgrade <tier>').description('Subscribe the org to a paid tier (pro|enterprise) via Stripe Checkout')
+bill.command('upgrade <tier>').description('Subscribe the org to a paid tier (pro|team) via Stripe Checkout')
   .option('--org <id>').option('--no-open', 'print the URL instead of opening a browser').option('--json')
   .action(guard((tier, o) => billingUpgrade(tier, o)))
 bill.command('portal').description('Open the Stripe Customer Portal (change plan / card / cancel)')

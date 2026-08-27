@@ -19,7 +19,10 @@ export type BillingOverview = {
 }
 
 // Format the billing overview into printable lines (pure, so it's unit-testable).
-export function billingLines(s: BillingOverview): string[] {
+// `org` is the caller's --org, echoed into the portal hint: `billing` and `billing portal` resolve
+// the target independently, so a hint that drops the flag sends someone reading org A's overview to
+// org B's portal.
+export function billingLines(s: BillingOverview, org?: string): string[] {
   const t = s.totals
   const lines = [
     `tier:      ${s.tier}`,
@@ -33,7 +36,39 @@ export function billingLines(s: BillingOverview): string[] {
   ]
   if (s.subscriptionStatus) lines.push(`subscription: ${s.subscriptionStatus}`)
   if (s.billingStatus === 'suspended') {
-    lines.push('⚠  org suspended — billing limit reached; resumes next cycle (or `insta billing upgrade pro`)')
+    // Four causes, five messages, and every one is a dead end for the others. Tier first: only a
+    // free org can spend a prepaid wallet, and waiting for the next cycle genuinely fixes that one.
+    // (Tier, not subscriptionStatus, because rows written before non-payment suspended carry
+    // `unpaid` beside tier 'free' and survive with no migration.) Then the status splits the paid
+    // branch three ways: an invoice to settle, a subscription to replace, or — when it reads
+    // healthy — a suspension that outlived its cause, which is what a recovery whose compute failed
+    // to restart looks like, and where telling them to pay means re-settling a paid invoice. The
+    // replace case is the one that splits again, because enterprise has no self-serve checkout.
+    //
+    // EVERY command here carries the caller's --org. `billing` and the command being suggested
+    // resolve the target independently, so a hint that drops the flag acts on a different org than
+    // the one being read — and two of them take payment.
+    const flag = org ? ` --org ${org}` : ''
+    const lapsed = s.subscriptionStatus === 'past_due' || s.subscriptionStatus === 'unpaid'
+    const ended = s.subscriptionStatus === 'canceled' || s.subscriptionStatus === 'incomplete_expired'
+    lines.push(
+      s.tier === 'free'
+        ? `⚠  org suspended — billing limit reached; resumes next cycle (or \`insta billing upgrade pro${flag}\`)`
+        : lapsed
+          ? `⚠  org suspended — subscription payment did not go through; settle it in \`insta billing portal${flag}\``
+          : ended
+            ? s.tier === 'enterprise'
+              // Per-deal, and `billing upgrade` cannot create one: naming a self-serve tier here
+              // would move them off the plan they negotiated.
+              ? '⚠  org suspended — the subscription ended; contact support to restore this plan'
+              // Their OWN tier, not a hardcoded one: suggesting `upgrade pro` to a Team org
+              // resubscribes it onto the wrong plan.
+              : `⚠  org suspended — the subscription ended; resubscribe with \`insta billing upgrade ${s.tier}${flag}\``
+            // Deliberately claims nothing about the subscription: `incomplete` reaches here too,
+            // and that one is neither current nor failed. All this branch knows is that the
+            // suspension has no billing cause it can name.
+            : '⚠  org suspended — no failed payment on file; contact support',
+    )
   }
   if (s.byDimension?.length) {
     lines.push('by dimension:')
@@ -52,12 +87,16 @@ export async function billing(opts: OrgOpt & { json?: boolean }): Promise<void> 
   const orgId = await resolveOrgId(opts)
   const s = await api.request<BillingOverview>('GET', `/orgs/${orgId}/billing/overview`)
   if (opts.json) return printJson(s)
-  for (const l of billingLines(s)) info(l)
+  for (const l of billingLines(s, opts.org)) info(l)
 }
 
 // insta billing upgrade <tier> — start a Stripe Checkout to subscribe the org to a paid tier.
 export async function billingUpgrade(tier: string, opts: OrgOpt & { open?: boolean; json?: boolean }): Promise<void> {
-  if (tier !== 'pro' && tier !== 'enterprise') die('tier must be pro|enterprise')
+  // pro|team, matching what POST /orgs/:orgId/billing/checkout actually accepts. This said
+  // pro|enterprise, which was wrong both ways: `team` is a real self-serve tier and was refused
+  // here, and `enterprise` is per-deal and 400s at the server. The suspension hint above now names
+  // the org's own tier, so a Team org was being sent to a command that rejected it.
+  if (tier !== 'pro' && tier !== 'team') die('tier must be pro|team')
   const api = await ApiClient.load()
   const orgId = await resolveOrgId(opts)
   const { url } = await api.request<{ url: string }>('POST', `/orgs/${orgId}/billing/checkout`, { tier })

@@ -43,8 +43,66 @@ describe('billingLines', () => {
     expect(out).not.toContain('subscription:')
   })
 
-  it('suspended: prints the warning', () => {
-    expect(billingLines({ ...base, billingStatus: 'suspended' }).join('\n')).toContain('org suspended')
+  // The advice is opposite per cause, so the wrong line is worse than none: waiting for the next
+  // cycle never settles an invoice, and there is no plan for a Team org to upgrade to.
+  it.each(['past_due', 'unpaid'])('suspended on a paid tier (%s): names the payment', (subscriptionStatus) => {
+    const out = billingLines({ ...base, billingStatus: 'suspended', subscriptionStatus }).join('\n')
+    expect(out).toContain('subscription payment did not go through')
+    expect(out).toContain('insta billing portal')
+    expect(out).not.toContain('resumes next cycle')
+  })
+
+  // The commands resolve the org independently, so a hint that drops --org acts on a different org
+  // than the one being read. Every hint, not just the portal one: the free-tier hint starts a
+  // Stripe Checkout, so dropping the flag there subscribes the wrong org.
+  it.each([
+    ['paid', 'pro', 'past_due', 'insta billing portal --org org_123'],
+    ['ended', 'pro', 'canceled', 'insta billing upgrade pro --org org_123'],
+    ['free', 'free', null, 'insta billing upgrade pro --org org_123'],
+  ])('carries --org into the %s hint', (_label, tier, subscriptionStatus, expected) => {
+    const out = billingLines({ ...base, tier, subscriptionStatus, billingStatus: 'suspended' }, 'org_123').join('\n')
+    expect(out).toContain(expected)
+  })
+
+  // The resubscribe hint has to name the org's OWN tier. `insta billing upgrade pro` on a Team org
+  // resubscribes it onto the wrong plan, and enterprise has no self-serve command at all.
+  it.each([
+    ['pro', 'insta billing upgrade pro'],
+    ['team', 'insta billing upgrade team'],
+  ])('suspended after a cancellation on %s: names that tier', (tier, expected) => {
+    const out = billingLines({ ...base, tier, billingStatus: 'suspended', subscriptionStatus: 'canceled' }).join('\n')
+    expect(out).toContain(expected)
+  })
+
+  it('suspended after a cancellation on enterprise: no self-serve command exists, so it says so', () => {
+    const out = billingLines({ ...base, tier: 'enterprise', billingStatus: 'suspended', subscriptionStatus: 'canceled' }).join('\n')
+    expect(out).toContain('contact support')
+    expect(out).not.toContain('insta billing upgrade')
+  })
+
+  // A cancelled subscription suspends the org and keeps its tier (platform#300), so "your
+  // subscription is current" is the one thing it is not — and there is no invoice to settle.
+  it('suspended after a cancellation: says the subscription ended, not that it is current', () => {
+    const out = billingLines({ ...base, billingStatus: 'suspended', subscriptionStatus: 'canceled' }).join('\n')
+    expect(out).toContain('the subscription ended; resubscribe')
+    expect(out).not.toContain('is current')
+    expect(out).not.toContain('did not go through')
+  })
+
+  it('suspended on free: still the wallet story, which a new cycle really does fix', () => {
+    const out = billingLines({ ...base, tier: 'free', billingStatus: 'suspended' }).join('\n')
+    expect(out).toContain('billing limit reached; resumes next cycle')
+  })
+
+  // Suspended while the subscription reads healthy: a recovery whose compute failed to restart.
+  // Both other lines are wrong here — there is no invoice to settle and no cycle to wait for.
+  it('suspended with a current subscription: neither of the other two stories', () => {
+    const out = billingLines({ ...base, billingStatus: 'suspended', subscriptionStatus: 'active' }).join('\n')
+    expect(out).toContain('contact support')
+    expect(out).not.toContain('did not go through')
+    expect(out).not.toContain('resumes next cycle')
+    // It must not assert the subscription is healthy: `incomplete` lands here too.
+    expect(out).not.toContain('is current')
   })
 
   it('empty breakdowns: no breakdown headers', () => {
