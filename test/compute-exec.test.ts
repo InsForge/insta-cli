@@ -3,7 +3,7 @@
 // pattern used throughout this suite (parseCpu/parseMemoryMb in limits.test.ts, parseVolumeGib in
 // volume.test.ts): the network-touching orchestration itself is untested here, same as
 // computeStart/computeVolume/computeLimits.
-import { describe, it, expect, vi, afterEach, afterAll } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest'
 import { splitExecArgs, resolveExecTarget, parseTimeoutSec, execRequestBody, computeExec, applyExecResult } from '../src/commands/compute.js'
 
 describe('splitExecArgs', () => {
@@ -114,11 +114,10 @@ describe('splitExecArgs', () => {
     })
   })
 
-  // One shape stays irreducibly ambiguous: a single operand followed by `--` parses validly BOTH
-  // ways (service `printenv` + command `PORT`, or shim-eaten separator + command `printenv -- PORT`).
-  // We take the separator reading, which is what every non-PowerShell shell means. When that
-  // reading is wrong, resolveComputeServiceId fails loudly ("compute service not found: printenv")
-  // rather than running the wrong command — degradation to an error, never to silent corruption.
+  // A single operand followed by `--` parses validly BOTH ways (service `printenv` + command
+  // `PORT`, or shim-eaten separator + command `printenv -- PORT`). We take the separator reading,
+  // which is what every non-PowerShell shell means. Whichever way the recovery below guesses, the
+  // reading taken is stated on stderr — see the resolveExecTarget tests.
   it('takes the separator reading for the one shape that parses both ways', () => {
     const argv = ['node', 'insta', 'compute', 'exec', 'printenv', '--', 'PORT']
     expect(splitExecArgs(argv, 'win32')).toEqual({
@@ -151,6 +150,49 @@ describe('splitExecArgs', () => {
     })
   })
 
+  // An option we do not declare is a typo, and on Linux commander says so. Windows must not
+  // instead ship it to the machine as the remote command's argv[0] — that costs a machine wake
+  // to discover a misspelling, and runs `--brnach` as a program.
+  it('refuses to recover around an option it does not recognise', () => {
+    const typo = ['node', 'insta', 'compute', 'exec', 'app', '--brnach', 'prod', '--', 'echo', 'hi']
+    expect(splitExecArgs(typo, 'win32')).toEqual({ argv: typo }) // commander reports it, as on linux
+    const short = ['node', 'insta', 'compute', 'exec', 'app', '-b', 'prod', '--', 'echo', 'hi']
+    expect(splitExecArgs(short, 'win32')).toEqual({ argv: short })
+  })
+
+  // Flags BELONGING to the remote command sit after the boundary and must never be classified.
+  it('leaves the remote command\'s own flags alone', () => {
+    const argv = ['node', 'insta', 'compute', 'exec', 'app', 'ls', '-la']
+    expect(splitExecArgs(argv, 'win32')).toEqual({
+      argv: ['node', 'insta', 'compute', 'exec', 'app'],
+      command: ['ls', '-la'],
+      windowsFallback: true,
+    })
+  })
+
+  // `--help` is what the CLI's own usage error points users at; it must print help on Windows too,
+  // not the PowerShell-separator error — cmd.exe and the released .exe never involve PowerShell.
+  it('always lets --help reach commander', () => {
+    for (const flag of ['--help', '-h']) {
+      const argv = ['node', 'insta', 'compute', 'exec', 'app', flag]
+      expect(splitExecArgs(argv, 'win32')).toEqual({ argv })
+    }
+    // …but only before a real separator: a binary literally named --help is still runnable.
+    expect(splitExecArgs(['node', 'insta', 'compute', 'exec', 'app', '--', '--help'], 'win32')).toEqual({
+      argv: ['node', 'insta', 'compute', 'exec', 'app'],
+      command: ['--help'],
+    })
+  })
+
+  it('locks the spaced --timeout value through the PowerShell fallback', () => {
+    const argv = ['node', 'insta', 'compute', 'exec', '--timeout', '60', 'app', 'echo', 'hi']
+    expect(splitExecArgs(argv, 'win32')).toEqual({
+      argv: ['node', 'insta', 'compute', 'exec', '--timeout', '60', 'app'],
+      command: ['echo', 'hi'],
+      windowsFallback: true,
+    })
+  })
+
   it('preserves a command token that itself looks like a flag', () => {
     const argv = ['node', 'insta', 'compute', 'exec', '--', '--help']
     expect(splitExecArgs(argv)).toEqual({ argv: ['node', 'insta', 'compute', 'exec'], command: ['--help'] })
@@ -159,17 +201,46 @@ describe('splitExecArgs', () => {
 
 describe('resolveExecTarget', () => {
   const services = [{ id: 'svc_1', type: 'compute', name: 'app' }]
+  // Collect the note instead of letting it reach the real stderr during the run.
+  const notes: string[] = []
+  const note = (m: string) => { notes.push(m) }
+  beforeEach(() => { notes.length = 0 })
 
   it('keeps an explicit service that exists', () => {
-    expect(resolveExecTarget(services, 'app', ['printenv', 'PORT'], true)).toEqual({
+    expect(resolveExecTarget(services, 'app', ['printenv', 'PORT'], true, note)).toEqual({
       serviceName: 'app', command: ['printenv', 'PORT'],
     })
   })
 
   it('recovers an omitted service by restoring the first command token', () => {
-    expect(resolveExecTarget(services, 'printenv', ['PORT'], true)).toEqual({
+    expect(resolveExecTarget(services, 'printenv', ['PORT'], true, note)).toEqual({
       serviceName: undefined, command: ['printenv', 'PORT'],
     })
+  })
+
+  // The guess is irreducible, so it must at least be VISIBLE. Both readings are wrong for some
+  // input: a service named `echo` swallows the executable, and a mistyped service name is demoted
+  // to argv[0] and run remotely. Saying which reading was taken makes both self-diagnosing.
+  it('states which reading it took, and how to force the other one', () => {
+    const withEcho = [{ id: 'svc_2', type: 'compute', name: 'echo' }]
+    // `insta compute exec -- echo hello` arrives as `echo hello`; `echo` IS a service here.
+    expect(resolveExecTarget(withEcho, 'echo', ['hello'], true, note)).toEqual({
+      serviceName: 'echo', command: ['hello'],
+    })
+    expect(notes.at(-1)).toMatch(/read `echo` as the compute service/)
+    expect(notes.at(-1)).toContain('insta.cmd compute exec -- echo hello') // the other reading
+
+    // A typo'd service name used to fail locally with `compute service not found: db`.
+    expect(resolveExecTarget(withEcho, 'db', ['psql'], true, note)).toEqual({
+      serviceName: undefined, command: ['db', 'psql'],
+    })
+    expect(notes.at(-1)).toMatch(/`db` is not a compute service/)
+  })
+
+  it('says nothing when no guess was made', () => {
+    resolveExecTarget(services, 'app', ['printenv'], false, note) // explicit separator survived
+    resolveExecTarget(services, undefined, ['printenv'], true, note) // no service candidate
+    expect(notes).toEqual([])
   })
 })
 
