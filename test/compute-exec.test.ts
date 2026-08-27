@@ -4,293 +4,142 @@
 // volume.test.ts): the network-touching orchestration itself is untested here, same as
 // computeStart/computeVolume/computeLimits.
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest'
-import { splitExecArgs, resolveExecTarget, misplacedOptionError, parseTimeoutSec, execRequestBody, computeExec, applyExecResult } from '../src/commands/compute.js'
+import { splitExecArgs, resolveExecFallback, parseTimeoutSec, execRequestBody, computeExec, applyExecResult } from '../src/commands/compute.js'
+
+const A = (...tokens: string[]) => ['node', 'insta', 'compute', 'exec', ...tokens]
 
 describe('splitExecArgs', () => {
-  it('splits the command out at the first literal -- after `compute exec`', () => {
-    const argv = ['node', 'insta', 'compute', 'exec', 'myservice', '--branch', 'prod', '--', 'echo', 'hi', '--flag']
-    expect(splitExecArgs(argv)).toEqual({
-      argv: ['node', 'insta', 'compute', 'exec', 'myservice', '--branch', 'prod'],
-      command: ['echo', 'hi', '--flag'],
+  // ---- the separator survived (every platform, and Windows through cmd.exe / the .exe) ----
+
+  it('splits at the literal -- and keeps CLI options on the CLI side', () => {
+    expect(splitExecArgs(A('myservice', '--branch', 'prod', '--', 'echo', 'hi', '--flag'))).toEqual({
+      argv: A('myservice', '--branch', 'prod'), command: ['echo', 'hi', '--flag'],
+    })
+    expect(splitExecArgs(A('--', 'echo', 'hi'))).toEqual({ argv: A(), command: ['echo', 'hi'] })
+    expect(splitExecArgs(A('--', '--help'))).toEqual({ argv: A(), command: ['--help'] })
+    expect(splitExecArgs(A('myservice', '--'))).toEqual({ argv: A('myservice'), command: [] })
+  })
+
+  it('leaves anything that is not `compute exec` alone', () => {
+    const other = ['node', 'insta', 'compute', 'start', 'myservice']
+    expect(splitExecArgs(other)).toEqual({ argv: other })
+    expect(splitExecArgs(A('myservice'), 'linux')).toEqual({ argv: A('myservice') })
+    // `compute exec` as DATA for another command: `insta run` hands this argv to a local child,
+    // so rewriting it would eat the child's last argument.
+    for (const payload of [
+      ['node', 'insta', 'run', '--', 'compute', 'exec', 'app', 'echo'],
+      ['node', 'insta', 'run', '--', 'compute', 'exec', 'app', '--', 'echo'],
+      ['node', 'insta', 'run', 'compute', 'exec', 'app', 'echo'],
+    ]) expect(splitExecArgs(payload, 'win32')).toEqual({ argv: payload })
+  })
+
+  it('never infers a missing separator outside Windows', () => {
+    expect(splitExecArgs(A('app', 'echo', 'hi'), 'linux')).toEqual({ argv: A('app', 'echo', 'hi') })
+  })
+
+  // ---- the shim ate the separator (win32 only) ----
+  //
+  // Everything from the first non-option token is PAYLOAD and is never interpreted, so the remote
+  // command keeps its own flags and its own `--`. Only the service list splits it (below).
+
+  it('hands the whole payload over when the separator is gone', () => {
+    expect(splitExecArgs(A('app', 'printenv', 'PORT'), 'win32')).toEqual({
+      argv: A(), command: ['app', 'printenv', 'PORT'], windowsFallback: true,
+    })
+    // The remote command's own flags must survive — `sh -c …` is the idiom this command's help
+    // prescribes for shell features, and it arrives with the separator already eaten.
+    expect(splitExecArgs(A('ls', '-la'), 'win32')).toEqual({
+      argv: A(), command: ['ls', '-la'], windowsFallback: true,
+    })
+    expect(splitExecArgs(A('sh', '-c', 'echo hi'), 'win32')).toEqual({
+      argv: A(), command: ['sh', '-c', 'echo hi'], windowsFallback: true,
     })
   })
 
-  it('supports an omitted service name', () => {
-    const argv = ['node', 'insta', 'compute', 'exec', '--', 'echo', 'hi']
-    expect(splitExecArgs(argv)).toEqual({ argv: ['node', 'insta', 'compute', 'exec'], command: ['echo', 'hi'] })
-  })
-
-  it('leaves argv untouched for any other invocation', () => {
-    const argv = ['node', 'insta', 'compute', 'start', 'myservice']
-    expect(splitExecArgs(argv)).toEqual({ argv })
-  })
-
-  it('leaves argv untouched (command undefined) when there is no -- at all', () => {
-    const argv = ['node', 'insta', 'compute', 'exec', 'myservice']
-    expect(splitExecArgs(argv, 'linux')).toEqual({ argv })
-  })
-
-  it('recovers a command after the npm PowerShell shim consumed --', () => {
-    const argv = ['node', 'insta', 'compute', 'exec', 'app', 'printenv', 'PORT']
-    expect(splitExecArgs(argv, 'win32')).toEqual({
-      argv: ['node', 'insta', 'compute', 'exec', 'app'],
-      command: ['printenv', 'PORT'],
-      windowsFallback: true,
+  it('keeps the CLI options ahead of the payload for commander', () => {
+    expect(splitExecArgs(A('--branch', 'prod', '--timeout=60', 'app', 'echo'), 'win32')).toEqual({
+      argv: A('--branch', 'prod', '--timeout=60'), command: ['app', 'echo'], windowsFallback: true,
+    })
+    // …including a spaced value, which must not be mistaken for the payload's first token.
+    expect(splitExecArgs(A('--timeout', '60', 'app', 'echo'), 'win32')).toEqual({
+      argv: A('--timeout', '60'), command: ['app', 'echo'], windowsFallback: true,
     })
   })
 
-  it('keeps CLI options before the recovered PowerShell command', () => {
-    const argv = ['node', 'insta', 'compute', 'exec', '--branch', 'prod', '--timeout=60', 'app', 'echo', '--json']
-    expect(splitExecArgs(argv, 'win32')).toEqual({
-      argv: ['node', 'insta', 'compute', 'exec', '--branch', 'prod', '--timeout=60', 'app'],
-      command: ['echo', '--json'],
-      windowsFallback: true,
+  // The shim strips only the FIRST `--`, so a surviving one deeper than the payload's second
+  // token is the remote command's own. Splitting there would drop the real first command token.
+  it('treats a deeper -- as the remote command\'s own', () => {
+    expect(splitExecArgs(A('app', 'echo', '--'), 'win32')).toEqual({
+      argv: A(), command: ['app', 'echo', '--'], windowsFallback: true,
+    })
+    expect(splitExecArgs(A('app', 'sh', '-c', '--', 'echo hi'), 'win32')).toEqual({
+      argv: A(), command: ['app', 'sh', '-c', '--', 'echo hi'], windowsFallback: true,
     })
   })
 
-  // An option after the service candidate is undecidable without the service list: `app --json`
-  // is a misplaced CLI option, but `ls --json` is the omitted-service form whose command token
-  // landed in the service slot. The scanner hands the position back rather than guessing.
-  it('defers an option after the service candidate to the service list', () => {
-    const argv = ['node', 'insta', 'compute', 'exec', 'app', '--json']
-    expect(splitExecArgs(argv, 'win32')).toEqual({
-      argv: ['node', 'insta', 'compute', 'exec', 'app'],
-      command: ['--json'],
-      windowsFallback: true,
-      windowsOptionAfterService: '--json',
-    })
-  })
-
-  it('does not infer the missing separator outside Windows', () => {
-    const argv = ['node', 'insta', 'compute', 'exec', 'app', 'echo', 'hi']
-    expect(splitExecArgs(argv, 'linux')).toEqual({ argv })
-  })
-
-  it('supports a command that is itself empty after --', () => {
-    const argv = ['node', 'insta', 'compute', 'exec', 'myservice', '--']
-    expect(splitExecArgs(argv)).toEqual({ argv: ['node', 'insta', 'compute', 'exec', 'myservice'], command: [] })
-  })
-
-  // The remote command may carry its own `--`, and the PowerShell shim strips only the FIRST one.
-  // A surviving `--` is therefore not proof of a separator: splitting on it would drop the real
-  // first command token (`echo`) and violate the byte-for-byte remote-argv contract.
-  it('preserves a remote literal -- that outlived the PowerShell shim', () => {
-    // `insta compute exec app -- echo --` through insta.ps1 reaches node as:
-    const argv = ['node', 'insta', 'compute', 'exec', 'app', 'echo', '--']
-    expect(splitExecArgs(argv, 'win32')).toEqual({
-      argv: ['node', 'insta', 'compute', 'exec', 'app'],
-      command: ['echo', '--'],
-      windowsFallback: true,
-    })
-  })
-
-  it('preserves a remote -- in the MIDDLE of a recovered command', () => {
-    const argv = ['node', 'insta', 'compute', 'exec', 'app', 'sh', '-c', '--', 'echo hi']
-    expect(splitExecArgs(argv, 'win32')).toEqual({
-      argv: ['node', 'insta', 'compute', 'exec', 'app'],
-      command: ['sh', '-c', '--', 'echo hi'],
-      windowsFallback: true,
-    })
-  })
-
-  // The whole point: both Windows entry points must hand the platform the SAME remote argv.
   it('lands on the same remote argv whether the shim kept the separator or ate it', () => {
     const remote = ['echo', '--', 'hi']
-    const viaCmd = ['node', 'insta', 'compute', 'exec', 'app', '--', ...remote] // insta.cmd keeps --
-    const viaPowerShell = ['node', 'insta', 'compute', 'exec', 'app', ...remote] // insta.ps1 ate it
-    expect(splitExecArgs(viaCmd, 'win32').command).toEqual(remote)
-    expect(splitExecArgs(viaPowerShell, 'win32').command).toEqual(remote)
+    expect(splitExecArgs(A('app', '--', ...remote), 'win32').command).toEqual(remote) // insta.cmd
+    // insta.ps1 — the payload still carries `app`, which resolveExecFallback strips below.
+    expect(splitExecArgs(A('app', ...remote), 'win32').command).toEqual(['app', ...remote])
   })
 
-  it('counts option VALUES as options, not operands, when locating the separator', () => {
-    // `--branch prod` must not read as two operands, or the real separator below looks remote.
-    const kept = ['node', 'insta', 'compute', 'exec', '--branch', 'prod', 'app', '--', 'echo', '--']
-    expect(splitExecArgs(kept, 'win32')).toEqual({
-      argv: ['node', 'insta', 'compute', 'exec', '--branch', 'prod', 'app'],
-      command: ['echo', '--'],
-    })
-    const eaten = ['node', 'insta', 'compute', 'exec', '--branch', 'prod', 'app', 'echo', '--']
-    expect(splitExecArgs(eaten, 'win32')).toEqual({
-      argv: ['node', 'insta', 'compute', 'exec', '--branch', 'prod', 'app'],
-      command: ['echo', '--'],
-      windowsFallback: true,
-    })
-  })
-
-  // A single operand followed by `--` parses validly BOTH ways (service `printenv` + command
-  // `PORT`, or shim-eaten separator + command `printenv -- PORT`). We take the separator reading,
-  // which is what every non-PowerShell shell means. Whichever way the recovery below guesses, the
-  // reading taken is stated on stderr — see the resolveExecTarget tests.
-  it('takes the separator reading for the one shape that parses both ways', () => {
-    const argv = ['node', 'insta', 'compute', 'exec', 'printenv', '--', 'PORT']
-    expect(splitExecArgs(argv, 'win32')).toEqual({
-      argv: ['node', 'insta', 'compute', 'exec', 'printenv'],
-      command: ['PORT'],
-    })
-  })
-
-  // `compute exec` is only OUR command when it is the command path. Later occurrences are payload
-  // for a different command, and rewriting argv there silently eats the other command's arguments.
-  it('ignores `compute exec` passed as data to another command', () => {
-    // `insta run -- compute exec app echo` runs a LOCAL child; those words are its argv, not ours.
-    const asPayload = ['node', 'insta', 'run', '--', 'compute', 'exec', 'app', 'echo']
-    expect(splitExecArgs(asPayload, 'win32')).toEqual({ argv: asPayload })
-    // Same on POSIX, where the payload carries its own `--`.
-    const withDash = ['node', 'insta', 'run', '--', 'compute', 'exec', 'app', '--', 'echo']
-    expect(splitExecArgs(withDash, 'linux')).toEqual({ argv: withDash })
-    // And with no top-level separator at all.
-    const noDash = ['node', 'insta', 'run', 'compute', 'exec', 'app', 'echo']
-    expect(splitExecArgs(noDash, 'win32')).toEqual({ argv: noDash })
-  })
-
-  it('still recognises the real command path', () => {
-    // argv[2] is where commander starts reading too, so the two cannot disagree.
-    const argv = ['node', 'insta', 'compute', 'exec', 'app', 'echo', 'hi']
-    expect(splitExecArgs(argv, 'win32')).toEqual({
-      argv: ['node', 'insta', 'compute', 'exec', 'app'],
-      command: ['echo', 'hi'],
-      windowsFallback: true,
-    })
-  })
-
-  // An option we do not declare is a typo, and on Linux commander says so. Windows must not
-  // instead ship it to the machine as the remote command's argv[0] — that costs a machine wake
-  // to discover a misspelling, and runs `--brnach` as a program.
-  it('leaves an unrecognised option where commander will report it', () => {
-    // The separator is intact, so it is honoured and `--brnach` stays in the argv commander parses
-    // — it must NOT be swept into the remote command and exec'd on the machine as argv[0].
-    for (const flag of ['--brnach', '-b']) {
-      const argv = ['node', 'insta', 'compute', 'exec', 'app', flag, 'prod', '--', 'echo', 'hi']
-      expect(splitExecArgs(argv, 'win32')).toEqual({
-        argv: ['node', 'insta', 'compute', 'exec', 'app', flag, 'prod'],
-        command: ['echo', 'hi'],
-      })
-    }
-    // With no operand ahead of it there is no ambiguity at all: stand the split down entirely.
-    const leading = ['node', 'insta', 'compute', 'exec', '--brnach', 'prod', 'app', '--', 'echo']
-    expect(splitExecArgs(leading, 'win32')).toEqual({ argv: leading })
-  })
-
-  // The regression this deferral exists to prevent: with the service omitted, the command's OWN
-  // flags must survive. `insta compute exec -- sh -c "…"` is the idiom the command's own help
-  // prescribes for shell features, and it arrives here with the separator already eaten.
-  it('keeps the remote command\'s flags when the service was omitted', () => {
-    expect(splitExecArgs(['node', 'insta', 'compute', 'exec', 'ls', '-la'], 'win32')).toEqual({
-      argv: ['node', 'insta', 'compute', 'exec', 'ls'],
-      command: ['-la'],
-      windowsFallback: true,
-      windowsOptionAfterService: '-la',
-    })
-    expect(splitExecArgs(['node', 'insta', 'compute', 'exec', 'sh', '-c', 'echo hi'], 'win32')).toEqual({
-      argv: ['node', 'insta', 'compute', 'exec', 'sh'],
-      command: ['-c', 'echo hi'],
-      windowsFallback: true,
-      windowsOptionAfterService: '-c',
-    })
-    // resolveExecTarget then restores the token that was parked in the service slot.
-    const services = [{ id: 'svc_1', type: 'compute', name: 'app' }]
-    expect(resolveExecTarget(services, 'sh', ['-c', 'echo hi'], true, () => {})).toEqual({
-      serviceName: undefined, command: ['sh', '-c', 'echo hi'],
-    })
-  })
-
-  // Flags BELONGING to the remote command sit after the boundary and must never be classified.
-  it('leaves the remote command\'s own flags alone', () => {
-    const argv = ['node', 'insta', 'compute', 'exec', 'app', 'ls', '-la']
-    expect(splitExecArgs(argv, 'win32')).toEqual({
-      argv: ['node', 'insta', 'compute', 'exec', 'app'],
-      command: ['ls', '-la'],
-      windowsFallback: true,
-    })
-  })
-
-  // `--help` is what the CLI's own usage error points users at; it must print help on Windows too,
-  // not the PowerShell-separator error — cmd.exe and the released .exe never involve PowerShell.
+  // --help is local and must not need a network round-trip to print; it is also what this
+  // command's own usage error points at. It wins over recovery.
   it('always lets --help reach commander', () => {
     for (const flag of ['--help', '-h']) {
-      const argv = ['node', 'insta', 'compute', 'exec', 'app', flag]
-      expect(splitExecArgs(argv, 'win32')).toEqual({ argv })
+      expect(splitExecArgs(A('app', flag), 'win32')).toEqual({ argv: A('app', flag) })
     }
-    // …but only before a real separator: a binary literally named --help is still runnable.
-    expect(splitExecArgs(['node', 'insta', 'compute', 'exec', 'app', '--', '--help'], 'win32')).toEqual({
-      argv: ['node', 'insta', 'compute', 'exec', 'app'],
-      command: ['--help'],
-    })
-  })
-
-  it('locks the spaced --timeout value through the PowerShell fallback', () => {
-    const argv = ['node', 'insta', 'compute', 'exec', '--timeout', '60', 'app', 'echo', 'hi']
-    expect(splitExecArgs(argv, 'win32')).toEqual({
-      argv: ['node', 'insta', 'compute', 'exec', '--timeout', '60', 'app'],
-      command: ['echo', 'hi'],
-      windowsFallback: true,
-    })
-  })
-
-  it('preserves a command token that itself looks like a flag', () => {
-    const argv = ['node', 'insta', 'compute', 'exec', '--', '--help']
-    expect(splitExecArgs(argv)).toEqual({ argv: ['node', 'insta', 'compute', 'exec'], command: ['--help'] })
   })
 })
 
-describe('resolveExecTarget', () => {
+describe('resolveExecFallback', () => {
   const services = [{ id: 'svc_1', type: 'compute', name: 'app' }]
-  // Collect the note instead of letting it reach the real stderr during the run.
   const notes: string[] = []
   const note = (m: string) => { notes.push(m) }
   beforeEach(() => { notes.length = 0 })
 
-  it('keeps an explicit service that exists', () => {
-    expect(resolveExecTarget(services, 'app', ['printenv', 'PORT'], true, note)).toEqual({
-      serviceName: 'app', command: ['printenv', 'PORT'],
-    })
+  it('splits the payload on service-list membership', () => {
+    expect(resolveExecFallback(services, ['app', 'printenv', 'PORT'], note))
+      .toEqual({ serviceName: 'app', command: ['printenv', 'PORT'] })
+    // Not a service → the whole payload is the command, flags and all.
+    expect(resolveExecFallback(services, ['ls', '-la'], note))
+      .toEqual({ serviceName: undefined, command: ['ls', '-la'] })
+    expect(resolveExecFallback(services, [], note)).toEqual({ serviceName: undefined, command: [] })
   })
 
-  it('recovers an omitted service by restoring the first command token', () => {
-    expect(resolveExecTarget(services, 'printenv', ['PORT'], true, note)).toEqual({
-      serviceName: undefined, command: ['printenv', 'PORT'],
-    })
-  })
-
-  // The guess is irreducible, so it must at least be VISIBLE. Both readings are wrong for some
-  // input: a service named `echo` swallows the executable, and a mistyped service name is demoted
-  // to argv[0] and run remotely. Saying which reading was taken makes both self-diagnosing.
+  // The guess is irreducible — `insta compute exec -- printenv PORT` and `insta compute exec
+  // printenv PORT` are byte-identical here — so it must at least be VISIBLE: a service named
+  // `echo` swallows the executable, and a mistyped service name is demoted and run remotely.
   it('states which reading it took, and how to force the other one', () => {
-    const withEcho = [{ id: 'svc_2', type: 'compute', name: 'echo' }]
-    // `insta compute exec -- echo hello` arrives as `echo hello`; `echo` IS a service here.
-    expect(resolveExecTarget(withEcho, 'echo', ['hello'], true, note)).toEqual({
-      serviceName: 'echo', command: ['hello'],
-    })
+    resolveExecFallback([{ id: 's', type: 'compute', name: 'echo' }], ['echo', 'hello'], note)
     expect(notes.at(-1)).toMatch(/read `echo` as the compute service/)
-    expect(notes.at(-1)).toContain('insta compute exec -- echo hello') // the other reading
+    expect(notes.at(-1)).toContain('insta compute exec -- echo hello')
 
-    // A typo'd service name used to fail locally with `compute service not found: db`.
-    expect(resolveExecTarget(withEcho, 'db', ['psql'], true, note)).toEqual({
-      serviceName: undefined, command: ['db', 'psql'],
-    })
+    resolveExecFallback(services, ['db', 'psql'], note)
     expect(notes.at(-1)).toMatch(/`db` is not a compute service/)
+
+    // Quoted, so the suggested line reproduces this argv instead of a different one.
+    resolveExecFallback(services, ['app', 'sh', '-c', 'echo hi'], note)
+    expect(notes.at(-1)).toContain('insta compute exec -- app sh -c "echo hi"')
   })
 
-  it('says nothing when no guess was made', () => {
-    resolveExecTarget(services, 'app', ['printenv'], false, note) // explicit separator survived
-    resolveExecTarget(services, undefined, ['printenv'], true, note) // no service candidate
+  it('says nothing when there was nothing to guess about', () => {
+    resolveExecFallback(services, ['app'], note) // no command at all — the usage error is the answer
     expect(notes).toEqual([])
   })
-})
 
-describe('misplacedOptionError', () => {
-  it('reports the option once the candidate proves to be a real service', () => {
-    const msg = misplacedOptionError('--json', 'app')
-    expect(msg).toMatch(/no `--` separator was found before `--json`/)
-    expect(msg).toContain('insta compute exec app -- <command>')
-    // The observable fact only: cmd.exe and the released .exe reach this path with no shim
-    // involved and no `insta.cmd` on disk, so neither may be named as cause or cure.
-    expect(msg).not.toMatch(/PowerShell|insta\.cmd/)
-  })
-
-  it('stays silent when the candidate was demoted to the command', () => {
-    expect(misplacedOptionError('-la', undefined)).toBeNull() // `ls -la` — the flag is the command's
-    expect(misplacedOptionError(undefined, 'app')).toBeNull() // no option followed the service
+  // `app` really is a service, so a flag right behind it cannot be the command — it is a CLI
+  // option on the wrong side of a separator that is not there. Reporting it beats waking a
+  // machine to run `--brnach` as a program.
+  it('reports a CLI option stranded behind the service', () => {
+    for (const flag of ['--brnach', '-b', '--json']) {
+      expect(() => resolveExecFallback(services, ['app', flag, 'x'], note))
+        .toThrow(new RegExp(`no \\\`--\\\` separator was found before \\\`\\${flag}\\\``))
+    }
+    // Neither PowerShell nor `insta.cmd` may be named: cmd.exe and the released .exe reach this
+    // too, with no shim involved and no `insta.cmd` on disk.
+    expect(() => resolveExecFallback(services, ['app', '--json'], note)).toThrow(/^(?!.*(PowerShell|insta\.cmd))/)
   })
 })
 

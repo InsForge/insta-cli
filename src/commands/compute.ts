@@ -372,157 +372,104 @@ export async function computeStatus(serviceName: string | undefined, opts: LifeO
 // ourselves, before commander ever parses it, removes the ambiguity; this is the only place in the
 // whole CLI a bare `--` has this meaning, so nothing else is affected. Exported for a direct,
 // network-free unit test — this split is the seam most likely to regress.
-/** The options `insta compute exec` declares — the ONE source of truth. index.ts builds the
- *  commander command from this list, and the Windows recovery scanner below classifies argv
- *  tokens with it. Adding an option here reaches both, so the scanner cannot silently fall
- *  behind the CLI surface and start mistaking a real option for the remote command. */
+/** The options `insta compute exec` declares — the one source of truth. index.ts builds the
+ *  commander command from this list, and the payload scan below uses it to know where the CLI's
+ *  own arguments stop. Adding an option here reaches both. */
 export const EXEC_OPTIONS: ReadonlyArray<readonly [flags: string, description?: string]> = [
   ['--branch <b>'],
   ['--timeout <sec>', 'command timeout in seconds, 1-180 (platform default: 30)'],
   ['--json'],
 ]
 
-const optionNames = (flags: string): string[] => flags.split(/[ ,|]+/).filter((t) => t.startsWith('-'))
-const VALUE_OPTIONS = new Set(EXEC_OPTIONS.filter(([f]) => /[<[]/.test(f)).flatMap(([f]) => optionNames(f)))
-const BARE_OPTIONS = new Set(EXEC_OPTIONS.filter(([f]) => !/[<[]/.test(f)).flatMap(([f]) => optionNames(f)))
+const names = (flags: string) => flags.split(/[ ,|]+/).filter((t) => t.startsWith('-'))
+const TAKES_VALUE = new Set(EXEC_OPTIONS.filter(([f]) => /[<[]/.test(f)).flatMap(([f]) => names(f)))
+const BARE = new Set(EXEC_OPTIONS.filter(([f]) => !/[<[]/.test(f)).flatMap(([f]) => names(f)))
 
-const takesValue = (token: string): boolean => VALUE_OPTIONS.has(token)
-const isKnownFlag = (token: string): boolean =>
-  BARE_OPTIONS.has(token) || (token.includes('=') && VALUE_OPTIONS.has(token.slice(0, token.indexOf('='))))
-const isHelp = (token: string): boolean => token === '--help' || token === '-h'
-const isOption = (token: string): boolean => token.startsWith('-') && token !== '--'
-
-// One left-to-right pass over the tokens that could still belong to the CLI. It stops at the
-// SECOND operand — the command's first token — so nothing past the boundary is ever classified
-// (`insta compute exec app ls -la` must not see `-la` as a CLI option).
-type ExecScan =
-  | { kind: 'bail' } // let commander speak: it prints help / reports the unknown option
-  | { kind: 'boundary'; at: number } // the second operand: the remote command starts here
-  | { kind: 'optionAfterService'; at: number } // undecidable here — the service list settles it
-  | { kind: 'exhausted'; sawService: boolean }
-
-function scanExecArgs(argv: string[], from: number, to: number): ExecScan {
-  let sawService = false
-  for (let cursor = from; cursor < to; cursor++) {
+// Index of the first token that is not one of `compute exec`'s own options. Everything from there
+// on is PAYLOAD — the optional service plus the remote command — and nothing inside it is ever
+// interpreted, so the remote command keeps its own flags (`ls -la`, `sh -c …`) untouched.
+function payloadStart(argv: string[], from: number): number {
+  for (let cursor = from; cursor < argv.length; cursor++) {
     const token = argv[cursor]!
-    // `--help` must always reach commander. Only the region BEFORE a real separator is scanned,
-    // so `insta compute exec app -- --help` still execs a binary literally named `--help`.
-    if (isHelp(token)) return { kind: 'bail' }
-    // An option AFTER the service candidate is genuinely undecidable here: `exec app --brnach`
-    // is a typo'd CLI option, while `exec ls -la` is the omitted-service form whose FIRST command
-    // token landed in the service slot. Hand the position back and let the service list settle it.
-    if (sawService && isOption(token)) return { kind: 'optionAfterService', at: cursor }
-    if (takesValue(token)) { cursor++; continue }
-    if (isKnownFlag(token)) continue
-    // Before any operand there is no such ambiguity: an option we do not declare is a typo, and it
-    // must NOT ride to the machine as the remote command's argv[0]. Stand the split down so
-    // Windows reports `unknown option` exactly as every other platform already does.
-    if (isOption(token)) return { kind: 'bail' }
-    if (!sawService) {
-      sawService = true
-      continue
-    }
-    return { kind: 'boundary', at: cursor }
+    if (TAKES_VALUE.has(token)) { cursor++; continue }
+    if (BARE.has(token) || (token.includes('=') && TAKES_VALUE.has(token.slice(0, token.indexOf('='))))) continue
+    return cursor
   }
-  return { kind: 'exhausted', sawService }
+  return argv.length
 }
 
-// Where does THIS process's `compute exec` command start? Only the command path counts — the
-// first two operands after the program name. `compute` and `exec` appearing any later are
-// payload, not our command: `insta run -- compute exec app echo` hands those words to a LOCAL
-// child process, and rewriting argv there would silently drop the child's last argument. argv[0]
-// and argv[1] are the runtime and this script — verified to hold for the released Bun standalone
-// binary too (`process.argv` there is `["bun", "/$bunfs/root/insta", …]`), which is the same
-// offset commander's own parse assumes. Returns -1 for "not ours".
-const GLOBAL_FLAGS = new Set(['-V', '--version', '-h', '--help'])
+// Where does THIS process's `compute exec` command start? Only the command path counts: `compute`
+// and `exec` appearing later are payload for something else — `insta run -- compute exec app echo`
+// hands those words to a LOCAL child, and rewriting argv there would eat the child's last
+// argument. argv[0] and argv[1] are the runtime and this script, verified to hold for the released
+// Bun standalone binary too (its `process.argv` is `["bun", "/$bunfs/root/insta", …]`), which is
+// the offset commander's own parse assumes. Returns -1 for "not ours".
 function execCommandIndex(argv: string[]): number {
   for (let cursor = 2; cursor < argv.length; cursor++) {
     const token = argv[cursor]!
-    if (token === '--') return -1 // everything past a top-level `--` belongs to another command
-    // `insta` declares no value-taking global options today. Rather than assume that forever,
-    // bail on anything unrecognised: a future `program.option('--profile <p>')` then makes this
-    // split stand down (commander reports the problem) instead of silently misreading argv.
-    if (GLOBAL_FLAGS.has(token)) continue
-    if (isOption(token)) return -1
+    if (token.startsWith('-')) return -1 // a global flag, or `--`: either way not our command path
     return token === 'compute' && argv[cursor + 1] === 'exec' ? cursor : -1
   }
   return -1
 }
 
+// `insta compute exec [service] -- <command> [args…]`: the command must reach the platform
+// byte-for-byte and can itself contain dashes or another `--`, so it cannot be a normal commander
+// positional — with `service` optional, commander cannot tell "no service, command starts here"
+// from "service IS the first command token". Splitting argv ourselves, before commander parses,
+// removes the ambiguity. Exported for a direct, network-free unit test.
 export function splitExecArgs(
   argv: string[],
   platform: NodeJS.Platform = process.platform,
-): { argv: string[]; command?: string[]; windowsFallback?: boolean; windowsOptionAfterService?: string } {
+): { argv: string[]; command?: string[]; windowsFallback?: boolean } {
   const i = execCommandIndex(argv)
   if (i === -1) return { argv }
   const dash = argv.indexOf('--', i + 2)
-  const split = () => ({ argv: argv.slice(0, dash), command: argv.slice(dash + 1) })
-  // Everywhere but Windows the separator survives, so it is the whole story — leave that path
-  // byte-for-byte as it was rather than routing it through the recovery heuristics.
-  if (platform !== 'win32') return dash === -1 ? { argv } : split()
-
-  // npm's generated PowerShell shim consumes a bare `--` before forwarding $args to node — but
-  // only the FIRST one, so a surviving `--` is not proof of a separator. Scan the tokens ahead of
-  // it: two or more operands mean the real separator was eaten and this `--` is remote argv.
-  const scan = scanExecArgs(argv, i + 2, dash === -1 ? argv.length : dash)
-  if (scan.kind === 'bail') return { argv }
-  if (dash !== -1 && scan.kind !== 'boundary') return split()
-  // Recovery. The boundary found above is the same one a full-range scan would find (the scan
-  // stops at the second operand, which necessarily precedes `dash`), so it is reused as-is and
-  // the remote `--` travels with the command untouched.
-  if (scan.kind === 'boundary') {
-    return { argv: argv.slice(0, scan.at), command: argv.slice(scan.at), windowsFallback: true }
+  const start = payloadStart(argv, i + 2)
+  // A separator that survived is the payload's first token (service omitted) or its second
+  // (service given) — nowhere else. Deeper than that it is the remote command's OWN `--`: npm's
+  // PowerShell shim strips only the first one, so the real separator is already gone.
+  if (dash !== -1 && (platform !== 'win32' || dash <= start + 1)) {
+    return { argv: argv.slice(0, dash), command: argv.slice(dash + 1) }
   }
-  if (scan.kind === 'optionAfterService') {
-    // Split AT the option and carry the token: computeExec re-reads it once the service list is
-    // known. Candidate is a real compute service → the option was meant for the CLI and is
-    // reported; candidate is not → it was the command's first token and the whole tail runs.
-    return { argv: argv.slice(0, scan.at), command: argv.slice(scan.at), windowsFallback: true, windowsOptionAfterService: argv[scan.at]! }
-  }
-  return scan.sawService ? { argv, windowsFallback: true } : { argv }
+  if (platform !== 'win32') return { argv }
+  // Nothing to recover, and `--help` is local: neither should cost the service-list round-trip the
+  // fallback needs. Help also wins over recovery — it is what this command's own usage error
+  // points at; the cost is that a remote command taking `--help` as an argument needs `insta.cmd`
+  // (or the `sh -c` form) on PowerShell.
+  const payload = argv.slice(start)
+  if (payload.length === 0 || payload.some((t) => t === '--help' || t === '-h')) return { argv }
+  return { argv: argv.slice(0, start), command: payload, windowsFallback: true }
 }
 
-// Once the separator is gone, whether the first operand is the service or the command's first
-// token is IRREDUCIBLY ambiguous — `insta compute exec -- echo hi` and `insta compute exec echo hi`
-// arrive identically. Service-list membership is the best available signal, but it is a guess in
-// both directions: a service named `echo` swallows the executable, and a mistyped service name
-// gets demoted to argv[0] and run remotely. So the reading taken is always STATED, on stderr —
-// stdout stays clean for --json — with the exact insta.cmd command that forces the other reading.
-export function resolveExecTarget(
+// The separator is gone, so the payload arrives undivided and only the service list can split it:
+// `insta compute exec -- printenv PORT` and `insta compute exec printenv PORT` are byte-identical
+// by the time they reach us. The reading taken is STATED on stderr — stdout stays clean for
+// --json — because it is a guess in both directions: a service named `echo` would swallow the
+// executable, and a mistyped service name is demoted to argv[0] and run remotely.
+export function resolveExecFallback(
   services: Array<{ id: string; type: string; name: string }>,
-  serviceName: string | undefined,
-  command: string[] | undefined,
-  windowsFallback = false,
+  payload: string[],
   note: (msg: string) => void = (msg) => process.stderr.write(`${msg}\n`),
-): { serviceName: string | undefined; command: string[] | undefined } {
-  if (!windowsFallback || !serviceName) return { serviceName, command }
-  const rest = command ?? []
-  const namedService = services.some((service) => service.type === 'compute' && service.name === serviceName)
-  // cmd.exe quoting, so the suggested line can be pasted verbatim even when an argument holds
-  // spaces or shell metacharacters — an unquoted `sh -c echo hi` would not reproduce this argv.
-  const asCommand = [serviceName, ...rest].map((a) => (/[\s"^&|<>()]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a)).join(' ')
-  if (namedService) {
-    // Nothing was recovered — there is no command to have guessed wrong about. Suggesting one
-    // named after the service (`insta compute exec app` → "run `app`?") is pure noise; the plain
-    // usage error that follows is the right answer.
-    if (rest.length === 0) return { serviceName, command }
-    note(`note: no \`--\` separator was found; read \`${serviceName}\` as the compute service. If it was the command, run: insta compute exec -- ${asCommand}`)
-    return { serviceName, command }
+): { serviceName: string | undefined; command: string[] } {
+  const [head, ...rest] = payload
+  if (head === undefined) return { serviceName: undefined, command: [] }
+  if (!services.some((service) => service.type === 'compute' && service.name === head)) {
+    note(`note: no \`--\` separator was found and \`${head}\` is not a compute service, so it was read as the command. If it was the service, check the name with \`insta services list\`.`)
+    return { serviceName: undefined, command: payload }
   }
-  note(`note: no \`--\` separator was found and \`${serviceName}\` is not a compute service, so it was read as the command. If it was the service, check the name with \`insta services list\`.`)
-  return { serviceName: undefined, command: [serviceName, ...rest] }
-}
-
-// The option that followed the service candidate, re-read once the service list is known. If the
-// candidate survived as a real compute service, the option was meant for the CLI after all — the
-// omitted-service reading is gone, so nothing can carry it. Returns null when it was the command's
-// own flag (candidate demoted) and the whole tail runs remotely. The message states only the
-// OBSERVABLE fact: cmd.exe and the released .exe reach this path too, where no shim touched argv
-// and no `insta.cmd` exists, so naming PowerShell or that wrapper would be a wrong cause and an
-// uninstallable remedy. Exported for a direct, network-free unit test.
-export function misplacedOptionError(flag: string | undefined, resolvedService: string | undefined): string | null {
-  if (!flag || resolvedService === undefined) return null
-  return `no \`--\` separator was found before \`${flag}\` — put CLI options ahead of [service], or add \`--\` before the command: insta compute exec ${resolvedService} -- <command> [args…]`
+  // `head` really is a service, so a flag right behind it cannot be the command — it is a CLI
+  // option that landed on the wrong side of a separator that is not there. Say so instead of
+  // waking a machine to run `--brnach` as a program. Only the observable fact is stated: cmd.exe
+  // and the released .exe reach this too, with no shim involved and no `insta.cmd` on disk.
+  if (rest[0]?.startsWith('-')) {
+    throw new Error(`no \`--\` separator was found before \`${rest[0]}\` — put CLI options ahead of [service], or add \`--\` before the command: insta compute exec ${head} -- <command> [args…]`)
+  }
+  if (rest.length > 0) {
+    const quoted = payload.map((a) => (/[\s"^&|<>()]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a)).join(' ')
+    note(`note: no \`--\` separator was found; read \`${head}\` as the compute service. If it was the command, run: insta compute exec -- ${quoted}`)
+  }
+  return { serviceName: head, command: rest }
 }
 
 // The --timeout override, through a throwing parser like every other user-typed number in this
@@ -542,7 +489,7 @@ export function execRequestBody(command: string[], timeoutSec?: number): Record<
 }
 
 type ExecOpts = LifeOpts & { timeout?: string }
-type ExecRecovery = { windowsFallback?: boolean; windowsOptionAfterService?: string }
+type ExecRecovery = { windowsFallback?: boolean }
 
 // Renders the exec response and sets process.exitCode — split out of computeExec as a pure function
 // of (res, json) so it's unit-testable without a network mock, same as handleApproval's own
@@ -594,9 +541,9 @@ export async function computeExec(
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
   const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
-  const target = resolveExecTarget(services, serviceName, command, !!recovery.windowsFallback)
-  const misplaced = misplacedOptionError(recovery.windowsOptionAfterService, target.serviceName)
-  if (misplaced) throw new Error(misplaced)
+  const target = recovery.windowsFallback
+    ? resolveExecFallback(services, command ?? [])
+    : { serviceName, command }
   if (!target.command || target.command.length === 0) {
     throw new Error('usage: insta compute exec [service] -- <command> [args…] (see --help)')
   }
