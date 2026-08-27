@@ -4,7 +4,7 @@
 // volume.test.ts): the network-touching orchestration itself is untested here, same as
 // computeStart/computeVolume/computeLimits.
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest'
-import { splitExecArgs, resolveExecTarget, parseTimeoutSec, execRequestBody, computeExec, applyExecResult } from '../src/commands/compute.js'
+import { splitExecArgs, resolveExecTarget, misplacedOptionError, parseTimeoutSec, execRequestBody, computeExec, applyExecResult } from '../src/commands/compute.js'
 
 describe('splitExecArgs', () => {
   it('splits the command out at the first literal -- after `compute exec`', () => {
@@ -48,13 +48,16 @@ describe('splitExecArgs', () => {
     })
   })
 
-  it('preserves ambiguous flags after the service and refuses to guess their boundary', () => {
+  // An option after the service candidate is undecidable without the service list: `app --json`
+  // is a misplaced CLI option, but `ls --json` is the omitted-service form whose command token
+  // landed in the service slot. The scanner hands the position back rather than guessing.
+  it('defers an option after the service candidate to the service list', () => {
     const argv = ['node', 'insta', 'compute', 'exec', 'app', '--json']
     expect(splitExecArgs(argv, 'win32')).toEqual({
       argv: ['node', 'insta', 'compute', 'exec', 'app'],
       command: ['--json'],
       windowsFallback: true,
-      windowsAmbiguous: true,
+      windowsOptionAfterService: '--json',
     })
   })
 
@@ -153,11 +156,42 @@ describe('splitExecArgs', () => {
   // An option we do not declare is a typo, and on Linux commander says so. Windows must not
   // instead ship it to the machine as the remote command's argv[0] — that costs a machine wake
   // to discover a misspelling, and runs `--brnach` as a program.
-  it('refuses to recover around an option it does not recognise', () => {
-    const typo = ['node', 'insta', 'compute', 'exec', 'app', '--brnach', 'prod', '--', 'echo', 'hi']
-    expect(splitExecArgs(typo, 'win32')).toEqual({ argv: typo }) // commander reports it, as on linux
-    const short = ['node', 'insta', 'compute', 'exec', 'app', '-b', 'prod', '--', 'echo', 'hi']
-    expect(splitExecArgs(short, 'win32')).toEqual({ argv: short })
+  it('leaves an unrecognised option where commander will report it', () => {
+    // The separator is intact, so it is honoured and `--brnach` stays in the argv commander parses
+    // — it must NOT be swept into the remote command and exec'd on the machine as argv[0].
+    for (const flag of ['--brnach', '-b']) {
+      const argv = ['node', 'insta', 'compute', 'exec', 'app', flag, 'prod', '--', 'echo', 'hi']
+      expect(splitExecArgs(argv, 'win32')).toEqual({
+        argv: ['node', 'insta', 'compute', 'exec', 'app', flag, 'prod'],
+        command: ['echo', 'hi'],
+      })
+    }
+    // With no operand ahead of it there is no ambiguity at all: stand the split down entirely.
+    const leading = ['node', 'insta', 'compute', 'exec', '--brnach', 'prod', 'app', '--', 'echo']
+    expect(splitExecArgs(leading, 'win32')).toEqual({ argv: leading })
+  })
+
+  // The regression this deferral exists to prevent: with the service omitted, the command's OWN
+  // flags must survive. `insta compute exec -- sh -c "…"` is the idiom the command's own help
+  // prescribes for shell features, and it arrives here with the separator already eaten.
+  it('keeps the remote command\'s flags when the service was omitted', () => {
+    expect(splitExecArgs(['node', 'insta', 'compute', 'exec', 'ls', '-la'], 'win32')).toEqual({
+      argv: ['node', 'insta', 'compute', 'exec', 'ls'],
+      command: ['-la'],
+      windowsFallback: true,
+      windowsOptionAfterService: '-la',
+    })
+    expect(splitExecArgs(['node', 'insta', 'compute', 'exec', 'sh', '-c', 'echo hi'], 'win32')).toEqual({
+      argv: ['node', 'insta', 'compute', 'exec', 'sh'],
+      command: ['-c', 'echo hi'],
+      windowsFallback: true,
+      windowsOptionAfterService: '-c',
+    })
+    // resolveExecTarget then restores the token that was parked in the service slot.
+    const services = [{ id: 'svc_1', type: 'compute', name: 'app' }]
+    expect(resolveExecTarget(services, 'sh', ['-c', 'echo hi'], true, () => {})).toEqual({
+      serviceName: undefined, command: ['sh', '-c', 'echo hi'],
+    })
   })
 
   // Flags BELONGING to the remote command sit after the boundary and must never be classified.
@@ -228,7 +262,7 @@ describe('resolveExecTarget', () => {
       serviceName: 'echo', command: ['hello'],
     })
     expect(notes.at(-1)).toMatch(/read `echo` as the compute service/)
-    expect(notes.at(-1)).toContain('insta.cmd compute exec -- echo hello') // the other reading
+    expect(notes.at(-1)).toContain('insta compute exec -- echo hello') // the other reading
 
     // A typo'd service name used to fail locally with `compute service not found: db`.
     expect(resolveExecTarget(withEcho, 'db', ['psql'], true, note)).toEqual({
@@ -241,6 +275,22 @@ describe('resolveExecTarget', () => {
     resolveExecTarget(services, 'app', ['printenv'], false, note) // explicit separator survived
     resolveExecTarget(services, undefined, ['printenv'], true, note) // no service candidate
     expect(notes).toEqual([])
+  })
+})
+
+describe('misplacedOptionError', () => {
+  it('reports the option once the candidate proves to be a real service', () => {
+    const msg = misplacedOptionError('--json', 'app')
+    expect(msg).toMatch(/no `--` separator was found before `--json`/)
+    expect(msg).toContain('insta compute exec app -- <command>')
+    // The observable fact only: cmd.exe and the released .exe reach this path with no shim
+    // involved and no `insta.cmd` on disk, so neither may be named as cause or cure.
+    expect(msg).not.toMatch(/PowerShell|insta\.cmd/)
+  })
+
+  it('stays silent when the candidate was demoted to the command', () => {
+    expect(misplacedOptionError('-la', undefined)).toBeNull() // `ls -la` — the flag is the command's
+    expect(misplacedOptionError(undefined, 'app')).toBeNull() // no option followed the service
   })
 })
 
@@ -274,9 +324,12 @@ describe('computeExec validation (throws before any network/config access)', () 
   it('rejects an invalid --timeout', async () => {
     await expect(computeExec('svc', ['echo'], { timeout: '9999' })).rejects.toThrow(/invalid timeout/)
   })
-  it('rejects ambiguous PowerShell flags before any network/config access', async () => {
-    await expect(computeExec('svc', ['--json'], {}, { windowsFallback: true, windowsAmbiguous: true }))
-      .rejects.toThrow(/PowerShell removed.*insta\.cmd/)
+  // Deliberately NOT a pre-network check any more: whether a trailing option is a misplaced CLI
+  // option or the omitted-service command's own flag is only knowable from the service list, so
+  // the verdict moved after the GET /services that resolveExecTarget already needed.
+  it('still rejects a command that recovered to nothing', async () => {
+    await expect(computeExec('svc', [], {}, { windowsFallback: false }))
+      .rejects.toThrow(/usage: insta compute exec/)
   })
 })
 

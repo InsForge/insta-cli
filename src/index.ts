@@ -211,7 +211,7 @@ const {
   argv: computeArgv,
   command: execCommand,
   windowsFallback: execWindowsFallback,
-  windowsAmbiguous: execWindowsAmbiguous,
+  windowsOptionAfterService: execWindowsOptionAfterService,
 } = computeCmd.splitExecArgs(process.argv)
 
 // ---- compute (lifecycle control + custom domains) ----
@@ -238,7 +238,7 @@ compute.command('always-on <mode> [service]').description('Set a compute service
 const execCmd = compute.command('exec [service]').description("Run a one-shot command inside a compute service's machine (`insta compute exec [service] -- <command> [args…]`) — no interactive shell/PTY: `command` is argv, no shell is invoked (use [\"sh\", \"-c\", \"...\"] for shell features). Wakes the machine first if it's scaled to zero — expect a few seconds of latency, billed as uptime, not an error. Exits with the remote command's own exit code (agents rely on this)")
   .action(guard((service, o) => computeCmd.computeExec(service, execCommand, o, {
     windowsFallback: execWindowsFallback,
-    windowsAmbiguous: execWindowsAmbiguous,
+    windowsOptionAfterService: execWindowsOptionAfterService,
   })))
 // Declared from the same list the Windows argv scanner classifies tokens with, so a new option
 // cannot reach the CLI surface while the scanner still reads it as part of the remote command.
