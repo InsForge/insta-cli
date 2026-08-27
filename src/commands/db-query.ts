@@ -66,10 +66,25 @@ export function renderMongoResult(result: unknown): string {
 
 type Opts = { database?: string; branch?: string; json?: boolean }
 
+// The API surface + project this command needs, injectable so the handler flow — service
+// resolution, the engine guards, --json/202 passthrough — is testable without a network mock
+// (the DomainDeps convention in compute.ts). Production loads a real ApiClient + requireProject().
+export type DbQueryApi = Pick<ApiClient, 'request' | 'rawRequest'>
+export type DbQueryDeps = { api: DbQueryApi; project: { projectId: string; branch?: string } }
+async function dbQueryDeps(deps?: DbQueryDeps): Promise<DbQueryDeps> {
+  if (deps) return deps
+  const [api, project] = [await ApiClient.load(), await requireProject()]
+  return { api, project }
+}
+
 // Resolve <service> (a service NAME) to its id + engine, then dispatch to the console exec API.
-export async function dbQuery(service: string, args: string[], opts: Opts = {}): Promise<void> {
-  const api = await ApiClient.load()
-  const p = await requireProject()
+export async function dbQuery(service: string, args: string[], opts: Opts = {}, deps?: DbQueryDeps): Promise<void> {
+  // An empty command is never valid — reject it before loading config or hitting the network,
+  // rather than posting an empty statement/argv to the console.
+  if (args.length === 0) {
+    die('usage: insta db query <service> <query…> (mysql/mongodb: one quoted statement; redis: e.g. GET mykey)')
+  }
+  const { api, project: p } = await dbQueryDeps(deps)
   const branch = opts.branch ?? p.branch
   const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
   const svc = (services as Array<{ id: string; type: string; name: string }>).find((s) => s.name === service)
@@ -78,6 +93,11 @@ export async function dbQuery(service: string, args: string[], opts: Opts = {}):
     die('db query is for managed databases (mysql/redis/mongodb); postgres uses the SQL editor / DATABASE_URL')
   }
   const engine = svc.type as Engine
+  // --database is a mongodb-only selector (execBody drops it for the others). Rejecting it here,
+  // rather than silently ignoring it, keeps the documented mongodb-only contract honest.
+  if (opts.database !== undefined && engine !== 'mongodb') {
+    die('--database is only supported for mongodb services')
+  }
   const res = await api.rawRequest('POST', consoleExecPath(p.projectId, svc.id), execBody(engine, args, opts.database))
   if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson(res.body)
