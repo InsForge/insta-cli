@@ -207,7 +207,11 @@ program.command('deploy [dir]').description('Deploy a source directory (built re
 // `insta compute exec` needs the command verbatim after a literal `--`; split it out of argv here,
 // before commander parses anything (see splitExecArgs's own comment for why `service` being
 // optional makes commander unable to hold that boundary itself).
-const { argv: computeArgv, command: execCommand } = computeCmd.splitExecArgs(process.argv)
+const {
+  argv: computeArgv,
+  command: execCommand,
+  windowsFallback: execWindowsFallback,
+} = computeCmd.splitExecArgs(process.argv)
 
 // ---- compute (lifecycle control + custom domains) ----
 const compute = program.command('compute').description('Control compute lifecycle (start/stop/suspend/status) + custom domains')
@@ -230,9 +234,11 @@ compute.command('limits [service]').description("Show or set a compute service's
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeLimits(service, o)))
 compute.command('always-on <mode> [service]').description('Set a compute service always-on (mode: on|off). on = machines never scale to zero; off = default scale-to-zero. All plans; billing is actual usage either way')
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((mode, service, o) => computeCmd.computeAlwaysOn(mode, service, o)))
-compute.command('exec [service]').description("Run a one-shot command inside a compute service's machine (`insta compute exec [service] -- <command> [args…]`) — no interactive shell/PTY: `command` is argv, no shell is invoked (use [\"sh\", \"-c\", \"...\"] for shell features). Wakes the machine first if it's scaled to zero — expect a few seconds of latency, billed as uptime, not an error. Exits with the remote command's own exit code (agents rely on this)")
-  .option('--branch <b>').option('--timeout <sec>', 'command timeout in seconds, 1-180 (platform default: 30)').option('--json')
-  .action(guard((service, o) => computeCmd.computeExec(service, execCommand, o)))
+const execCmd = compute.command('exec [service]').description("Run a one-shot command inside a compute service's machine (`insta compute exec [service] -- <command> [args…]`) — no interactive shell/PTY: `command` is argv, no shell is invoked (use [\"sh\", \"-c\", \"...\"] for shell features). Wakes the machine first if it's scaled to zero — expect a few seconds of latency, billed as uptime, not an error. Exits with the remote command's own exit code (agents rely on this)")
+  .action(guard((service, o) => computeCmd.computeExec(service, execCommand, o, { windowsFallback: execWindowsFallback })))
+// Declared from the same list splitExecArgs uses to find where the CLI's own arguments stop, so a
+// new option cannot reach the CLI surface while the split still reads it as part of the command.
+for (const [flags, description] of computeCmd.EXEC_OPTIONS) execCmd.option(flags, description)
 compute.command('volume [service]').description("Show, attach, grow, or delete a compute service's persistent /data volume. No flag: print size, mount path, and the plan cap (any plan). --size on a volumeless service ATTACHES one (any plan at the default 1Gi; larger is paid and plan-capped; the disk mounts at /data on the next deploy); on a volume-bearing one it grows (paid plans; grow-only — a provisioned disk cannot shrink). --delete DESTROYS the disk and ALL its data immediately (no detach, no undo; billing stops now, and suspend fast-wake + scale-out return). Billing is actual data stored — the size is a cap, not a price")
   .option('--size <gi>', 'new size in whole Gi, e.g. 10 (must be ≥ the current size)')
   .option('--delete', 'destroy the volume and ALL its data (irreversible; download anything you need first)')

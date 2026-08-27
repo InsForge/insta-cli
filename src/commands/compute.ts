@@ -372,12 +372,122 @@ export async function computeStatus(serviceName: string | undefined, opts: LifeO
 // ourselves, before commander ever parses it, removes the ambiguity; this is the only place in the
 // whole CLI a bare `--` has this meaning, so nothing else is affected. Exported for a direct,
 // network-free unit test — this split is the seam most likely to regress.
-export function splitExecArgs(argv: string[]): { argv: string[]; command?: string[] } {
-  const i = argv.findIndex((a, idx) => a === 'compute' && argv[idx + 1] === 'exec')
+/** The options `insta compute exec` declares — the one source of truth. index.ts builds the
+ *  commander command from this list, and the payload scan below uses it to know where the CLI's
+ *  own arguments stop. Adding an option here reaches both. */
+export const EXEC_OPTIONS: ReadonlyArray<readonly [flags: string, description?: string]> = [
+  ['--branch <b>'],
+  ['--timeout <sec>', 'command timeout in seconds, 1-180 (platform default: 30)'],
+  ['--json'],
+]
+
+const names = (flags: string) => flags.split(/[ ,|]+/).filter((t) => t.startsWith('-'))
+const TAKES_VALUE = new Set(EXEC_OPTIONS.filter(([f]) => /[<[]/.test(f)).flatMap(([f]) => names(f)))
+const BARE = new Set(EXEC_OPTIONS.filter(([f]) => !/[<[]/.test(f)).flatMap(([f]) => names(f)))
+
+const isExecOption = (t: string) =>
+  TAKES_VALUE.has(t) || BARE.has(t) || (t.includes('=') && TAKES_VALUE.has(t.slice(0, t.indexOf('='))))
+const isHelp = (t: string | undefined) => t === '--help' || t === '-h'
+
+// Indices of the tokens after `compute exec` that are NOT this command's own options. Used twice,
+// for two different questions, which is why it returns positions rather than a partition:
+//   - how many operands sit ahead of a `--` (is that `--` where a real separator could be?)
+//   - where the payload starts once the separator is gone
+// Note what it is never used for: reaching INSIDE the payload. Past its first token the remote
+// command may have begun, and `--json` there is the command's own argument, not ours.
+function operandIndices(argv: string[], from: number, to: number = argv.length): number[] {
+  const out: number[] = []
+  for (let cursor = from; cursor < to; cursor++) {
+    const token = argv[cursor]!
+    if (TAKES_VALUE.has(token)) { cursor++; continue }
+    if (isExecOption(token)) continue
+    out.push(cursor)
+  }
+  return out
+}
+
+// Where does THIS process's `compute exec` command start? Only the command path counts: `compute`
+// and `exec` appearing later are payload for something else — `insta run -- compute exec app echo`
+// hands those words to a LOCAL child, and rewriting argv there would eat the child's last
+// argument. argv[0] and argv[1] are the runtime and this script, verified to hold for the released
+// Bun standalone binary too (its `process.argv` is `["bun", "/$bunfs/root/insta", …]`), which is
+// the offset commander's own parse assumes. Returns -1 for "not ours".
+function execCommandIndex(argv: string[]): number {
+  for (let cursor = 2; cursor < argv.length; cursor++) {
+    const token = argv[cursor]!
+    if (token.startsWith('-')) return -1 // a global flag, or `--`: either way not our command path
+    return token === 'compute' && argv[cursor + 1] === 'exec' ? cursor : -1
+  }
+  return -1
+}
+
+// `insta compute exec [service] -- <command> [args…]`: the command must reach the platform
+// byte-for-byte and can itself contain dashes or another `--`, so it cannot be a normal commander
+// positional — with `service` optional, commander cannot tell "no service, command starts here"
+// from "service IS the first command token". Splitting argv ourselves, before commander parses,
+// removes the ambiguity. Exported for a direct, network-free unit test.
+export function splitExecArgs(
+  argv: string[],
+  platform: NodeJS.Platform = process.platform,
+): { argv: string[]; command?: string[]; windowsFallback?: boolean } {
+  const i = execCommandIndex(argv)
   if (i === -1) return { argv }
   const dash = argv.indexOf('--', i + 2)
-  if (dash === -1) return { argv }
-  return { argv: argv.slice(0, dash), command: argv.slice(dash + 1) }
+  if (dash !== -1) {
+    // A separator that survived has at most ONE operand ahead of it — the optional service. Two or
+    // more mean this `--` is the remote command's own: npm's PowerShell shim strips only the first,
+    // so the real separator is already gone. Options are skipped wherever they sit, because with an
+    // intact `--` everything ahead of it belongs to the CLI.
+    if (platform !== 'win32' || operandIndices(argv, i + 2, dash).length <= 1) {
+      return { argv: argv.slice(0, dash), command: argv.slice(dash + 1) }
+    }
+  }
+  if (platform !== 'win32') return { argv }
+  // The separator is gone. Everything from the first operand is PAYLOAD — the optional service plus
+  // the remote command — and nothing inside it is touched, so the command keeps its own flags AND
+  // its own `--json`/`--branch`. Options can only be recognised AHEAD of it; one stranded behind
+  // the service is reported by resolveExecFallback rather than silently applied or dropped.
+  const start = operandIndices(argv, i + 2)[0]
+  if (start === undefined) return { argv } // nothing to recover; no service-list round-trip needed
+  const payload = argv.slice(start)
+  if (isHelp(payload[0])) return { argv } // `insta compute exec --help` — local, and never remote
+  return { argv: argv.slice(0, start), command: payload, windowsFallback: true }
+}
+
+// The separator is gone, so the payload arrives undivided and only the service list can split it:
+// `insta compute exec -- printenv PORT` and `insta compute exec printenv PORT` are byte-identical
+// by the time they reach us. The reading taken is STATED on stderr — stdout stays clean for
+// --json — because it is a guess in both directions: a service named `echo` would swallow the
+// executable, and a mistyped service name is demoted to argv[0] and run remotely.
+export function resolveExecFallback(
+  services: Array<{ id: string; type: string; name: string }>,
+  payload: string[],
+  note: (msg: string) => void = (msg) => process.stderr.write(`${msg}\n`),
+): { serviceName: string | undefined; command: string[] } {
+  const [head, ...rest] = payload
+  if (head === undefined) return { serviceName: undefined, command: [] }
+  if (!services.some((service) => service.type === 'compute' && service.name === head)) {
+    note(`note: no \`--\` separator was found and \`${head}\` is not a compute service, so it was read as the command. If \`${head}\` was the service, check the name with \`insta services list\`.`)
+    return { serviceName: undefined, command: payload }
+  }
+  // `head` really is a service, so whatever follows it cannot be the command's first token.
+  // A help flag there is a request for THIS command's help, which commander already answered for
+  // every other shape; say where to get it rather than exec `-h` on the machine.
+  if (isHelp(rest[0])) throw new Error(`\`${rest[0]}\` after a service name is not a command — run \`insta compute exec --help\` for this command's help, or \`--\` before a remote command`)
+  // A CLI option there landed on the wrong side of a separator that is not present. It cannot be
+  // honoured this late — --branch and --timeout are already spent by the time the service list
+  // arrives — so it is reported instead of being silently dropped or exec'd as a program.
+  if (rest[0]?.startsWith('-')) {
+    throw new Error(`no \`--\` separator was found before \`${rest[0]}\` — put CLI options ahead of [service], or add \`--\` before the command: insta compute exec ${head} -- <command> [args…]`)
+  }
+  // The reading is a guess in both directions — a service named `echo` would swallow the
+  // executable — so state it. The escape hatch names insta.cmd: pasting a plain `--` back into the
+  // same PowerShell session would be eaten exactly as the first one was. The command itself is NOT
+  // echoed; remote argv can carry tokens and passwords, and the user already has it on screen.
+  if (rest.length > 0) {
+    note(`note: no \`--\` separator was found; read \`${head}\` as the compute service. If \`${head}\` was part of the command, re-run it through insta.cmd, which keeps \`--\`: insta.cmd compute exec -- <command>`)
+  }
+  return { serviceName: head, command: rest }
 }
 
 // The --timeout override, through a throwing parser like every other user-typed number in this
@@ -397,6 +507,7 @@ export function execRequestBody(command: string[], timeoutSec?: number): Record<
 }
 
 type ExecOpts = LifeOpts & { timeout?: string }
+type ExecRecovery = { windowsFallback?: boolean }
 
 // Renders the exec response and sets process.exitCode — split out of computeExec as a pure function
 // of (res, json) so it's unit-testable without a network mock, same as handleApproval's own
@@ -434,15 +545,28 @@ export function applyExecResult(res: { status: number; body: any }, json?: boole
 // code becomes this process's own exit code (--json still passes it through, it just skips the
 // split-stream output), since agents scripting this rely on it. Waking a scaled-to-zero machine is
 // expected — it adds latency and bills as uptime, it is not an error.
-export async function computeExec(serviceName: string | undefined, command: string[] | undefined, opts: ExecOpts): Promise<void> {
-  if (!command || command.length === 0) throw new Error('usage: insta compute exec [service] -- <command> [args…] (see --help)')
+export async function computeExec(
+  serviceName: string | undefined,
+  command: string[] | undefined,
+  opts: ExecOpts,
+  recovery: ExecRecovery = {},
+): Promise<void> {
+  if (!recovery.windowsFallback && (!command || command.length === 0)) {
+    throw new Error('usage: insta compute exec [service] -- <command> [args…] (see --help)')
+  }
   const timeoutSec = opts.timeout !== undefined ? parseTimeoutSec(opts.timeout) : undefined
   const api = await ApiClient.load()
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
   const { services } = await api.request('GET', `/projects/${p.projectId}/services${q(branch)}`)
-  const id = resolveComputeServiceId(services, serviceName)
-  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/exec`, execRequestBody(command, timeoutSec))
+  const target = recovery.windowsFallback
+    ? resolveExecFallback(services, command ?? [])
+    : { serviceName, command }
+  if (!target.command || target.command.length === 0) {
+    throw new Error('usage: insta compute exec [service] -- <command> [args…] (see --help)')
+  }
+  const id = resolveComputeServiceId(services, target.serviceName)
+  const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/exec`, execRequestBody(target.command, timeoutSec))
   applyExecResult(res, opts.json)
 }
 
