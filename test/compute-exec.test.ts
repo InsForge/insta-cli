@@ -120,6 +120,65 @@ describe('splitExecArgs', () => {
   })
 })
 
+// Every regression in this file's history was the same mistake: a change to WHICH TOKENS the code
+// is allowed to interpret, validated against the cases in the review comment rather than against
+// every position a flag can occupy. There are only four, and this table walks all of them end to
+// end (splitExecArgs → resolveExecFallback) so the next such change has to face the whole matrix.
+//
+// It also pins the property that hid one of those regressions for a whole CI cycle: with the
+// separator INTACT, win32 and POSIX must agree exactly. A test that omits the platform argument
+// silently checks linux locally and win32 on the windows-latest lane — never both.
+describe('flag position matrix', () => {
+  const services = [{ id: 'svc_1', type: 'compute', name: 'app' }]
+  const settle = (tokens: string[], platform: NodeJS.Platform) => {
+    const split = splitExecArgs(A(...tokens), platform)
+    if (!split.windowsFallback) return { service: '(commander)', command: split.command }
+    const t = resolveExecFallback(services, split.command ?? [], () => {})
+    return { service: t.serviceName ?? '(sole)', command: t.command }
+  }
+
+  // The separator survived (cmd.exe, the released .exe, and every non-Windows shell).
+  it.each([
+    ['ahead of the service', ['--branch', 'prod', 'app', '--', 'echo'], ['echo']],
+    ['between service and separator', ['app', '--branch', 'prod', '--', 'echo'], ['echo']],
+    ['as the command, service omitted', ['--', 'ls', '-la'], ['ls', '-la']],
+    ['inside the command', ['app', '--', 'echo', '--json'], ['echo', '--json']],
+    ['inside the command, as a bare --', ['app', '--', 'echo', '--'], ['echo', '--']],
+  ])('separator kept, flag %s — identical on both platforms', (_what, tokens, command) => {
+    for (const platform of ['linux', 'win32'] as const) {
+      expect(settle(tokens, platform)).toEqual({ service: '(commander)', command })
+    }
+  })
+
+  // The shim ate the separator. win32 only: POSIX never reaches the fallback.
+  it.each([
+    ['ahead of the service', ['--branch', 'prod', 'app', 'echo'], 'app', ['echo']],
+    ['as the command, service omitted', ['ls', '-la'], '(sole)', ['ls', '-la']],
+    ['as the command, a help flag', ['npm', '-h'], '(sole)', ['npm', '-h']],
+    ['inside the command', ['app', 'echo', '--json'], 'app', ['echo', '--json']],
+    ['inside the command, value-taking', ['app', 'echo', '--branch', 'x'], 'app', ['echo', '--branch', 'x']],
+    ['inside the command, a bare --', ['app', 'echo', '--'], 'app', ['echo', '--']],
+  ])('separator eaten, flag %s', (_what, tokens, service, command) => {
+    expect(settle(tokens as string[], 'win32')).toEqual({ service, command })
+    // POSIX never loses a separator, so it never guesses: with no `--` present there is nothing to
+    // split and the argv is left for commander. (A row that DOES carry a `--` is excluded — there
+    // the dash really is a separator on POSIX, which is exactly why only win32 needs recovery.)
+    if (!(tokens as string[]).includes('--')) {
+      expect(splitExecArgs(A(...(tokens as string[])), 'linux')).toEqual({ argv: A(...(tokens as string[])) })
+    }
+  })
+
+  // The cells that must NOT run anything: a CLI option cannot be honoured once the service list is
+  // what revealed it (--branch and --timeout are already spent), and help is not a remote command.
+  it.each([
+    ['a CLI option stranded behind the service', ['app', '--branch', 'prod', 'echo'], /before `--branch`/],
+    ['an unrecognised option behind the service', ['app', '--brnach', 'prod', '--', 'echo'], /before `--brnach`/],
+    ['a help flag behind the service', ['app', '--help'], /insta compute exec --help/],
+  ])('separator eaten, %s — reports instead of running', (_what, tokens, message) => {
+    expect(() => settle(tokens as string[], 'win32')).toThrow(message as RegExp)
+  })
+})
+
 describe('resolveExecFallback', () => {
   const services = [{ id: 'svc_1', type: 'compute', name: 'app' }]
   const notes: string[] = []
