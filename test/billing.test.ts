@@ -52,11 +52,25 @@ describe('billingLines', () => {
     expect(out).not.toContain('resumes next cycle')
   })
 
-  // The two commands resolve the org independently, so a hint that drops --org sends someone
-  // reading one org's overview to another org's portal.
-  it('carries --org into the portal hint when the caller targeted an org', () => {
-    const out = billingLines({ ...base, billingStatus: 'suspended', subscriptionStatus: 'past_due' }, 'org_123').join('\n')
-    expect(out).toContain('insta billing portal --org org_123')
+  // The commands resolve the org independently, so a hint that drops --org acts on a different org
+  // than the one being read. Every hint, not just the portal one: the free-tier hint starts a
+  // Stripe Checkout, so dropping the flag there subscribes the wrong org.
+  it.each([
+    ['paid', 'pro', 'past_due', 'insta billing portal --org org_123'],
+    ['ended', 'pro', 'canceled', 'insta billing upgrade pro --org org_123'],
+    ['free', 'free', null, 'insta billing upgrade pro --org org_123'],
+  ])('carries --org into the %s hint', (_label, tier, subscriptionStatus, expected) => {
+    const out = billingLines({ ...base, tier, subscriptionStatus, billingStatus: 'suspended' }, 'org_123').join('\n')
+    expect(out).toContain(expected)
+  })
+
+  // A cancelled subscription suspends the org and keeps its tier (platform#300), so "your
+  // subscription is current" is the one thing it is not — and there is no invoice to settle.
+  it('suspended after a cancellation: says the subscription ended, not that it is current', () => {
+    const out = billingLines({ ...base, billingStatus: 'suspended', subscriptionStatus: 'canceled' }).join('\n')
+    expect(out).toContain('the subscription ended; resubscribe')
+    expect(out).not.toContain('is current')
+    expect(out).not.toContain('did not go through')
   })
 
   it('suspended on free: still the wallet story, which a new cycle really does fix', () => {

@@ -43,13 +43,20 @@ export function billingLines(s: BillingOverview, org?: string): string[] {
     // then separates a lapse — where settling the invoice is the fix — from a suspension that
     // outlived its cause, which is what a recovery whose compute failed to restart looks like:
     // telling that customer to pay again would send them to re-settle a paid invoice.
+    // EVERY command in these hints carries the caller's --org. `billing` and the command being
+    // suggested resolve the target independently, so a hint that drops the flag acts on a different
+    // org than the one being read — and one of them opens a Stripe Checkout.
+    const flag = org ? ` --org ${org}` : ''
     const lapsed = s.subscriptionStatus === 'past_due' || s.subscriptionStatus === 'unpaid'
+    const ended = s.subscriptionStatus === 'canceled' || s.subscriptionStatus === 'incomplete_expired'
     lines.push(
       s.tier === 'free'
-        ? '⚠  org suspended — billing limit reached; resumes next cycle (or `insta billing upgrade pro`)'
+        ? `⚠  org suspended — billing limit reached; resumes next cycle (or \`insta billing upgrade pro${flag}\`)`
         : lapsed
-          ? `⚠  org suspended — subscription payment did not go through; settle it in \`insta billing portal${org ? ` --org ${org}` : ''}\``
-          : '⚠  org suspended — the subscription is current, so this needs a hand; contact support',
+          ? `⚠  org suspended — subscription payment did not go through; settle it in \`insta billing portal${flag}\``
+          : ended
+            ? `⚠  org suspended — the subscription ended; resubscribe with \`insta billing upgrade pro${flag}\``
+            : '⚠  org suspended — the subscription is current, so this needs a hand; contact support',
     )
   }
   if (s.byDimension?.length) {
