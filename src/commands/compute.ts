@@ -391,11 +391,27 @@ function operandsBefore(argv: string[], from: number, to: number): number {
   return operands
 }
 
+// Where does THIS process's `compute exec` command start? Only the command path counts — the
+// first two operands after the program name. `compute` and `exec` appearing any later are
+// payload, not our command: `insta run -- compute exec app echo` hands those words to a LOCAL
+// child process, and rewriting argv there would silently drop the child's last argument. argv[0]
+// and argv[1] are the node binary and this script, which is the same offset commander itself
+// assumes, so the two cannot disagree about where the command begins. Returns -1 for "not ours".
+function execCommandIndex(argv: string[]): number {
+  for (let cursor = 2; cursor < argv.length; cursor++) {
+    const token = argv[cursor]!
+    if (token === '--') return -1 // everything past a top-level `--` belongs to another command
+    if (token.startsWith('-')) continue // `insta` declares no value-taking global options
+    return token === 'compute' && argv[cursor + 1] === 'exec' ? cursor : -1
+  }
+  return -1
+}
+
 export function splitExecArgs(
   argv: string[],
   platform: NodeJS.Platform = process.platform,
 ): { argv: string[]; command?: string[]; windowsFallback?: boolean; windowsAmbiguous?: boolean } {
-  const i = argv.findIndex((a, idx) => a === 'compute' && argv[idx + 1] === 'exec')
+  const i = execCommandIndex(argv)
   if (i === -1) return { argv }
   const dash = argv.indexOf('--', i + 2)
   // The remote command may contain its own `--`, and the PowerShell shim strips only the FIRST

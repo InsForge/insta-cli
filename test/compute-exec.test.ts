@@ -127,6 +127,30 @@ describe('splitExecArgs', () => {
     })
   })
 
+  // `compute exec` is only OUR command when it is the command path. Later occurrences are payload
+  // for a different command, and rewriting argv there silently eats the other command's arguments.
+  it('ignores `compute exec` passed as data to another command', () => {
+    // `insta run -- compute exec app echo` runs a LOCAL child; those words are its argv, not ours.
+    const asPayload = ['node', 'insta', 'run', '--', 'compute', 'exec', 'app', 'echo']
+    expect(splitExecArgs(asPayload, 'win32')).toEqual({ argv: asPayload })
+    // Same on POSIX, where the payload carries its own `--`.
+    const withDash = ['node', 'insta', 'run', '--', 'compute', 'exec', 'app', '--', 'echo']
+    expect(splitExecArgs(withDash, 'linux')).toEqual({ argv: withDash })
+    // And with no top-level separator at all.
+    const noDash = ['node', 'insta', 'run', 'compute', 'exec', 'app', 'echo']
+    expect(splitExecArgs(noDash, 'win32')).toEqual({ argv: noDash })
+  })
+
+  it('still recognises the real command path', () => {
+    // argv[2] is where commander starts reading too, so the two cannot disagree.
+    const argv = ['node', 'insta', 'compute', 'exec', 'app', 'echo', 'hi']
+    expect(splitExecArgs(argv, 'win32')).toEqual({
+      argv: ['node', 'insta', 'compute', 'exec', 'app'],
+      command: ['echo', 'hi'],
+      windowsFallback: true,
+    })
+  })
+
   it('preserves a command token that itself looks like a flag', () => {
     const argv = ['node', 'insta', 'compute', 'exec', '--', '--help']
     expect(splitExecArgs(argv)).toEqual({ argv: ['node', 'insta', 'compute', 'exec'], command: ['--help'] })
