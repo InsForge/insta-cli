@@ -387,21 +387,23 @@ const BARE = new Set(EXEC_OPTIONS.filter(([f]) => !/[<[]/.test(f)).flatMap(([f])
 
 const isExecOption = (t: string) =>
   TAKES_VALUE.has(t) || BARE.has(t) || (t.includes('=') && TAKES_VALUE.has(t.slice(0, t.indexOf('='))))
+const isHelp = (t: string | undefined) => t === '--help' || t === '-h'
 
-// Separate `compute exec`'s OWN options (with their values) from everything else. Options may sit
-// on either side of the service name, so this is a partition, not a prefix. Everything that is not
-// an option is PAYLOAD — the optional service plus the remote command — and is never interpreted
-// further, so the remote command keeps its own flags (`ls -la`, `sh -c …`) untouched.
-function partitionExecArgs(argv: string[], from: number, to: number = argv.length) {
-  const options: string[] = []
-  const payload: string[] = []
+// Indices of the tokens after `compute exec` that are NOT this command's own options. Used twice,
+// for two different questions, which is why it returns positions rather than a partition:
+//   - how many operands sit ahead of a `--` (is that `--` where a real separator could be?)
+//   - where the payload starts once the separator is gone
+// Note what it is never used for: reaching INSIDE the payload. Past its first token the remote
+// command may have begun, and `--json` there is the command's own argument, not ours.
+function operandIndices(argv: string[], from: number, to: number = argv.length): number[] {
+  const out: number[] = []
   for (let cursor = from; cursor < to; cursor++) {
     const token = argv[cursor]!
-    if (!isExecOption(token)) { payload.push(token); continue }
-    options.push(token)
-    if (TAKES_VALUE.has(token) && cursor + 1 < to) options.push(argv[++cursor]!)
+    if (TAKES_VALUE.has(token)) { cursor++; continue }
+    if (isExecOption(token)) continue
+    out.push(cursor)
   }
-  return { options, payload }
+  return out
 }
 
 // Where does THIS process's `compute exec` command start? Only the command path counts: `compute`
@@ -434,18 +436,22 @@ export function splitExecArgs(
   if (dash !== -1) {
     // A separator that survived has at most ONE operand ahead of it — the optional service. Two or
     // more mean this `--` is the remote command's own: npm's PowerShell shim strips only the first,
-    // so the real separator is already gone and splitting here would drop a command token.
-    const ahead = partitionExecArgs(argv, i + 2, dash).payload.length
-    if (platform !== 'win32' || ahead <= 1) return { argv: argv.slice(0, dash), command: argv.slice(dash + 1) }
+    // so the real separator is already gone. Options are skipped wherever they sit, because with an
+    // intact `--` everything ahead of it belongs to the CLI.
+    if (platform !== 'win32' || operandIndices(argv, i + 2, dash).length <= 1) {
+      return { argv: argv.slice(0, dash), command: argv.slice(dash + 1) }
+    }
   }
   if (platform !== 'win32') return { argv }
-  const { options, payload } = partitionExecArgs(argv, i + 2)
-  // Nothing to recover, and `--help` is local: neither should cost the service-list round-trip the
-  // fallback needs. Help also wins over recovery — it is what this command's own usage error points
-  // at; the cost is that a remote command taking `--help` as an argument needs `insta.cmd` (or the
-  // `sh -c` form) on PowerShell.
-  if (payload.length === 0 || payload.some((t) => t === '--help' || t === '-h')) return { argv }
-  return { argv: [...argv.slice(0, i + 2), ...options], command: payload, windowsFallback: true }
+  // The separator is gone. Everything from the first operand is PAYLOAD — the optional service plus
+  // the remote command — and nothing inside it is touched, so the command keeps its own flags AND
+  // its own `--json`/`--branch`. Options can only be recognised AHEAD of it; one stranded behind
+  // the service is reported by resolveExecFallback rather than silently applied or dropped.
+  const start = operandIndices(argv, i + 2)[0]
+  if (start === undefined) return { argv } // nothing to recover; no service-list round-trip needed
+  const payload = argv.slice(start)
+  if (isHelp(payload[0])) return { argv } // `insta compute exec --help` — local, and never remote
+  return { argv: argv.slice(0, start), command: payload, windowsFallback: true }
 }
 
 // The separator is gone, so the payload arrives undivided and only the service list can split it:
@@ -461,19 +467,25 @@ export function resolveExecFallback(
   const [head, ...rest] = payload
   if (head === undefined) return { serviceName: undefined, command: [] }
   if (!services.some((service) => service.type === 'compute' && service.name === head)) {
-    note(`note: no \`--\` separator was found and \`${head}\` is not a compute service, so it was read as the command. If it was the service, check the name with \`insta services list\`.`)
+    note(`note: no \`--\` separator was found and \`${head}\` is not a compute service, so it was read as the command. If \`${head}\` was the service, check the name with \`insta services list\`.`)
     return { serviceName: undefined, command: payload }
   }
-  // `head` really is a service, so a flag right behind it cannot be the command — it is a CLI
-  // option that landed on the wrong side of a separator that is not there. Say so instead of
-  // waking a machine to run `--brnach` as a program. Only the observable fact is stated: cmd.exe
-  // and the released .exe reach this too, with no shim involved and no `insta.cmd` on disk.
+  // `head` really is a service, so whatever follows it cannot be the command's first token.
+  // A help flag there is a request for THIS command's help, which commander already answered for
+  // every other shape; say where to get it rather than exec `-h` on the machine.
+  if (isHelp(rest[0])) throw new Error(`\`${rest[0]}\` after a service name is not a command — run \`insta compute exec --help\` for this command's help, or \`--\` before a remote command`)
+  // A CLI option there landed on the wrong side of a separator that is not present. It cannot be
+  // honoured this late — --branch and --timeout are already spent by the time the service list
+  // arrives — so it is reported instead of being silently dropped or exec'd as a program.
   if (rest[0]?.startsWith('-')) {
     throw new Error(`no \`--\` separator was found before \`${rest[0]}\` — put CLI options ahead of [service], or add \`--\` before the command: insta compute exec ${head} -- <command> [args…]`)
   }
+  // The reading is a guess in both directions — a service named `echo` would swallow the
+  // executable — so state it. The escape hatch names insta.cmd: pasting a plain `--` back into the
+  // same PowerShell session would be eaten exactly as the first one was. The command itself is NOT
+  // echoed; remote argv can carry tokens and passwords, and the user already has it on screen.
   if (rest.length > 0) {
-    const quoted = payload.map((a) => (/[\s"^&|<>()]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a)).join(' ')
-    note(`note: no \`--\` separator was found; read \`${head}\` as the compute service. If it was the command, run: insta compute exec -- ${quoted}`)
+    note(`note: no \`--\` separator was found; read \`${head}\` as the compute service. If \`${head}\` was part of the command, re-run it through insta.cmd, which keeps \`--\`: insta.cmd compute exec -- <command>`)
   }
   return { serviceName: head, command: rest }
 }

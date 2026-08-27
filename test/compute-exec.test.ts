@@ -82,18 +82,40 @@ describe('splitExecArgs', () => {
     })
   })
 
-  it('lands on the same remote argv whether the shim kept the separator or ate it', () => {
+  // The contract that matters is end-to-end, so it is asserted end-to-end: splitExecArgs alone
+  // does NOT converge (the eaten path still carries `app`), resolveExecFallback is what strips it.
+  it('reaches the same remote argv whether the shim kept the separator or ate it', () => {
+    const services = [{ id: 'svc_1', type: 'compute', name: 'app' }]
     const remote = ['echo', '--', 'hi']
-    expect(splitExecArgs(A('app', '--', ...remote), 'win32').command).toEqual(remote) // insta.cmd
-    // insta.ps1 — the payload still carries `app`, which resolveExecFallback strips below.
-    expect(splitExecArgs(A('app', ...remote), 'win32').command).toEqual(['app', ...remote])
+    const settle = (tokens: string[]) => {
+      const split = splitExecArgs(A(...tokens), 'win32')
+      return split.windowsFallback ? resolveExecFallback(services, split.command ?? [], () => {}).command : split.command
+    }
+    expect(settle(['app', '--', ...remote])).toEqual(remote) // insta.cmd keeps `--`
+    expect(settle(['app', ...remote])).toEqual(remote) // insta.ps1 ate it
   })
 
-  // --help is local and must not need a network round-trip to print; it is also what this
-  // command's own usage error points at. It wins over recovery.
-  it('always lets --help reach commander', () => {
+  // Help is settled by the service list like every other flag — otherwise `insta compute exec --
+  // npm -h` prints the CLI's own help and exits 0 having run nothing. Only a help flag with NO
+  // operand ahead of it is unambiguously ours, and that one still short-circuits to commander.
+  it('sends a help flag to commander only when nothing precedes it', () => {
     for (const flag of ['--help', '-h']) {
-      expect(splitExecArgs(A('app', flag), 'win32')).toEqual({ argv: A('app', flag) })
+      expect(splitExecArgs(A(flag), 'win32')).toEqual({ argv: A(flag) })
+      expect(splitExecArgs(A('npm', flag), 'win32')).toEqual({
+        argv: A(), command: ['npm', flag], windowsFallback: true,
+      })
+    }
+  })
+
+  // Regression, caught by the windows-latest lane and then by review: the payload's INTERIOR must
+  // never be inspected. `insta compute exec app -- echo --json` arrives as `app echo --json`, and
+  // treating that `--json` as ours drops a remote argument and turns on local JSON output;
+  // `--branch`/`--timeout` would silently retarget the request.
+  it('leaves declared options alone once they are inside the command', () => {
+    for (const tail of [['--json'], ['--branch', 'x'], ['--timeout', '5']]) {
+      expect(splitExecArgs(A('app', 'echo', ...tail), 'win32')).toEqual({
+        argv: A(), command: ['app', 'echo', ...tail], windowsFallback: true,
+      })
     }
   })
 })
@@ -119,14 +141,25 @@ describe('resolveExecFallback', () => {
   it('states which reading it took, and how to force the other one', () => {
     resolveExecFallback([{ id: 's', type: 'compute', name: 'echo' }], ['echo', 'hello'], note)
     expect(notes.at(-1)).toMatch(/read `echo` as the compute service/)
-    expect(notes.at(-1)).toContain('insta compute exec -- echo hello')
+    // The escape hatch must survive the shim: a plain `--` pasted back into the same PowerShell
+    // session is eaten exactly as the first one was, so the remedy names insta.cmd.
+    expect(notes.at(-1)).toContain('insta.cmd')
 
     resolveExecFallback(services, ['db', 'psql'], note)
     expect(notes.at(-1)).toMatch(/`db` is not a compute service/)
 
-    // Quoted, so the suggested line reproduces this argv instead of a different one.
-    resolveExecFallback(services, ['app', 'sh', '-c', 'echo hi'], note)
-    expect(notes.at(-1)).toContain('insta compute exec -- app sh -c "echo hi"')
+    // The command itself is never echoed — remote argv can carry tokens and passwords.
+    resolveExecFallback(services, ['app', 'psql', 'postgres://u:hunter2@h/db'], note)
+    expect(notes.at(-1)).not.toContain('hunter2')
+  })
+
+  it('points a help flag behind the service at the CLI\'s own help', () => {
+    for (const flag of ['--help', '-h']) {
+      expect(() => resolveExecFallback(services, ['app', flag], note)).toThrow(/insta compute exec --help/)
+    }
+    // But a help flag belonging to the remote command runs, rather than silently printing help.
+    expect(resolveExecFallback(services, ['npm', '-h'], note))
+      .toEqual({ serviceName: undefined, command: ['npm', '-h'] })
   })
 
   it('says nothing when there was nothing to guess about', () => {
