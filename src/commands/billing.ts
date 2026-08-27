@@ -64,7 +64,10 @@ export function billingLines(s: BillingOverview, org?: string): string[] {
               // Their OWN tier, not a hardcoded one: suggesting `upgrade pro` to a Team org
               // resubscribes it onto the wrong plan.
               : `⚠  org suspended — the subscription ended; resubscribe with \`insta billing upgrade ${s.tier}${flag}\``
-            : '⚠  org suspended — the subscription is current, so this needs a hand; contact support',
+            // Deliberately claims nothing about the subscription: `incomplete` reaches here too,
+            // and that one is neither current nor failed. All this branch knows is that the
+            // suspension has no billing cause it can name.
+            : '⚠  org suspended — no failed payment on file; contact support',
     )
   }
   if (s.byDimension?.length) {

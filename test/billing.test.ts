@@ -101,6 +101,8 @@ describe('billingLines', () => {
     expect(out).toContain('contact support')
     expect(out).not.toContain('did not go through')
     expect(out).not.toContain('resumes next cycle')
+    // It must not assert the subscription is healthy: `incomplete` lands here too.
+    expect(out).not.toContain('is current')
   })
 
   it('empty breakdowns: no breakdown headers', () => {
