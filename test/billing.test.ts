@@ -43,8 +43,17 @@ describe('billingLines', () => {
     expect(out).not.toContain('subscription:')
   })
 
-  it('suspended: prints the warning', () => {
-    expect(billingLines({ ...base, billingStatus: 'suspended' }).join('\n')).toContain('org suspended')
+  // The advice is opposite per cause, so the wrong line is worse than none: waiting for the next
+  // cycle never settles an invoice, and there is no plan for a Team org to upgrade to.
+  it('suspended on a paid tier: names the payment, not the credit limit', () => {
+    const out = billingLines({ ...base, billingStatus: 'suspended' }).join('\n')
+    expect(out).toContain('subscription payment did not go through')
+    expect(out).not.toContain('resumes next cycle')
+  })
+
+  it('suspended on free: still the wallet story, which a new cycle really does fix', () => {
+    const out = billingLines({ ...base, tier: 'free', billingStatus: 'suspended' }).join('\n')
+    expect(out).toContain('billing limit reached; resumes next cycle')
   })
 
   it('empty breakdowns: no breakdown headers', () => {

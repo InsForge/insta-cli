@@ -33,7 +33,15 @@ export function billingLines(s: BillingOverview): string[] {
   ]
   if (s.subscriptionStatus) lines.push(`subscription: ${s.subscriptionStatus}`)
   if (s.billingStatus === 'suspended') {
-    lines.push('⚠  org suspended — billing limit reached; resumes next cycle (or `insta billing upgrade pro`)')
+    // Two causes, opposite advice. A free org spent its prepaid wallet: a new cycle grants a fresh
+    // one, so waiting works. A paid org's subscription lapsed, and no cycle rollover settles an
+    // invoice — telling that customer to wait, or to upgrade a plan they already have, is a dead
+    // end. The tier is what separates them (platform: suspendOrgCompute's two call paths).
+    lines.push(
+      s.tier === 'free'
+        ? '⚠  org suspended — billing limit reached; resumes next cycle (or `insta billing upgrade pro`)'
+        : '⚠  org suspended — subscription payment did not go through; settle it to restore service',
+    )
   }
   if (s.byDimension?.length) {
     lines.push('by dimension:')
