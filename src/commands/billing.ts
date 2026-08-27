@@ -33,14 +33,20 @@ export function billingLines(s: BillingOverview): string[] {
   ]
   if (s.subscriptionStatus) lines.push(`subscription: ${s.subscriptionStatus}`)
   if (s.billingStatus === 'suspended') {
-    // Two causes, opposite advice. A free org spent its prepaid wallet: a new cycle grants a fresh
-    // one, so waiting works. A paid org's subscription lapsed, and no cycle rollover settles an
-    // invoice — telling that customer to wait, or to upgrade a plan they already have, is a dead
-    // end. The tier is what separates them (platform: suspendOrgCompute's two call paths).
+    // Three states, and the advice for each is a dead end for the others. Tier first: only a free
+    // org can spend a prepaid wallet, and waiting for the next cycle genuinely fixes that one.
+    // (Tier, not subscriptionStatus, because rows written before non-payment suspended carry
+    // `unpaid` beside tier 'free' and survive with no migration.) Within a paid org, the status
+    // then separates a lapse — where settling the invoice is the fix — from a suspension that
+    // outlived its cause, which is what a recovery whose compute failed to restart looks like:
+    // telling that customer to pay again would send them to re-settle a paid invoice.
+    const lapsed = s.subscriptionStatus === 'past_due' || s.subscriptionStatus === 'unpaid'
     lines.push(
       s.tier === 'free'
         ? '⚠  org suspended — billing limit reached; resumes next cycle (or `insta billing upgrade pro`)'
-        : '⚠  org suspended — subscription payment did not go through; settle it to restore service',
+        : lapsed
+          ? '⚠  org suspended — subscription payment did not go through; settle it in `insta billing portal`'
+          : '⚠  org suspended — the subscription is current, so this needs a hand; contact support',
     )
   }
   if (s.byDimension?.length) {

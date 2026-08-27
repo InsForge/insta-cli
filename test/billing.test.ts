@@ -45,15 +45,25 @@ describe('billingLines', () => {
 
   // The advice is opposite per cause, so the wrong line is worse than none: waiting for the next
   // cycle never settles an invoice, and there is no plan for a Team org to upgrade to.
-  it('suspended on a paid tier: names the payment, not the credit limit', () => {
-    const out = billingLines({ ...base, billingStatus: 'suspended' }).join('\n')
+  it.each(['past_due', 'unpaid'])('suspended on a paid tier (%s): names the payment', (subscriptionStatus) => {
+    const out = billingLines({ ...base, billingStatus: 'suspended', subscriptionStatus }).join('\n')
     expect(out).toContain('subscription payment did not go through')
+    expect(out).toContain('insta billing portal')
     expect(out).not.toContain('resumes next cycle')
   })
 
   it('suspended on free: still the wallet story, which a new cycle really does fix', () => {
     const out = billingLines({ ...base, tier: 'free', billingStatus: 'suspended' }).join('\n')
     expect(out).toContain('billing limit reached; resumes next cycle')
+  })
+
+  // Suspended while the subscription reads healthy: a recovery whose compute failed to restart.
+  // Both other lines are wrong here — there is no invoice to settle and no cycle to wait for.
+  it('suspended with a current subscription: neither of the other two stories', () => {
+    const out = billingLines({ ...base, billingStatus: 'suspended', subscriptionStatus: 'active' }).join('\n')
+    expect(out).toContain('contact support')
+    expect(out).not.toContain('did not go through')
+    expect(out).not.toContain('resumes next cycle')
   })
 
   it('empty breakdowns: no breakdown headers', () => {
