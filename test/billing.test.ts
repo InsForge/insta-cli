@@ -64,6 +64,22 @@ describe('billingLines', () => {
     expect(out).toContain(expected)
   })
 
+  // The resubscribe hint has to name the org's OWN tier. `insta billing upgrade pro` on a Team org
+  // resubscribes it onto the wrong plan, and enterprise has no self-serve command at all.
+  it.each([
+    ['pro', 'insta billing upgrade pro'],
+    ['team', 'insta billing upgrade team'],
+  ])('suspended after a cancellation on %s: names that tier', (tier, expected) => {
+    const out = billingLines({ ...base, tier, billingStatus: 'suspended', subscriptionStatus: 'canceled' }).join('\n')
+    expect(out).toContain(expected)
+  })
+
+  it('suspended after a cancellation on enterprise: no self-serve command exists, so it says so', () => {
+    const out = billingLines({ ...base, tier: 'enterprise', billingStatus: 'suspended', subscriptionStatus: 'canceled' }).join('\n')
+    expect(out).toContain('contact support')
+    expect(out).not.toContain('insta billing upgrade')
+  })
+
   // A cancelled subscription suspends the org and keeps its tier (platform#300), so "your
   // subscription is current" is the one thing it is not — and there is no invoice to settle.
   it('suspended after a cancellation: says the subscription ended, not that it is current', () => {
