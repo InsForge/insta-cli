@@ -52,6 +52,13 @@ describe('billingLines', () => {
     expect(out).not.toContain('resumes next cycle')
   })
 
+  // The two commands resolve the org independently, so a hint that drops --org sends someone
+  // reading one org's overview to another org's portal.
+  it('carries --org into the portal hint when the caller targeted an org', () => {
+    const out = billingLines({ ...base, billingStatus: 'suspended', subscriptionStatus: 'past_due' }, 'org_123').join('\n')
+    expect(out).toContain('insta billing portal --org org_123')
+  })
+
   it('suspended on free: still the wallet story, which a new cycle really does fix', () => {
     const out = billingLines({ ...base, tier: 'free', billingStatus: 'suspended' }).join('\n')
     expect(out).toContain('billing limit reached; resumes next cycle')

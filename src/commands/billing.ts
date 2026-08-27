@@ -19,7 +19,10 @@ export type BillingOverview = {
 }
 
 // Format the billing overview into printable lines (pure, so it's unit-testable).
-export function billingLines(s: BillingOverview): string[] {
+// `org` is the caller's --org, echoed into the portal hint: `billing` and `billing portal` resolve
+// the target independently, so a hint that drops the flag sends someone reading org A's overview to
+// org B's portal.
+export function billingLines(s: BillingOverview, org?: string): string[] {
   const t = s.totals
   const lines = [
     `tier:      ${s.tier}`,
@@ -45,7 +48,7 @@ export function billingLines(s: BillingOverview): string[] {
       s.tier === 'free'
         ? '⚠  org suspended — billing limit reached; resumes next cycle (or `insta billing upgrade pro`)'
         : lapsed
-          ? '⚠  org suspended — subscription payment did not go through; settle it in `insta billing portal`'
+          ? `⚠  org suspended — subscription payment did not go through; settle it in \`insta billing portal${org ? ` --org ${org}` : ''}\``
           : '⚠  org suspended — the subscription is current, so this needs a hand; contact support',
     )
   }
@@ -66,7 +69,7 @@ export async function billing(opts: OrgOpt & { json?: boolean }): Promise<void> 
   const orgId = await resolveOrgId(opts)
   const s = await api.request<BillingOverview>('GET', `/orgs/${orgId}/billing/overview`)
   if (opts.json) return printJson(s)
-  for (const l of billingLines(s)) info(l)
+  for (const l of billingLines(s, opts.org)) info(l)
 }
 
 // insta billing upgrade <tier> — start a Stripe Checkout to subscribe the org to a paid tier.
