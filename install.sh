@@ -281,7 +281,7 @@ if [ "$ENV_NAME" = "staging" ] && [ "${ENV_APPLIED:-0}" = "1" ]; then
   echo
 fi
 echo "Next steps:"
-echo "  insta login --oauth github     # connect to the cloud (or run insta-oss locally to skip)"
+echo "  insta login                    # connect to the cloud (or run insta-oss locally to skip)"
 echo "  insta project create demo      # postgres + storage + compute, provisioned in one shot"
 # A directory deploy needs a Dockerfile in the directory (there is no local no-Dockerfile lane), so
 # the banner says so rather than recommending a command that errors for a Dockerfile-less app.

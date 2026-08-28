@@ -13,9 +13,9 @@ import { createInterface } from 'node:readline'
 import { ApiClient } from '../api.js'
 import { readPersistedGlobal, resolveEnv, type GlobalConfig } from '../config.js'
 import { DEFAULT_ENV, ENVS, ENV_NAMES, envForApiUrl, envFromEnvVar, isEnvName, mcpServerName, type EnvName } from '../env.js'
-import { info } from '../util.js'
+import { info, openUrl } from '../util.js'
 import { isRunnableFile, resolveSpawnable } from '../spawn.js'
-import { loginOauth } from './auth.js'
+import { loginDevice } from './auth.js'
 import { projectLink } from './project.js'
 import { envUse } from './env.js'
 import { installAgentConfigs } from './mcp.js'
@@ -379,7 +379,7 @@ export async function setupAgent(
   switchEnv: (name: string) => Promise<void> = (n) => envUse(n),
   loginFlow: LoginFlow = {
     ask: defaultAsk,
-    login: () => loginOauth('github', {}),
+    login: () => loginDevice({}, openUrl),
     stdinTty: canPromptViaTty(),
     stdoutTty: !!process.stdout.isTTY,
   },
@@ -430,14 +430,14 @@ export async function setupAgent(
   const stored = await readStored()
   let loggedIn = !!(stored.accessToken || stored.user)
   if (shouldOfferLogin(!!opts.yes, loggedIn, loginFlow.stdinTty, loginFlow.stdoutTty)) {
-    if (await loginFlow.ask('log in now with GitHub? (Y/n) ')) {
+    if (await loginFlow.ask('log in now in the browser? (Y/n) ')) {
       try {
         await loginFlow.login()
         loggedIn = true
         if (opts.mcpToken) claude = await registerMcp(run, mint, true, false)
       } catch (e) {
         info(`  login did not complete (${e instanceof Error ? e.message : String(e)}) — no problem, setup itself is done.`)
-        info('  on a remote/SSH machine the browser flow cannot call back here — use `insta login --device` instead.')
+        info('  run `insta login` to try again — the sign-in link it prints works from a browser on any device.')
       }
     }
   }

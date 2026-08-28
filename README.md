@@ -61,7 +61,7 @@ off with `insta autoupdate off`.
 ## Quickstart
 
 ```bash
-insta login --oauth github
+insta login
 insta project create my-app
 insta services add postgres db
 insta services add compute api
@@ -79,12 +79,18 @@ service; it needs a `Dockerfile`, but no local Docker.
 ## Authentication
 
 ```bash
+insta login                                  # sign in from the browser (any account type)
 insta login --email you@example.com          # password from $INSTA_PASSWORD or a prompt
 insta login --oauth github                   # or google, through the browser
-insta login --env staging --oauth github     # log in to a specific deployment
+insta login --env staging                    # log in to a specific deployment
 ```
 
 Tokens are stored in `~/.insta/config.json` and refresh automatically.
+
+Bare `insta login` opens the console's device-approval page in your browser: sign in there
+with whatever your account uses (email, GitHub, Google), check the code matches, and approve.
+On a machine that can't open a browser, `--device` prints the same link to open from any
+other device.
 
 `--oauth` starts a loopback listener on `127.0.0.1`, opens the browser at the control
 plane's `/auth/cli/authorize`, and receives the token back on that listener once the
@@ -189,7 +195,7 @@ build never reaches a production installer.
 
 | Command | What it covers |
 |---|---|
-| `insta login` · `logout` · `status` | Email/password or `--oauth github\|google`; `status` shows the environment, login and linked project/branch |
+| `insta login` · `logout` · `status` | Browser sign-in (default), `--email` + password, or `--oauth github\|google`; `status` shows the environment, login and linked project/branch |
 | `insta env` | `show` · `use <prod\|staging>` |
 | `insta setup` | `agent` — install the CLI (if missing), the skill, and MCP for every coding agent; targets prod, `--env staging` for staging |
 | `insta mcp` | `install` — register the remote MCP server only |

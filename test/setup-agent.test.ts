@@ -140,7 +140,7 @@ test('shouldOfferLogin: only an interactive human terminal with no session', () 
   expect(shouldOfferLogin(false, false, true, false)).toBe(false) // redirected stdout
 })
 
-test('setup agent flows into GitHub login by default on a TTY when not logged in', async () => {
+test('setup agent flows into browser login by default on a TTY when not logged in', async () => {
   const events: string[] = []
   await setupAgent(
     { yes: false }, // interactive
@@ -150,7 +150,7 @@ test('setup agent flows into GitHub login by default on a TTY when not logged in
     noSwitch,
     { ask: async (q) => { events.push(`ask:${q.trim()}`); return true }, login: async () => { events.push('login') }, stdinTty: true, stdoutTty: true },
   )
-  expect(events).toContain('ask:log in now with GitHub? (Y/n)')
+  expect(events).toContain('ask:log in now in the browser? (Y/n)')
   expect(events[events.length - 1]).toBe('login')
 })
 
