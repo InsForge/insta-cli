@@ -15,21 +15,24 @@ function targetApiUrl(opts: { apiUrl?: string; env?: string }): string | undefin
   return ENVS[want].api
 }
 
-export async function login(opts: { email?: string; password?: string; apiUrl?: string; env?: string; oauth?: string; device?: boolean; apiKey?: string }): Promise<void> {
+// `device` is injectable so the dispatch itself is testable (repo pattern: DI fakes, no mocks).
+export async function login(opts: { email?: string; password?: string; apiUrl?: string; env?: string; oauth?: string; device?: boolean; apiKey?: string }, device: typeof loginDevice = loginDevice): Promise<void> {
   // Login modes are exclusive — pick one. Check presence (not truthiness) so an explicit
   // empty --api-key= is rejected by validation rather than silently falling through.
   if (opts.apiKey !== undefined) {
     if (opts.device || opts.oauth || opts.email) die('choose one login mode: --api-key, --device, --oauth, or --email')
     return loginApiKey(opts.apiKey, opts)
   }
-  if (opts.device) return loginDevice(opts)
+  if (opts.device) return device(opts)
   if (opts.oauth) return loginOauth(opts.oauth, opts)
+  // An explicitly empty --email is a mistake, not a request for the bare browser flow.
+  if (opts.email === '') die('--email must not be empty')
   if (!opts.email) {
     // Bare `insta login` = sign in from the browser. The device grant is the one flow that covers
     // every account type (email, GitHub, Google): the console approval page owns the signin
     // round-trip, so the CLI just opens it here instead of only printing the link.
     if (opts.password !== undefined || process.env.INSTA_PASSWORD !== undefined) die('a password (--password / $INSTA_PASSWORD) is only used with --email <email>')
-    return loginDevice(opts, openUrl)
+    return device(opts, openUrl)
   }
   const api = await ApiClient.load()
   const target = targetApiUrl(opts)

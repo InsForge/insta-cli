@@ -125,7 +125,7 @@ export async function requireProject(): Promise<ProjectConfig> {
     })
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
-      die('not logged in — run `insta login --oauth github` (cloud) or point INSTA_API_URL at your insta-oss daemon')
+      die('not logged in — run `insta login` (cloud) or point INSTA_API_URL at your insta-oss daemon')
     }
     die(e instanceof Error ? e.message : String(e))
   }

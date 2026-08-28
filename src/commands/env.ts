@@ -71,7 +71,7 @@ export async function envUse(name: string, opts: { json?: boolean } = {}): Promi
   info(`switched ${from ?? '(custom)'} → ${target}`)
   info(`  api: ${nextApi}`)
   info(`  mcp: ${ENVS[target].mcp} (registers as \`${mcpServerName(target)}\`)`)
-  if (hadSession) info('  previous session dropped (separate deployment) — run `insta login --oauth github`')
+  if (hadSession) info('  previous session dropped (separate deployment) — run `insta login`')
   // Switching the CLI does NOT re-point already-installed agents: their MCP registration and skill
   // files were written for the previous environment and are keyed by a different server name, so
   // they keep talking to it until setup is re-run. --env is REQUIRED in the hint: since 0.0.38 a

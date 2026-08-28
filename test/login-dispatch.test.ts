@@ -1,0 +1,70 @@
+// `login()` picks the flow from the flags; the injectable device runner (repo pattern: DI fakes,
+// no global mocks) lets these tests pin the PUBLIC default — bare login = device grant + local
+// browser opener — and the guard branches, without touching config or network. die() prints the
+// reason to stderr and throws CliExit('exit 1'), so rejections assert 'exit 1' and the message
+// is read from a captured stderr where it matters.
+import { describe, expect, it } from 'vitest'
+import { login, loginDevice } from '../src/commands/auth.js'
+import { openUrl } from '../src/util.js'
+
+type DeviceRunner = typeof loginDevice
+
+function fakeDevice() {
+  const calls: Array<{ opts: unknown; open: unknown }> = []
+  const run: DeviceRunner = async (opts, open) => { calls.push({ opts, open }) }
+  return { run, calls }
+}
+
+const mustNotRun: DeviceRunner = async () => { throw new Error('flow must not start') }
+
+async function stderrOf(fn: () => Promise<unknown>): Promise<string> {
+  const lines: string[] = []
+  const write = process.stderr.write.bind(process.stderr)
+  process.stderr.write = ((s: string) => { lines.push(String(s)); return true }) as typeof process.stderr.write
+  try { await fn() } finally { process.stderr.write = write }
+  return lines.join('')
+}
+
+describe('login dispatch', () => {
+  it('bare login rides the device grant with the local browser opener', async () => {
+    const prev = process.env.INSTA_PASSWORD
+    delete process.env.INSTA_PASSWORD // an ambient CI password must not divert the bare flow
+    try {
+      const { run, calls } = fakeDevice()
+      await login({}, run)
+      expect(calls).toHaveLength(1)
+      expect(calls[0].open).toBe(openUrl)
+    } finally {
+      if (prev !== undefined) process.env.INSTA_PASSWORD = prev
+    }
+  })
+
+  it('--device is the same grant, print-only (no opener)', async () => {
+    const { run, calls } = fakeDevice()
+    await login({ device: true }, run)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].open).toBeUndefined()
+  })
+
+  it('a password without --email is rejected before any flow starts', async () => {
+    const err = await stderrOf(() => expect(login({ password: 'x' }, mustNotRun)).rejects.toThrow('exit 1'))
+    expect(err).toContain('only used with --email')
+  })
+
+  it('$INSTA_PASSWORD without --email is rejected too', async () => {
+    const prev = process.env.INSTA_PASSWORD
+    process.env.INSTA_PASSWORD = 'hunter2'
+    try {
+      const err = await stderrOf(() => expect(login({}, mustNotRun)).rejects.toThrow('exit 1'))
+      expect(err).toContain('only used with --email')
+    } finally {
+      if (prev === undefined) delete process.env.INSTA_PASSWORD
+      else process.env.INSTA_PASSWORD = prev
+    }
+  })
+
+  it('an explicitly empty --email is an error, not a bare browser login', async () => {
+    const err = await stderrOf(() => expect(login({ email: '' }, mustNotRun)).rejects.toThrow('exit 1'))
+    expect(err).toContain('--email must not be empty')
+  })
+})
