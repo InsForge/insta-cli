@@ -215,7 +215,7 @@ const {
 } = computeCmd.splitExecArgs(process.argv)
 
 // ---- compute (lifecycle control + custom domains) ----
-const compute = program.command('compute').description('Control compute lifecycle (start/stop/suspend/status) + custom domains')
+const compute = program.command('compute').description('Control compute lifecycle (start/stop/suspend/restart/status) + custom domains')
 compute.command('set-domain <host>').description('Attach a custom domain to a branch compute service (gated: deploy)')
   .option('--branch <b>').option('--group <g>').option('--json').action(guard((host, o) => computeCmd.setDomain(host, o)))
 compute.command('check-domain <host>').description("Show a custom domain's cert status + required DNS records")
@@ -228,6 +228,8 @@ compute.command('stop [service]').description('Take a compute service offline; t
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeStop(service, o)))
 compute.command('suspend [service]').description('Suspend a compute service (RAM snapshot); stays down until `start`')
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeSuspend(service, o)))
+compute.command('restart [service]').description("Restart a compute service by re-running the image it already runs against a freshly resolved env bundle — this is how a changed secret or binding reaches a running machine (env is baked into the machine at deploy time), and how a machine that is up but wedged gets cycled (`start` no-ops on one that is already started). No new image, no new spec. The service must be running: a stopped or suspended one comes back with `insta compute start`. All plans; ungated. A service whose app fails to answer on its port coming back up reports that failure, and the machines are rolled back to the config they were serving")
+  .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeRestart(service, o)))
 compute.command('status [service]').description("Show a compute service's desired vs. live state")
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeStatus(service, o)))
 compute.command('limits [service]').description("Show or set a compute service's resource ceiling (paid plans). --memory is the dial; cpu derives from it unless --cpu is given. Billing is actual usage — the ceiling caps what the app may burn, it is not a price")
