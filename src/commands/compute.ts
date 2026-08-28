@@ -331,11 +331,26 @@ export function renderRemoveDomain(body: any, json?: boolean, row?: ComputeRow):
   info(`removed custom domain ${body.hostname} from ${body.service ?? row?.name ?? body.flyApp}${region ? ` (${region})` : ''}`)
 }
 
-// ---- lifecycle (start/stop/suspend/status) ----
+// ---- lifecycle (start/stop/suspend/restart/status) ----
 
 type LifeOpts = { json?: boolean; branch?: string }
+type LifeVerb = 'start' | 'stop' | 'suspend' | 'restart'
+export type LifeBody = { service?: { name?: string; desired_state?: string; image?: string }; state?: string }
 
-async function lifecycle(verb: 'start' | 'stop' | 'suspend', serviceName: string | undefined, opts: LifeOpts): Promise<void> {
+// The line a lifecycle verb prints. restart gets its own wording: `running` is a PRECONDITION of a
+// restart (the platform refuses it in any other desired state), so echoing desired_state back says
+// nothing — what the operator needs is which image came back up and whether it is live. Pure,
+// exported for tests.
+export function lifecycleLine(verb: LifeVerb, fallbackName: string, body: LifeBody): string {
+  const name = body.service?.name ?? fallbackName
+  if (verb === 'restart') {
+    const image = body.service?.image ? ` on ${body.service.image}` : ''
+    return `restarted compute ${name}${image} — env re-resolved from the current secrets (live: ${body.state})`
+  }
+  return `compute ${name}: ${verb} → desired=${body.service?.desired_state} (live: ${body.state})`
+}
+
+async function lifecycle(verb: LifeVerb, serviceName: string | undefined, opts: LifeOpts): Promise<void> {
   const api = await ApiClient.load()
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
@@ -344,12 +359,13 @@ async function lifecycle(verb: 'start' | 'stop' | 'suspend', serviceName: string
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/${verb}`)
   if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson(res.body)
-  info(`compute ${res.body.service?.name ?? id}: ${verb} → desired=${res.body.service?.desired_state} (live: ${res.body.state})`)
+  info(lifecycleLine(verb, id, res.body))
 }
 
 export const computeStart = (service: string | undefined, opts: LifeOpts) => lifecycle('start', service, opts)
 export const computeStop = (service: string | undefined, opts: LifeOpts) => lifecycle('stop', service, opts)
 export const computeSuspend = (service: string | undefined, opts: LifeOpts) => lifecycle('suspend', service, opts)
+export const computeRestart = (service: string | undefined, opts: LifeOpts) => lifecycle('restart', service, opts)
 
 export async function computeStatus(serviceName: string | undefined, opts: LifeOpts): Promise<void> {
   const api = await ApiClient.load()
