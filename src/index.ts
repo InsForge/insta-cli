@@ -20,6 +20,7 @@ import { deploy } from './commands/deploy.js'
 import { build } from './commands/build.js'
 import * as computeCmd from './commands/compute.js'
 import * as dbCmd from './commands/db.js'
+import * as dbQueryCmd from './commands/db-query.js'
 import * as storageCmd from './commands/storage.js'
 import { manifest } from './commands/manifest.js'
 import * as template from './commands/template.js'
@@ -244,8 +245,8 @@ compute.command('volume [service]').description("Show, attach, grow, or delete a
   .option('--delete', 'destroy the volume and ALL its data (irreversible; download anything you need first)')
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeVolume(service, o)))
 
-// ---- db (postgres service controls) ----
-const db = program.command('db').description('Postgres service controls (url / connect / limits / volume / always-on / scale-to-zero)')
+// ---- db (postgres service controls + managed-DB query) ----
+const db = program.command('db').description('Postgres service controls (url / connect / limits / volume / always-on / scale-to-zero) + managed-DB query (mysql/redis/mongodb)')
 db.command('url').description('Print the postgres connection string (DSN) — bare on stdout for piping, e.g. `psql "$(insta db url)"` (gated: secrets.read). Provider credentials are not in `insta secrets` — this is the command that yields the DSN')
   .option('--json').option('--branch <branch>', 'branch (default: current)').option('--group <g>', 'postgres service name (default: the sole/default one)')
   .action(guard((o) => dbCmd.dbUrl(o)))
@@ -266,6 +267,11 @@ db.command('volume').description("Show or grow a postgres service's provisioned 
   .option('--size <gi>', 'new size in whole Gi, e.g. 10 (must be ≥ the current size)')
   .option('--json').option('--branch <branch>', 'branch (default: current)').option('--group <g>', 'postgres service name (default: the sole/default one)')
   .action(guard((o) => dbCmd.dbVolume(o)))
+db.command('query <service> [args...]').description('Run a query/command against a managed database (mysql/redis/mongodb) via the console exec API. mysql/mongodb take one quoted statement; redis takes a pre-tokenized argv (e.g. `GET mykey`). Not for postgres — use `insta db url|connect` / the SQL editor')
+  .option('--database <db>', 'mongodb only — the database to run against (default admin)')
+  .option('--branch <branch>', 'branch (default: current)')
+  .option('--json')
+  .action(guard((service, args, o) => dbQueryCmd.dbQuery(service, args, o)))
 
 // ---- storage (bucket objects) ----
 const storage = program.command('storage').description("Browse, download, and delete a storage service's bucket objects")
