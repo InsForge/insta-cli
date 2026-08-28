@@ -59,7 +59,7 @@ describe('deviceGrant', () => {
 
   it('stops with a retry hint when the server reports the code expired', async () => {
     const { post, wait } = fakeFlow(['expired_token'])
-    await expect(deviceGrant(post, wait)).rejects.toThrow(/expired before it was approved/)
+    await expect(deviceGrant(post, wait)).rejects.toThrow(/expired before it was approved — run `insta login --device` again/)
   })
 
   it('rethrows unexpected errors instead of polling forever', async () => {
@@ -137,5 +137,35 @@ describe('deviceGrant', () => {
     }
     expect(lines.join('')).toContain('https://console.test/device')
     expect(lines.join('')).not.toContain('undefined')
+  })
+
+  // Bare `insta login` rides this same grant with an injected opener: the browser is launched at
+  // the verification link, and the link is STILL printed — a launcher that fails to start reports
+  // it on spawn's async error event, so the opener's return value can't see the failure.
+  it('launches the opener at the verification link and still prints it', async () => {
+    const opened: string[] = []
+    const lines: string[] = []
+    const write = process.stdout.write.bind(process.stdout)
+    process.stdout.write = ((s: string) => { lines.push(String(s)); return true }) as typeof process.stdout.write
+    try {
+      const { post, wait } = fakeFlow(['token:sess-o'])
+      await expect(deviceGrant(post, wait, (url) => { opened.push(url); return true })).resolves.toBe('sess-o')
+    } finally {
+      process.stdout.write = write
+    }
+    expect(opened).toEqual(['https://console.test/device?user_code=ABCD1234'])
+    const out = lines.join('')
+    expect(out).toContain('if nothing opens')
+    expect(out).toContain('https://console.test/device?user_code=ABCD1234')
+    expect(out).toContain('check it shows this code: ABCD1234') // the phishing guard stays in both flows
+  })
+
+  // The retry hint must name the command that actually ran: bare login for the opener flow,
+  // --device for the print-only flow (pinned in the expired_token test above). Real-time wait:
+  // the deadline reads the real clock, so an instant fake would spin through the poll script.
+  it('drops --device from the expiry hint when the opener flow ran', async () => {
+    const { post } = fakeFlow(['authorization_pending', 'authorization_pending'], { ...START, expires_in: 0.001 })
+    const wait = () => new Promise<void>((r) => setTimeout(r, 2))
+    await expect(deviceGrant(post, wait, () => true)).rejects.toThrow(/run `insta login` again/)
   })
 })
