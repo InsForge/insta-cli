@@ -16,7 +16,7 @@ import { DEFAULT_ENV, ENVS, ENV_NAMES, envForApiUrl, envFromEnvVar, isEnvName, m
 import { info, openUrl } from '../util.js'
 import { isRunnableFile, resolveSpawnable } from '../spawn.js'
 import { loginDevice } from './auth.js'
-import { projectCreate, projectLink } from './project.js'
+import { projectCreate, projectLink, slugifyName } from './project.js'
 import { envUse } from './env.js'
 import { installAgentConfigs } from './mcp.js'
 import { detectChannel, type Channel } from './upgrade.js'
@@ -466,7 +466,9 @@ export async function setupAgent(
   // code instead of pretending setup succeeded.
   if (project.kind !== 'none') {
     const linking = project.kind === 'link'
-    const retry = linking ? `insta project link ${project.id}` : `insta project create${project.name ? ` ${project.name}` : ''}`
+    const retry = linking
+      ? `insta project link ${project.id}`
+      : `insta project create${project.name ? ` ${slugifyName(project.name)}` : ''}`
     if (!loggedIn) {
       info(`  not logged in — project not ${linking ? 'linked' : 'created'}; run \`insta login\`, then \`${retry}\``)
     } else {

@@ -374,12 +374,12 @@ test('--create provisions after login on a fresh interactive machine (login → 
 
 test('--create with no session skips the create with its own manual hint, exit 0', async () => {
   await expectLinkSkipped(
-    { yes: true, create: 'my-app' }, linkFlow({ ask: false }, []), [],
+    { yes: true, create: 'My App' }, linkFlow({ ask: false }, []), [],
     'project not created; run `insta login`, then `insta project create my-app`',
   )
 })
 
-test('--create failure (name taken / no quota) exits 1 and STOPS — no success summary after the error', async () => {
+test('--create failure (name taken / no quota) exits 1 with the retry hint', async () => {
   const prev = process.exitCode
   let out = ''
   const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c) => { out += String(c); return true })
