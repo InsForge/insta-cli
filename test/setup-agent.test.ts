@@ -379,7 +379,7 @@ test('--create with no session skips the create with its own manual hint, exit 0
   )
 })
 
-test('--create failure (name taken / no quota) exits 1 with the retry hint', async () => {
+test('--create failure (name taken / no quota) exits 1 and STOPS — no success summary after the error', async () => {
   const prev = process.exitCode
   let out = ''
   const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c) => { out += String(c); return true })
@@ -396,6 +396,9 @@ test('--create failure (name taken / no quota) exits 1 with the retry hint', asy
   } finally { spy.mockRestore() }
   expect(out).toContain('project create failed (name already in use) — agent setup itself is done; run `insta project create my-app` to retry the create')
   expect(process.exitCode).toBe(1)
+  // Guards the create arm specifically: splitting the shared block would leave the link test green.
+  expect(out).not.toContain('ready to use InstaCloud')
+  expect(out).not.toContain('next:')
   process.exitCode = prev
 })
 
