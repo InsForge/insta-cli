@@ -16,7 +16,7 @@ import { DEFAULT_ENV, ENVS, ENV_NAMES, envForApiUrl, envFromEnvVar, isEnvName, m
 import { info, openUrl } from '../util.js'
 import { isRunnableFile, resolveSpawnable } from '../spawn.js'
 import { loginDevice } from './auth.js'
-import { projectLink } from './project.js'
+import { projectCreate, projectLink, slugifyName } from './project.js'
 import { envUse } from './env.js'
 import { installAgentConfigs } from './mcp.js'
 import { detectChannel, type Channel } from './upgrade.js'
@@ -305,6 +305,19 @@ export function planSetupEnv(
   return { target, switch: persisted !== target }
 }
 
+type ProjectStep = { kind: 'none' } | { kind: 'link'; id: string } | { kind: 'create'; name?: string }
+
+/** The project step. Only a contradictory flag pair throws: rejecting a nameless `--create` here
+ *  would abort the whole setup, and `projectCreate` already guides that case. */
+export function planProject(opts: { project?: string; create?: string | boolean }): ProjectStep {
+  if (opts.create !== undefined && opts.project !== undefined) {
+    throw new Error('--create and --project are mutually exclusive — create a new project, or link an existing one')
+  }
+  if (opts.project) return { kind: 'link', id: opts.project }
+  if (opts.create === undefined) return { kind: 'none' }
+  return { kind: 'create', name: typeof opts.create === 'string' ? opts.create : undefined }
+}
+
 /** Whether setup should flow straight into login: an interactive human terminal with no session.
  *  Pure. Non-TTY (agents, CI, pipes) and -y runs never prompt — a browser OAuth flow cannot work
  *  there anyway; they get the printed `next:` hint instead, and prompt.md walks agents through
@@ -370,7 +383,7 @@ export type LoginFlow = {
 }
 
 export async function setupAgent(
-  opts: { yes?: boolean; mcpToken?: boolean; env?: string; project?: string },
+  opts: { yes?: boolean; mcpToken?: boolean; env?: string; project?: string; create?: string | boolean },
   run: Runner = defaultRunner,
   mint?: TokenMinter,
   installConfigs: (agent?: string) => Promise<string[]> = installAgentConfigs,
@@ -384,10 +397,13 @@ export async function setupAgent(
     stdoutTty: !!process.stdout.isTTY,
   },
   link: (id: string) => Promise<void> = projectLink,
+  create: (name?: string) => Promise<void> = (n) => projectCreate(n, {}),
 ): Promise<void> {
   if (!opts.yes && !process.stdout.isTTY) {
     info('non-interactive shell — assuming -y')
   }
+  // Reject an impossible --project/--create request here, while the machine is still untouched.
+  const project = planProject(opts)
   // Pin the environment BEFORE anything is installed (see planSetupEnv). A required switch goes
   // through `env use` — the one path that persists the choice and drops the now-foreign session —
   // and announces itself, so the machine can never end up with its CLI on one deployment and its
@@ -441,24 +457,29 @@ export async function setupAgent(
       }
     }
   }
-  // --project: link this directory inside the SAME process. The console's connect panel used to
-  // print `setup agent && insta project link <id>` as one paste — but no shell joiner survives
-  // every Windows shell, and in shells without bracketed paste the queued link line is eaten as
-  // the answer to the login prompt above (console PR #290). Carrying the id as a flag is the one
-  // form where "one line" is safe. Linking needs the session: without one the manual command is
-  // the hint, never a hang; a failed link (bad id, no access) is a REAL error — the link is the
-  // entire point of the flag — so it sets the exit code instead of pretending setup succeeded.
-  if (opts.project) {
+  // --project / --create: bind this directory to a project inside the SAME process. Never split
+  // this back into `setup agent && insta project <cmd>` as one paste: no shell joiner survives
+  // every Windows shell, and in shells without bracketed paste the queued second line is eaten
+  // as the answer to the login prompt above (console PR #290). Both need the session: without
+  // one the manual command is the hint, never a hang; a failure (bad id, no access, name taken)
+  // is a REAL error — binding a project is the entire point of the flag — so it sets the exit
+  // code instead of pretending setup succeeded.
+  if (project.kind !== 'none') {
+    const linking = project.kind === 'link'
+    const retry = linking
+      ? `insta project link ${project.id}`
+      : `insta project create${project.name ? ` ${slugifyName(project.name)}` : ''}`
     if (!loggedIn) {
-      info(`  not logged in — project not linked; run \`insta login\`, then \`insta project link ${opts.project}\``)
+      info(`  not logged in — project not ${linking ? 'linked' : 'created'}; run \`insta login\`, then \`${retry}\``)
     } else {
       try {
-        await link(opts.project)
+        if (project.kind === 'link') await link(project.id)
+        else await create(project.name)
       } catch (e) {
         // Stop here — like the skill-install failure above, finishing with the success summary
         // and a cheerful `next:` after an error is mixed messaging. Setup itself did succeed,
         // so say exactly that alongside the retry command.
-        info(`  project link failed (${e instanceof Error ? e.message : String(e)}) — agent setup itself is done; run \`insta project link ${opts.project}\` to retry the link`)
+        info(`  project ${linking ? 'link' : 'create'} failed (${e instanceof Error ? e.message : String(e)}) — agent setup itself is done; run \`${retry}\` to retry the ${linking ? 'link' : 'create'}`)
         process.exitCode = 1
         return
       }
