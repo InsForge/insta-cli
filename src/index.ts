@@ -93,6 +93,7 @@ setupCmd.command('agent').description('Install the insta CLI (if missing), the i
   .option('--env <prod|staging>', 'deployment to set this machine up for (default: prod — switches and persists, like `insta env use`)')
   .option('--mcp-token', 'register the MCP server with a minted insta_ API token instead of OAuth (headless machines / CI)')
   .option('--project <id>', 'also link this directory to an existing project after setup (flows through login first if needed)')
+  .option('--create [name]', 'also create a new project and link this directory after setup (default name: this directory; mutually exclusive with --project)')
   .action(guard((o) => setup.setupAgent(o)))
 
 // ---- MCP server integration ----

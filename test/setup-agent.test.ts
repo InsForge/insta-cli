@@ -2,7 +2,7 @@ import { test, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, openSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { makePromptSource, planSetupEnv, setupAgent, shouldOfferLogin, registerMcp, SETUP_ARGS, MCP_SERVER_NAME, DEFAULT_MCP_URL } from '../src/commands/setup.js'
+import { makePromptSource, planProject, planSetupEnv, setupAgent, shouldOfferLogin, registerMcp, SETUP_ARGS, MCP_SERVER_NAME, DEFAULT_MCP_URL } from '../src/commands/setup.js'
 import { ENVS } from '../src/env.js'
 
 // Setup resolves its API environment, MCP URL, and skill source from INSTA_ENV, INSTA_API_URL,
@@ -275,6 +275,7 @@ const expectLinkSkipped = async (
   opts: Parameters<typeof setupAgent>[0],
   flow: ReturnType<typeof linkFlow>,
   expectedEvents: string[],
+  hint = 'run `insta login`, then `insta project link proj_123`',
 ) => {
   const prev = process.exitCode
   let out = ''
@@ -288,10 +289,11 @@ const expectLinkSkipped = async (
       async () => ({ apiUrl: ENVS.prod.api }), noSwitch, // no session
       { ...flow, ask: async () => { events.push('ask'); return false } },
       async (id) => { events.push(`link:${id}`) },
+      async (name) => { events.push(`create:${name}`) },
     )
   } finally { spy.mockRestore() }
-  expect(events).toEqual(expectedEvents) // never a link
-  expect(out).toContain('run `insta login`, then `insta project link proj_123`')
+  expect(events).toEqual(expectedEvents) // never a link, never a create
+  expect(out).toContain(hint)
   expect(process.exitCode).toBe(prev)
 }
 
@@ -330,6 +332,70 @@ test('--project link failure (bad id / no access) exits 1 and STOPS — no succe
   // Mixed messaging guard: after an error, no cheerful summary or next-step line follows.
   expect(out).not.toContain('ready to use InstaCloud')
   expect(out).not.toContain('next:')
+  process.exitCode = prev
+})
+
+// ---- --create: the same one-liner, for a project that does not exist yet ----
+
+test('planProject: only a contradictory flag pair is rejected — a nameless --create is projectCreate\'s call', () => {
+  expect(planProject({ create: true })).toEqual({ kind: 'create', name: undefined })
+  expect(planProject({ create: 'my-app' })).toEqual({ kind: 'create', name: 'my-app' })
+  expect(planProject({ project: 'proj_1' })).toEqual({ kind: 'link', id: 'proj_1' })
+  expect(planProject({})).toEqual({ kind: 'none' })
+  expect(() => planProject({ create: true, project: 'proj_1' })).toThrow(/mutually exclusive/)
+})
+
+test('setupAgent rejects --create + --project before touching anything', async () => {
+  const order: string[] = []
+  await expect(callSetup(
+    { yes: true, create: true, project: 'proj_1' },
+    async (_cmd, args) => { order.push(`run:${args[0]}`); return { ok: true, output: '' } },
+    async () => { order.push('ensure') },
+    { readStored: async () => ({ apiUrl: ENVS.staging.api }), switchEnv: async (n) => { order.push(`switch:${n}`) } },
+  )).rejects.toThrow(/mutually exclusive/)
+  // A staging-persisted machine would be switched (dropping its session) and the CLI installed
+  // before the first `run` — the reject has to precede all three, not just the skill install.
+  expect(order).toEqual([])
+})
+
+test('--create provisions after login on a fresh interactive machine (login → create, same process)', async () => {
+  const events: string[] = []
+  await setupAgent(
+    { yes: false, create: 'my-app' },
+    async () => ({ ok: true, output: '' }),
+    undefined, async () => [], async () => {},
+    async () => ({ apiUrl: ENVS.prod.api }), noSwitch, // no session
+    linkFlow({ ask: true }, events),
+    async (id) => { events.push(`link:${id}`) },
+    async (name) => { events.push(`create:${name}`) },
+  )
+  expect(events).toEqual(['ask', 'login', 'create:my-app'])
+})
+
+test('--create with no session skips the create with its own manual hint, exit 0', async () => {
+  await expectLinkSkipped(
+    { yes: true, create: 'my-app' }, linkFlow({ ask: false }, []), [],
+    'project not created; run `insta login`, then `insta project create my-app`',
+  )
+})
+
+test('--create failure (name taken / no quota) exits 1 and STOPS — no success summary after the error', async () => {
+  const prev = process.exitCode
+  let out = ''
+  const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c) => { out += String(c); return true })
+  try {
+    await setupAgent(
+      { yes: true, create: 'my-app' },
+      async () => ({ ok: true, output: '' }),
+      undefined, async () => [], async () => {},
+      async () => ({ apiUrl: ENVS.prod.api, user: { id: 'u', email: 't@e.com', name: 'T' } }), noSwitch,
+      linkFlow({ ask: true }, []),
+      async () => { throw new Error('should not link') },
+      async () => { throw new Error('name already in use') },
+    )
+  } finally { spy.mockRestore() }
+  expect(out).toContain('project create failed (name already in use) — agent setup itself is done; run `insta project create my-app` to retry the create')
+  expect(process.exitCode).toBe(1)
   process.exitCode = prev
 })
 
