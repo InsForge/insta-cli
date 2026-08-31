@@ -35,7 +35,7 @@ test('every service type is reachable from some kind', () => {
 
 // The dashboard's Add Service lists Docker Image beside Empty Service, not under it.
 test('Docker Image is its own kind, at the same level as Empty Service', () => {
-  expect(SERVICE_KINDS.map((k) => k.label)).toEqual(['Docker Image', 'Postgres', 'Redis', 'MySQL', 'MongoDB', 'Storage', 'Empty Service'])
+  expect(SERVICE_KINDS.map((k) => k.label)).toEqual(['Docker Image', 'Empty Service', 'Postgres', 'Redis', 'MySQL', 'MongoDB', 'Object Storage'])
   expect(kind('image').needsImage).toBe(true)
   expect(kind('image').type).toBe('compute')
   expect(kind('compute').needsImage).toBeUndefined()
