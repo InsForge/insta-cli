@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { Command } from 'commander'
 import { ApiError } from './api.js'
-import { CliExit, fail, relayedExitCode } from './util.js'
+import { CliCancel, CliExit, fail, relayedExitCode } from './util.js'
 import { trackCommand } from './telemetry.js'
 import * as auth from './commands/auth.js'
 import * as envCmd_ from './commands/env.js'
@@ -33,7 +33,7 @@ import * as selfUpdate from './commands/upgrade.js'
 import * as feedbackCmd from './commands/feedback.js'
 
 function onError(e: unknown): void {
-  if (e instanceof CliExit) return
+  if (e instanceof CliExit || e instanceof CliCancel) return
   if (e instanceof ApiError) return fail(`${e.message} (HTTP ${e.status})`)
   fail(e instanceof Error ? e.message : String(e))
 }
@@ -47,6 +47,8 @@ const guard = (fn: (...a: any[]) => Promise<unknown>) => async (...a: any[]): Pr
   await trackCommand(a[a.length - 1] as Command, a.slice(0, -2), {
     error, durationMs: Date.now() - started, exitCode: Number(process.exitCode ?? 0), childExitCode: relayedExitCode(),
   }, resolveVersion())
+  // The prompt sites exited here before; a cancelled prompt may leave stdin flowing.
+  if (error instanceof CliCancel) process.exit(0)
 }
 
 const program = new Command()

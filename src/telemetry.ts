@@ -6,9 +6,8 @@ import type { Command } from 'commander'
 import { ApiError } from './api.js'
 import { readGlobal, readProject, type GlobalConfig, type ProjectConfig } from './config.js'
 import { envForApiUrl, type EnvName } from './env.js'
-import { clean } from './redact.js'
 import { detectChannel } from './commands/upgrade.js'
-import { CliExit, lastFailure } from './util.js'
+import { CliCancel, CliExit } from './util.js'
 
 export const POSTHOG_HOST = 'https://us.i.posthog.com'
 // The console's project keys (insta-frontend src/lib/analytics.ts), so a CLI event lands on the
@@ -19,15 +18,25 @@ const PROJECT_KEYS: Record<EnvName, string> = {
 }
 // The send is awaited before the process exits, so it gets one bounded attempt and no retry.
 const SEND_TIMEOUT_MS = 1500
-const MAX_STRING = 200
 const REDACTED = '[REDACTED]'
 
-// Option values that are credentials, identity, free text, or object-key space: dropped wholesale, never pattern-scrubbed.
-const REDACTED_OPTIONS = new Set(['password', 'apiKey', 'email', 'title', 'detail', 'error', 'expected', 'workaround', 'doc', 'command', 'area', 'prefix', 'cursor'])
+// Only ids, enums and numbers leave the machine. Positionals are kept by (command → index); every
+// other string is the user's (names, keys, paths, secret values, free text) and is dropped.
+const SAFE_ARGS: Record<string, number[]> = {
+  'env use': [0], 'project link': [0], run: [0],
+  'branch create': [0], 'branch switch': [0], 'branch delete': [0], 'branch merge': [0],
+  'services add': [0], 'services remove': [0], 'services rename': [0], 'services set-access': [0, 2],
+  'services scale': [0, 2, 3], 'services upgrade': [0, 2], 'services secrets': [0],
+  'compute always-on': [0], 'db always-on': [0], metrics: [0], logs: [0],
+  'template info': [0], 'billing upgrade': [0], 'approvals approve': [0], 'approvals deny': [0],
+  'policy set': [0, 1], autoupdate: [0],
+}
+const SAFE_OPTIONS = new Set([
+  'branch', 'into', 'org', 'project', 'region', 'env', 'oauth', 'agent', 'type', 'component', 'severity',
+  'status', 'limit', 'step', 'since', 'port', 'memory', 'cpu', 'size', 'volume',
+])
 // `--set NAME=value`: the name is structure, the value is the user's.
 const ASSIGNMENT_OPTIONS = new Set(['set'])
-// Positionals from this index on are user payload, not command structure.
-const PAYLOAD_ARGS_FROM: Record<string, number> = { 'secrets set': 1, run: 1, 'db query': 1, 'storage get': 0, 'storage delete': 0 }
 
 export function telemetryDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return !!(env.DO_NOT_TRACK || env.INSTA_NO_TELEMETRY)
@@ -40,21 +49,20 @@ export function telemetryKey(apiUrl: string): string | undefined {
   return name ? PROJECT_KEYS[name] : undefined
 }
 
-const scrub = (v: unknown): unknown => (typeof v === 'string' ? clean(v, MAX_STRING) : v)
-
 export function redactOptions(opts: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(opts)) {
-    if (REDACTED_OPTIONS.has(k)) out[k] = REDACTED
+    if (typeof v === 'boolean' || typeof v === 'number') out[k] = v
     else if (ASSIGNMENT_OPTIONS.has(k)) out[k] = (v as string[]).map((a) => `${a.split('=')[0]}=${REDACTED}`)
-    else out[k] = scrub(v)
+    else if (SAFE_OPTIONS.has(k) && typeof v === 'string') out[k] = v
+    else out[k] = REDACTED
   }
   return out
 }
 
 export function redactArgs(command: string, args: unknown[]): unknown[] {
-  const from = PAYLOAD_ARGS_FROM[command]
-  return args.map((a, i) => (from !== undefined && i >= from ? REDACTED : scrub(a)))
+  const keep = SAFE_ARGS[command] ?? []
+  return args.map((a, i) => (a === undefined ? null : keep.includes(i) ? a : REDACTED))
 }
 
 /** `secrets set`, `services add`, … — the subcommand chain without the program name. */
@@ -90,15 +98,11 @@ export type CommandEvent = {
 }
 
 function errorProps(error: unknown): Record<string, unknown> {
-  if (error === undefined) return {}
-  if (error instanceof ApiError) return { error_type: 'api', http_status: error.status, error_message: scrub(error.message) }
-  if (error instanceof CliExit) return { error_type: 'cli', error_message: scrub(lastFailure()) }
-  const e = error as { name?: string; message?: string; cause?: { code?: string } }
-  return {
-    error_type: e?.name ?? 'unknown',
-    error_message: scrub(String(e?.message ?? error)),
-    ...(e?.cause?.code ? { error_code: e.cause.code } : {}),
-  }
+  if (error === undefined || error instanceof CliCancel) return {}
+  if (error instanceof ApiError) return { error_type: 'api', http_status: error.status }
+  if (error instanceof CliExit) return { error_type: 'cli' }
+  const e = error as { name?: string; cause?: { code?: string } }
+  return { error_type: e?.name ?? 'unknown', ...(e?.cause?.code ? { error_code: e.cause.code } : {}) }
 }
 
 function hostOf(url: string): string | null {
@@ -113,6 +117,8 @@ export function buildCommandEvent(
   ctx: EventContext,
 ): CommandEvent {
   const token = ctx.config.accessToken
+  const cancelled = outcome.error instanceof CliCancel
+  const ranChild = outcome.childExitCode !== undefined && outcome.error === undefined
   return {
     event: 'cli_command',
     distinct_id: ctx.config.user?.id ?? ctx.anonymousId,
@@ -121,7 +127,8 @@ export function buildCommandEvent(
       command,
       args: redactArgs(command, args),
       options: redactOptions(options),
-      success: outcome.exitCode === 0 || (outcome.childExitCode !== undefined && outcome.error === undefined),
+      success: !cancelled && (outcome.exitCode === 0 || ranChild),
+      cancelled,
       exit_code: outcome.exitCode,
       child_exit_code: outcome.childExitCode ?? null,
       duration_ms: outcome.durationMs,

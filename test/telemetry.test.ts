@@ -1,5 +1,5 @@
-// Usage analytics: routing by environment, the opt-out switches, and — above all — that nothing
-// sensitive (secret values, credentials, emails, free text) leaves the machine in an event.
+// Usage analytics: routing by environment, the opt-out switches, and — above all — that only ids,
+// enums and numbers leave the machine in an event.
 import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,7 +11,7 @@ import {
   anonymousId, buildCommandEvent, commandPath, detectAgent, redactArgs, redactOptions,
   sendBatch, telemetryDisabled, telemetryKey, trackCommand, POSTHOG_HOST,
 } from '../src/telemetry.js'
-import { die } from '../src/util.js'
+import { CliCancel, die } from '../src/util.js'
 
 const PROD = 'https://api.instacloud.com'
 const STAGING = 'https://api.staging.instacloud.com'
@@ -68,42 +68,38 @@ describe('opt-out and routing', () => {
 })
 
 describe('redaction', () => {
-  it('drops credential, identity and free-text options wholesale', () => {
-    const out = redactOptions({ password: 'hunter2', apiKey: 'insta_abc', email: 'a@b.c', detail: 'my db is down', command: 'insta secrets set K v', area: 'x', branch: 'main', json: true })
-    expect(out).toEqual({ password: '[REDACTED]', apiKey: '[REDACTED]', email: '[REDACTED]', detail: '[REDACTED]', command: '[REDACTED]', area: '[REDACTED]', branch: 'main', json: true })
-  })
-
-  it('treats storage object-key space as payload: list prefixes and page cursors', () => {
-    expect(redactOptions({ prefix: 'customers/acme/contracts/', cursor: 'Y3VzdG9tZXJz', limit: '100' }))
-      .toEqual({ prefix: '[REDACTED]', cursor: '[REDACTED]', limit: '100' })
+  it('keeps flags, numbers and allowlisted ids/enums; drops every other option value', () => {
+    const out = redactOptions({
+      json: true, create: true, limit: '100', branch: 'main', org: 'org_1', region: 'us-east', type: 'bug',
+      password: 'hunter2', apiKey: 'insta_abc', email: 'a@b.c', detail: 'my db is down', command: 'insta secrets set K v',
+      image: 'ghcr.io/acme/app:1', output: '/Users/jane/f.pdf', group: 'api', prefix: 'customers/', to: 'compute/api',
+    })
+    expect(out).toEqual({
+      json: true, create: true, limit: '100', branch: 'main', org: 'org_1', region: 'us-east', type: 'bug',
+      password: '[REDACTED]', apiKey: '[REDACTED]', email: '[REDACTED]', detail: '[REDACTED]', command: '[REDACTED]',
+      image: '[REDACTED]', output: '[REDACTED]', group: '[REDACTED]', prefix: '[REDACTED]', to: '[REDACTED]',
+    })
   })
 
   it('keeps --set variable names but not their values', () => {
     expect(redactOptions({ set: ['DB_URL=postgres://u:p@h/db', 'MODE=prod'] })).toEqual({ set: ['DB_URL=[REDACTED]', 'MODE=[REDACTED]'] })
   })
 
-  it('pattern-scrubs and truncates everything else', () => {
-    const out = redactOptions({ output: '/Users/jane/app/.env', image: 'ghcr.io/x/y:1', note: 'mail jane@example.com', long: 'x'.repeat(500) })
-    expect(out.output).toBe('~/app/.env')
-    expect(out.image).toBe('ghcr.io/x/y:1')
-    expect(out.note).toBe('mail [REDACTED_EMAIL]')
-    expect((out.long as string).length).toBeLessThan(260)
-    expect(out.long).toContain('chars truncated')
-  })
-
-  it('treats payload positionals as opaque: secret values, run/query argv', () => {
-    expect(redactArgs('secrets set', ['DB_PASSWORD', 's3cret'])).toEqual(['DB_PASSWORD', '[REDACTED]'])
+  it('keeps positionals only where the command declares an id or enum', () => {
+    expect(redactArgs('services add', ['postgres', 'main'])).toEqual(['postgres', '[REDACTED]'])
+    expect(redactArgs('services scale', ['compute', 'api', '3', 'us-east'])).toEqual(['compute', '[REDACTED]', '3', 'us-east'])
+    expect(redactArgs('policy set', ['deploy', 'approve'])).toEqual(['deploy', 'approve'])
     expect(redactArgs('run', ['npm', 'run', 'dev'])).toEqual(['npm', '[REDACTED]', '[REDACTED]'])
-    expect(redactArgs('db query', ['shop', 'select * from users'])).toEqual(['shop', '[REDACTED]'])
-    expect(redactArgs('storage get', ['uploads/jane/1.pdf'])).toEqual(['[REDACTED]'])
-    expect(redactArgs('storage delete', ['uploads/jane/1.pdf'])).toEqual(['[REDACTED]'])
-    expect(redactArgs('services add', ['postgres', 'main'])).toEqual(['postgres', 'main'])
-    expect(redactArgs('org create', ['jane@example.com inc'])).toEqual(['[REDACTED_EMAIL] inc'])
+    expect(redactArgs('secrets set', ['DB_PASSWORD', 's3cret'])).toEqual(['[REDACTED]', '[REDACTED]'])
+    expect(redactArgs('org create', ['Acme Inc'])).toEqual(['[REDACTED]'])
+    expect(redactArgs('storage get', ['customers/acme/tax.pdf'])).toEqual(['[REDACTED]'])
+    expect(redactArgs('deploy', ['./app'])).toEqual(['[REDACTED]'])
+    expect(redactArgs('project create', [undefined])).toEqual([null])
   })
 })
 
 describe('buildCommandEvent', () => {
-  it('identifies by user id when signed in, else by the anonymous id; never carries the email', () => {
+  it('identifies by user id when signed in, else personless by the anonymous id; never carries the email', () => {
     const a = buildCommandEvent('org list', [], {}, { durationMs: 5, exitCode: 0 }, ctx(loggedIn))
     const b = buildCommandEvent('org list', [], {}, { durationMs: 5, exitCode: 0 }, ctx(anon))
     expect(a.distinct_id).toBe('user_1')
@@ -114,19 +110,12 @@ describe('buildCommandEvent', () => {
     expect(a.properties).not.toHaveProperty('$process_person_profile')
   })
 
-  it('reports a relayed child status apart from the CLI outcome', () => {
-    const run = buildCommandEvent('run', ['npm', 'test'], {}, { durationMs: 1, exitCode: 1, childExitCode: 1 }, ctx(loggedIn))
-    expect(run.properties).toMatchObject({ success: true, exit_code: 1, child_exit_code: 1 })
-    const plain = buildCommandEvent('org list', [], {}, { durationMs: 1, exitCode: 1 }, ctx(loggedIn))
-    expect(plain.properties).toMatchObject({ success: false, child_exit_code: null })
-  })
-
   it('records outcome, auth kind, environment and linked project', () => {
-    const e = buildCommandEvent('deploy', ['.'], { json: true }, { durationMs: 900, exitCode: 2 },
+    const e = buildCommandEvent('deploy', ['./app'], { json: true }, { durationMs: 900, exitCode: 2 },
       ctx(loggedIn, { project: { projectId: 'p1', orgId: 'o1', branch: 'feat' }, env: { CI: 'true', CLAUDECODE: '1' } }))
     expect(e.event).toBe('cli_command')
     expect(e.properties).toMatchObject({
-      command: 'deploy', args: ['.'], options: { json: true }, success: false, exit_code: 2,
+      command: 'deploy', args: ['[REDACTED]'], options: { json: true }, success: false, cancelled: false, exit_code: 2,
       duration_ms: 900, env: 'prod', api_host: 'api.instacloud.com', logged_in: true, auth_kind: 'api_key',
       project_id: 'p1', org_id: 'o1', branch: 'feat', ci: true, agent: 'claude-code', cli_version: '1.2.3', channel: 'npm',
     })
@@ -135,28 +124,40 @@ describe('buildCommandEvent', () => {
     expect(buildCommandEvent('status', [], {}, { durationMs: 1, exitCode: 0 }, ctx(anon)).properties.auth_kind).toBeNull()
   })
 
-  it('classifies failures: API status, CLI die() text, unexpected exceptions', () => {
+  it('reports a relayed child status apart from the CLI outcome', () => {
+    const run = buildCommandEvent('run', ['npm', 'test'], {}, { durationMs: 1, exitCode: 1, childExitCode: 1 }, ctx(loggedIn))
+    expect(run.properties).toMatchObject({ success: true, exit_code: 1, child_exit_code: 1 })
+    const plain = buildCommandEvent('org list', [], {}, { durationMs: 1, exitCode: 1 }, ctx(loggedIn))
+    expect(plain.properties).toMatchObject({ success: false, child_exit_code: null })
+  })
+
+  it('classifies failures by kind only — never the message', () => {
     const silent = buildCommandEvent('build', ['.'], {}, { durationMs: 1, exitCode: 1 }, ctx(anon))
     expect(silent.properties).toMatchObject({ success: false, exit_code: 1 })
     expect(silent.properties).not.toHaveProperty('error_type')
 
     const api = buildCommandEvent('org list', [], {}, { durationMs: 1, exitCode: 1, error: new ApiError(403, 'forbidden for jane@example.com') }, ctx(loggedIn))
-    expect(api.properties).toMatchObject({ error_type: 'api', http_status: 403, error_message: 'forbidden for [REDACTED_EMAIL]' })
+    expect(api.properties).toMatchObject({ error_type: 'api', http_status: 403 })
+    expect(JSON.stringify(api)).not.toContain('forbidden')
 
     const stderr = process.stderr.write
     process.stderr.write = (() => true) as any
     let exit: unknown
-    try { die('not logged in for jane@example.com') } catch (e) { exit = e } finally { process.stderr.write = stderr; process.exitCode = 0 }
-    const cli = buildCommandEvent('org list', [], {}, { durationMs: 1, exitCode: 1, error: exit }, ctx(anon))
-    expect(cli.properties).toMatchObject({ error_type: 'cli', error_message: 'not logged in for [REDACTED_EMAIL]' })
-
-    const boom = buildCommandEvent('org list', [], {}, { durationMs: 1, exitCode: 1, error: new TypeError('x is not a function') }, ctx(anon))
-    expect(boom.properties).toMatchObject({ error_type: 'TypeError', error_message: 'x is not a function' })
-    expect(boom.properties).not.toHaveProperty('error_code')
+    try { die('storage get customers/acme/: no filename') } catch (e) { exit = e } finally { process.stderr.write = stderr; process.exitCode = 0 }
+    const cli = buildCommandEvent('storage get', ['customers/acme/'], {}, { durationMs: 1, exitCode: 1, error: exit }, ctx(anon))
+    expect(cli.properties).toMatchObject({ error_type: 'cli', args: ['[REDACTED]'] })
+    expect(JSON.stringify(cli)).not.toContain('customers/acme')
 
     const net = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } })
     const offline = buildCommandEvent('org list', [], {}, { durationMs: 1, exitCode: 1, error: net }, ctx(anon))
     expect(offline.properties).toMatchObject({ error_type: 'TypeError', error_code: 'ECONNREFUSED' })
+    expect(offline.properties).not.toHaveProperty('error_message')
+  })
+
+  it('reports a cancelled prompt as neither success nor error', () => {
+    const e = buildCommandEvent('feedback', [], {}, { durationMs: 1, exitCode: 0, error: new CliCancel() }, ctx(anon))
+    expect(e.properties).toMatchObject({ success: false, cancelled: true, exit_code: 0 })
+    expect(e.properties).not.toHaveProperty('error_type')
   })
 })
 
@@ -202,7 +203,7 @@ describe('trackCommand', () => {
     expect(ev.event).toBe('cli_command')
     expect(ev.distinct_id).toBe('user_1')
     expect(ev.properties.command).toBe('secrets set')
-    expect(ev.properties.args).toEqual(['DB_PASSWORD', '[REDACTED]'])
+    expect(ev.properties.args).toEqual(['[REDACTED]', '[REDACTED]'])
     expect(JSON.stringify(d.calls[0]!.body)).not.toContain('s3cret')
   })
 
