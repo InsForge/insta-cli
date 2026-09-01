@@ -70,7 +70,7 @@ export function detectAgent(env: NodeJS.ProcessEnv = process.env): string | null
   return null
 }
 
-export type Outcome = { error?: unknown; durationMs: number; exitCode: number }
+export type Outcome = { error?: unknown; durationMs: number; exitCode: number; childExitCode?: number }
 
 export type EventContext = {
   cliVersion: string
@@ -121,8 +121,9 @@ export function buildCommandEvent(
       command,
       args: redactArgs(command, args),
       options: redactOptions(options),
-      success: outcome.exitCode === 0,
+      success: outcome.exitCode === 0 || (outcome.childExitCode !== undefined && outcome.error === undefined),
       exit_code: outcome.exitCode,
+      child_exit_code: outcome.childExitCode ?? null,
       duration_ms: outcome.durationMs,
       ...errorProps(outcome.error),
       cli_version: ctx.cliVersion,
@@ -144,6 +145,7 @@ export function buildCommandEvent(
       term_program: ctx.env.TERM_PROGRAM ?? null,
       $lib: 'insta-cli',
       $lib_version: ctx.cliVersion,
+      ...(ctx.config.user?.id ? {} : { $process_person_profile: false }),
     },
   }
 }

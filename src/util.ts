@@ -65,6 +65,16 @@ let lastFailureMessage: string | undefined
 /** The most recent fail() message. */
 export function lastFailure(): string | undefined { return lastFailureMessage }
 
+let relayedCode: number | undefined
+
+/** A child's exit status the CLI passes through as its own (run, db connect, compute exec). */
+export function relayExitCode(code: number): void {
+  relayedCode = code
+  process.exitCode = code
+}
+
+export function relayedExitCode(): number | undefined { return relayedCode }
+
 export function fail(msg: string): void {
   lastFailureMessage = msg
   process.stderr.write(`error: ${msg}\n`)

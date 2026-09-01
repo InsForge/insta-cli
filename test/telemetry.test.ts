@@ -110,6 +110,15 @@ describe('buildCommandEvent', () => {
     expect(b.distinct_id).toBe('anon-1')
     expect(JSON.stringify(a)).not.toContain('a@b.c')
     expect(JSON.stringify(a)).not.toContain(loggedIn.accessToken)
+    expect(b.properties.$process_person_profile).toBe(false)
+    expect(a.properties).not.toHaveProperty('$process_person_profile')
+  })
+
+  it('reports a relayed child status apart from the CLI outcome', () => {
+    const run = buildCommandEvent('run', ['npm', 'test'], {}, { durationMs: 1, exitCode: 1, childExitCode: 1 }, ctx(loggedIn))
+    expect(run.properties).toMatchObject({ success: true, exit_code: 1, child_exit_code: 1 })
+    const plain = buildCommandEvent('org list', [], {}, { durationMs: 1, exitCode: 1 }, ctx(loggedIn))
+    expect(plain.properties).toMatchObject({ success: false, child_exit_code: null })
   })
 
   it('records outcome, auth kind, environment and linked project', () => {

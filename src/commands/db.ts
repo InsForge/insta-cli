@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { constants as osConstants } from 'node:os'
 import { ApiClient, ApiError, requireProject } from '../api.js'
-import { info, printJson, handleApproval } from '../util.js'
+import { info, printJson, handleApproval, relayExitCode } from '../util.js'
 import { parseVolumeGib, q, resolveSoleService } from './services.js'
 
 type Opts = { branch?: string; group?: string; json?: boolean }
@@ -328,5 +328,5 @@ export async function dbConnect(opts: Opts): Promise<void> {
   if (!r) return
   // stderr: stdout belongs to psql (the `insta run` rule).
   process.stderr.write(`psql → postgres/${r.serviceName}${branch ? ` (branch ${branch})` : ''} — a suspended instance wakes on connect, so the first prompt can take a few seconds\n`)
-  process.exitCode = await connectWithPsql(r.url)
+  relayExitCode(await connectWithPsql(r.url))
 }

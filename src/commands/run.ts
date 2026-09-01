@@ -4,7 +4,7 @@
 // as the process does.
 import { spawn } from 'node:child_process'
 import { ApiClient, requireProject } from '../api.js'
-import { CliExit, die, handleApproval } from '../util.js'
+import { CliExit, die, handleApproval, relayExitCode } from '../util.js'
 
 export type RunDeps = {
   fetchBundle: () => Promise<Record<string, string>>
@@ -42,5 +42,5 @@ export async function run(cmdAndArgs: string[], opts: { branch?: string }): Prom
       return res.body.secrets as Record<string, string>
     },
   })
-  process.exitCode = code
+  relayExitCode(code)
 }

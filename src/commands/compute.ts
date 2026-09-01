@@ -1,5 +1,5 @@
 import { ApiClient, ApiError, requireProject } from '../api.js'
-import { info, printJson, handleApproval } from '../util.js'
+import { info, printJson, handleApproval, relayExitCode } from '../util.js'
 import { resolveComputeServiceId, q, parseVolumeGib } from './services.js'
 
 type Opts = { branch?: string; group?: string; json?: boolean }
@@ -551,7 +551,7 @@ export function applyExecResult(res: { status: number; body: any }, json?: boole
     process.stderr.write(`note: remote exit code ${exitCode} out of range — exiting 1\n`)
     process.exitCode = 1
   } else {
-    process.exitCode = exitCode
+    relayExitCode(exitCode)
   }
 }
 
