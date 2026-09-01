@@ -22,8 +22,8 @@ const SEND_TIMEOUT_MS = 1500
 const MAX_STRING = 200
 const REDACTED = '[REDACTED]'
 
-// Option values that are credentials, identity, or free text: dropped wholesale, never pattern-scrubbed.
-const REDACTED_OPTIONS = new Set(['password', 'apiKey', 'email', 'title', 'detail', 'error', 'expected', 'workaround', 'doc', 'command', 'area'])
+// Option values that are credentials, identity, free text, or object-key space: dropped wholesale, never pattern-scrubbed.
+const REDACTED_OPTIONS = new Set(['password', 'apiKey', 'email', 'title', 'detail', 'error', 'expected', 'workaround', 'doc', 'command', 'area', 'prefix', 'cursor'])
 // `--set NAME=value`: the name is structure, the value is the user's.
 const ASSIGNMENT_OPTIONS = new Set(['set'])
 // Positionals from this index on are user payload, not command structure.

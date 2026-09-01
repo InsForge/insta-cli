@@ -73,6 +73,11 @@ describe('redaction', () => {
     expect(out).toEqual({ password: '[REDACTED]', apiKey: '[REDACTED]', email: '[REDACTED]', detail: '[REDACTED]', command: '[REDACTED]', area: '[REDACTED]', branch: 'main', json: true })
   })
 
+  it('treats storage object-key space as payload: list prefixes and page cursors', () => {
+    expect(redactOptions({ prefix: 'customers/acme/contracts/', cursor: 'Y3VzdG9tZXJz', limit: '100' }))
+      .toEqual({ prefix: '[REDACTED]', cursor: '[REDACTED]', limit: '100' })
+  })
+
   it('keeps --set variable names but not their values', () => {
     expect(redactOptions({ set: ['DB_URL=postgres://u:p@h/db', 'MODE=prod'] })).toEqual({ set: ['DB_URL=[REDACTED]', 'MODE=[REDACTED]'] })
   })
