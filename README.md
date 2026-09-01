@@ -233,6 +233,7 @@ build never reaches a production installer.
 | `INSTA_PROJECT_ID` · `INSTA_ORG_ID` · `INSTA_BRANCH` | Target a project, org or branch without linking |
 | `INSTA_PASSWORD` | Password for non-interactive login |
 | `INSTA_NO_AUTOUPDATE` | Disable self-update |
+| `INSTA_NO_TELEMETRY` · `DO_NOT_TRACK` | Disable usage analytics. Each command sends one event (command, flags, outcome, version, OS) to the same PostHog project as the console; secret values, credentials and emails are redacted locally, and custom API hosts report nothing |
 
 ## Agent skills
 

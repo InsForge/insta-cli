@@ -60,7 +60,13 @@ export class CliExit extends Error {
   }
 }
 
+let lastFailureMessage: string | undefined
+
+/** The most recent fail() message. */
+export function lastFailure(): string | undefined { return lastFailureMessage }
+
 export function fail(msg: string): void {
+  lastFailureMessage = msg
   process.stderr.write(`error: ${msg}\n`)
   process.exitCode = 1
 }

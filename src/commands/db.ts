@@ -328,5 +328,5 @@ export async function dbConnect(opts: Opts): Promise<void> {
   if (!r) return
   // stderr: stdout belongs to psql (the `insta run` rule).
   process.stderr.write(`psql → postgres/${r.serviceName}${branch ? ` (branch ${branch})` : ''} — a suspended instance wakes on connect, so the first prompt can take a few seconds\n`)
-  process.exit(await connectWithPsql(r.url))
+  process.exitCode = await connectWithPsql(r.url)
 }
