@@ -235,6 +235,16 @@ describe('templateInfoLines', () => {
       optional: [{ name: 'SMTP_HOST', required: false, description: 'SMTP relay', default: 'localhost' }],
     },
   }
+  // The rendering layer, not just the normalizer: a manifest names no size, so the summary has to
+  // keep SAYING there is a disk. Reading the size out of `volume.size` alone would silently drop
+  // that half of the line the moment the catalog is republished.
+  it('says a boolean-volume service has a disk, and still prints a size when the registry has one', () => {
+    const boolTpl = { ...tpl, services: [{ name: 'agent', type: 'web', port: 7681, volume: true }] }
+    expect(templateInfoLines(boolTpl)).toContain('services (1): agent (web, port 7681, persistent /data)')
+    const sizedTpl = { ...tpl, services: [{ name: 'agent', type: 'web', port: 7681, volumeGib: 10 }] }
+    expect(templateInfoLines(sizedTpl)).toContain('services (1): agent (web, port 7681, 10Gi volume)')
+  })
+
   it('renders header fields, a services summary, and grouped variables', () => {
     const lines = templateInfoLines(tpl)
     expect(lines[0]).toBe('plausible — Plausible')
