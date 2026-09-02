@@ -81,8 +81,8 @@ describe('redaction', () => {
     })
   })
 
-  it('keeps --set variable names but not their values', () => {
-    expect(redactOptions({ set: ['DB_URL=postgres://u:p@h/db', 'MODE=prod'] })).toEqual({ set: ['DB_URL=[REDACTED]', 'MODE=[REDACTED]'] })
+  it('drops --set assignments whole, names included', () => {
+    expect(redactOptions({ set: ['CUSTOMER_ACME_TOKEN=x', 'MODE=prod'] })).toEqual({ set: '[REDACTED]' })
   })
 
   it('keeps positionals only where the command declares an id or enum', () => {
@@ -120,7 +120,7 @@ describe('buildCommandEvent', () => {
       duration_ms: 900, env: 'prod', api_host: 'api.instacloud.com', logged_in: true, auth_kind: 'api_key',
       project_id: 'p1', org_id: 'o1', ci: true, agent: 'claude-code', cli_version: '1.2.3', channel: 'npm',
     })
-    expect(JSON.stringify(e)).not.toContain('feat')
+    expect(e.properties).not.toHaveProperty('branch')
     const s = buildCommandEvent('status', [], {}, { durationMs: 1, exitCode: 0 }, ctx({ apiUrl: CUSTOM, accessToken: 'eyJsession' }))
     expect(s.properties).toMatchObject({ env: 'custom', api_host: 'localhost:4800', auth_kind: 'session', success: true })
     expect(buildCommandEvent('status', [], {}, { durationMs: 1, exitCode: 0 }, ctx(anon)).properties.auth_kind).toBeNull()

@@ -34,8 +34,6 @@ const SAFE_OPTIONS = new Set([
   'org', 'project', 'region', 'env', 'oauth', 'agent', 'type', 'component', 'severity',
   'status', 'limit', 'step', 'since', 'port', 'memory', 'cpu', 'size', 'volume',
 ])
-// `--set NAME=value`: the name is structure, the value is the user's.
-const ASSIGNMENT_OPTIONS = new Set(['set'])
 
 export function telemetryDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return !!(env.DO_NOT_TRACK || env.INSTA_NO_TELEMETRY)
@@ -52,7 +50,6 @@ export function redactOptions(opts: Record<string, unknown>): Record<string, unk
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(opts)) {
     if (typeof v === 'boolean' || typeof v === 'number') out[k] = v
-    else if (ASSIGNMENT_OPTIONS.has(k)) out[k] = (v as string[]).map((a) => `${a.split('=')[0]}=${REDACTED}`)
     else if (SAFE_OPTIONS.has(k) && typeof v === 'string') out[k] = v
     else out[k] = REDACTED
   }
