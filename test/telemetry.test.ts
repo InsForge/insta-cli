@@ -81,6 +81,17 @@ describe('redaction', () => {
     })
   })
 
+  it('drops allowlisted values that do not have the declared shape', () => {
+    expect(redactOptions({ port: 'yesterday', limit: '100', region: 'New York', org: 'acme', project: 'proj_1', env: 'stagng', memory: '512mb' }))
+      .toEqual({ port: '[REDACTED]', limit: '100', region: '[REDACTED]', org: '[REDACTED]', project: 'proj_1', env: '[REDACTED]', memory: '512mb' })
+    expect(redactArgs('services add', ['lambda', 'x'])).toEqual(['[REDACTED]', '[REDACTED]'])
+    expect(redactArgs('env use', ['stagng'])).toEqual(['[REDACTED]'])
+    expect(redactArgs('approvals approve', ['appr_1'])).toEqual(['appr_1'])
+    expect(redactArgs('approvals approve', ['please'])).toEqual(['[REDACTED]'])
+    expect(redactArgs('metrics', ['db'])).toEqual(['db'])
+    expect(redactArgs('metrics', ['prod-db'])).toEqual(['[REDACTED]'])
+  })
+
   it('drops --set assignments whole, names included', () => {
     expect(redactOptions({ set: ['CUSTOMER_ACME_TOKEN=x', 'MODE=prod'] })).toEqual({ set: '[REDACTED]' })
   })

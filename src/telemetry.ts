@@ -5,7 +5,9 @@ import { dirname, join } from 'node:path'
 import type { Command } from 'commander'
 import { ApiError } from './api.js'
 import { readGlobal, readProject, type GlobalConfig, type ProjectConfig } from './config.js'
-import { ENVS, envForApiUrl, isEnvName, normalizeUrl, type EnvName } from './env.js'
+import { ENVS, ENV_NAMES, envForApiUrl, isEnvName, normalizeUrl, type EnvName } from './env.js'
+import { COMPONENTS, SEVERITIES, TYPES } from './commands/feedback.js'
+import { SERVICE_TYPES } from './commands/services.js'
 import { detectChannel } from './commands/upgrade.js'
 import { CliCancel, CliExit } from './util.js'
 
@@ -20,20 +22,36 @@ const PROJECT_KEYS: Record<EnvName, string> = {
 const SEND_TIMEOUT_MS = 1500
 const REDACTED = '[REDACTED]'
 
-// Only ids, enums and numbers leave the machine. Positionals are kept by (command → index); every
-// other string is the user's (names, branches, keys, paths, secret values, free text) and is dropped.
-const SAFE_ARGS: Record<string, number[]> = {
-  'env use': [0], 'project link': [0],
-  'services add': [0], 'services remove': [0], 'services rename': [0], 'services set-access': [0, 2],
-  'services scale': [0, 2, 3], 'services upgrade': [0, 2], 'services secrets': [0],
-  'compute always-on': [0], 'db always-on': [0], metrics: [0], logs: [0],
-  'template info': [0], 'billing upgrade': [0], 'approvals approve': [0], 'approvals deny': [0],
-  'policy set': [0, 1], autoupdate: [0],
+// Only ids, enums and numbers leave the machine, and only when the value has that shape; every other
+// string is the user's (names, branches, keys, paths, secret values, free text) and is dropped.
+type Check = (v: string) => boolean
+const oneOf = (values: readonly string[]): Check => (v) => values.includes(v)
+const ID: Check = (v) => /^(?:[0-9a-f]{8}-[0-9a-f-]{27}|[a-z]+_[\w-]{1,64}|(?=.*\d)[\w-]{1,64})$/i.test(v)
+const SLUG: Check = (v) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(v)
+const NUMBER: Check = (v) => /^\d+(?:\.\d+)?[a-z]{0,3}$/i.test(v)
+const REGION: Check = (v) => /^[a-z]{2,3}(?:-[a-z0-9]+)+$/.test(v)
+const SERVICE = oneOf(SERVICE_TYPES)
+const ON_OFF = oneOf(['on', 'off'])
+const TARGET = oneOf(['db', 'compute', 'redis', 'mysql', 'mongodb'])
+const POLICY_ACTION: Check = (v) => /^(?:secrets|deploy|project|branch|service|storage)(?:\.[a-zA-Z]+)?$/.test(v)
+
+const SAFE_ARGS: Record<string, Record<number, Check>> = {
+  'env use': { 0: oneOf(ENV_NAMES) }, 'project link': { 0: ID },
+  'services add': { 0: SERVICE }, 'services remove': { 0: SERVICE }, 'services rename': { 0: SERVICE }, 'services secrets': { 0: SERVICE },
+  'services set-access': { 0: SERVICE, 2: oneOf(['public', 'private']) },
+  'services scale': { 0: SERVICE, 2: NUMBER, 3: REGION }, 'services upgrade': { 0: SERVICE, 2: SLUG },
+  'compute always-on': { 0: ON_OFF }, 'db always-on': { 0: ON_OFF }, metrics: { 0: TARGET }, logs: { 0: TARGET },
+  'template info': { 0: SLUG }, 'billing upgrade': { 0: oneOf(['pro', 'team']) },
+  'approvals approve': { 0: ID }, 'approvals deny': { 0: ID },
+  'policy set': { 0: POLICY_ACTION, 1: oneOf(['allow', 'deny', 'approve']) }, autoupdate: { 0: ON_OFF },
 }
-const SAFE_OPTIONS = new Set([
-  'org', 'project', 'region', 'env', 'oauth', 'agent', 'type', 'component', 'severity',
-  'status', 'limit', 'step', 'since', 'port', 'memory', 'cpu', 'size', 'volume',
-])
+const SAFE_OPTIONS: Record<string, Check> = {
+  org: ID, project: ID, region: REGION, env: oneOf(ENV_NAMES), oauth: oneOf(['github', 'google']),
+  agent: oneOf(['claude-code', 'cursor', 'codex', 'opencode', 'copilot', 'factory-droid']),
+  type: oneOf(TYPES), component: oneOf(COMPONENTS), severity: oneOf(SEVERITIES),
+  status: oneOf(['pending', 'granted', 'denied', 'consumed']),
+  limit: NUMBER, step: NUMBER, since: NUMBER, port: NUMBER, memory: NUMBER, cpu: NUMBER, size: NUMBER, volume: NUMBER,
+}
 
 export function telemetryDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return !!(env.DO_NOT_TRACK || env.INSTA_NO_TELEMETRY)
@@ -50,15 +68,15 @@ export function redactOptions(opts: Record<string, unknown>): Record<string, unk
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(opts)) {
     if (typeof v === 'boolean' || typeof v === 'number') out[k] = v
-    else if (SAFE_OPTIONS.has(k) && typeof v === 'string') out[k] = v
+    else if (typeof v === 'string' && SAFE_OPTIONS[k]?.(v)) out[k] = v
     else out[k] = REDACTED
   }
   return out
 }
 
 export function redactArgs(command: string, args: unknown[]): unknown[] {
-  const keep = SAFE_ARGS[command] ?? []
-  return args.map((a, i) => (a === undefined ? null : keep.includes(i) ? a : REDACTED))
+  const checks = SAFE_ARGS[command] ?? {}
+  return args.map((a, i) => (a === undefined ? null : typeof a === 'string' && checks[i]?.(a) ? a : REDACTED))
 }
 
 /** The deployment a `login --env|--api-url` targets. It is persisted only when the login succeeds, so
