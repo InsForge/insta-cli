@@ -205,12 +205,12 @@ describe('collectManifestVariables', () => {
 describe('templateListLines', () => {
   it('renders an aligned table with numeric columns right-aligned', () => {
     const lines = templateListLines([
-      { code: 'plausible', version: '2.1.1', name: 'Plausible', tagline: 'web analytics', category: 'analytics', requiredVarCount: 1, deployCount: 120 },
-      { code: 'n8n', version: '1.64.0', name: 'n8n', category: 'automation', requiredVarCount: 0, deployCount: 7 },
+      { code: 'plausible', version: '2.1.1', name: 'Plausible', tagline: 'web analytics', category: 'analytics', totalProjects: 120, successRate: 79 },
+      { code: 'n8n', version: '1.64.0', name: 'n8n', category: 'automation', totalProjects: 7, successRate: null },
     ])
-    expect(lines[0]).toMatch(/^CODE\s+VERSION\s+CATEGORY\s+VARS\s+DEPLOYS\s+NAME$/)
-    expect(lines[1]).toBe('plausible  2.1.1    analytics      1      120  Plausible — web analytics')
-    expect(lines[2]).toBe('n8n        1.64.0   automation     0        7  n8n')
+    expect(lines[0]).toMatch(/^CODE\s+VERSION\s+CATEGORY\s+PROJECTS\s+SUCCESS\s+NAME$/)
+    expect(lines[1]).toBe('plausible  2.1.1    analytics        120      79%  Plausible — web analytics')
+    expect(lines[2]).toBe('n8n        1.64.0   automation         7        -  n8n')
   })
   it('says so when the registry is empty', () => {
     expect(templateListLines([])).toEqual(['(no templates published yet)'])
@@ -324,10 +324,10 @@ describe('resolveVariables', () => {
 })
 
 describe('missingVariablesFrom', () => {
-  it('extracts the platform missing_variables payload (and its alias key)', () => {
+  it('extracts the platform missing_variables payload', () => {
     expect(missingVariablesFrom({ error: 'missing_variables', missing: [{ name: 'A', key: 'A', description: 'a' }] }))
       .toEqual([{ name: 'A', required: true, description: 'a' }])
-    expect(missingVariablesFrom({ error: 'missing_variables', missingVariables: [{ name: 'B', key: 'B' }] }))
+    expect(missingVariablesFrom({ error: 'missing_variables', missing: [{ name: 'B', key: 'B' }] }))
       .toEqual([{ name: 'B', required: true, description: undefined }])
   })
   it('leaves other errors alone', () => {
