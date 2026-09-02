@@ -21,10 +21,14 @@ export function assertServiceName(name: string): void {
   if (!SERVICE_NAME_RE.test(name)) throw new Error('service name must be lower-kebab (a-z, 0-9, -)')
 }
 
-// Parse a positive-integer machine count.
+const MAX_COMPUTE_REPLICAS = 10
+
+// Parse a replica count inside the compute plane's current safety ceiling.
 export function parseCount(raw: string): number {
   const n = Number(raw)
-  if (!Number.isInteger(n) || n < 1) throw new Error(`count must be a positive integer, got: ${raw}`)
+  if (!Number.isInteger(n) || n < 1 || n > MAX_COMPUTE_REPLICAS) {
+    throw new Error(`count must be an integer between 1 and ${MAX_COMPUTE_REPLICAS}, got: ${raw}`)
+  }
   return n
 }
 
@@ -211,7 +215,7 @@ export async function servicesScale(type: string, name: string, number: string, 
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/services/${id}/scale`, { machineCount, region })
   if (handleApproval(res, _opts.json)) return
   if (_opts.json) return printJson(res.body.service)
-  info(`scaled compute ${name} to ${machineCount} machine(s)${region ? ` in ${region}` : ''}`)
+  info(`scaled compute ${name} to ${machineCount} replica(s)${region ? ` in ${region}` : ''}`)
 }
 
 // insta services upgrade <compute|postgres> <name> <new-spec>

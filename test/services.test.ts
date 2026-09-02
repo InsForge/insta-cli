@@ -19,15 +19,16 @@ describe('assertType', () => {
 })
 
 describe('parseCount', () => {
-  it('parses positive integers', () => {
+  it('parses integers inside the replica range', () => {
     expect(parseCount('1')).toBe(1)
-    expect(parseCount('5')).toBe(5)
+    expect(parseCount('10')).toBe(10)
   })
-  it('rejects zero, negatives, and non-integers', () => {
-    expect(() => parseCount('0')).toThrow(/positive integer/)
-    expect(() => parseCount('-2')).toThrow(/positive integer/)
-    expect(() => parseCount('2.5')).toThrow(/positive integer/)
-    expect(() => parseCount('abc')).toThrow(/positive integer/)
+  it('rejects values outside 1–10 and non-integers', () => {
+    expect(() => parseCount('0')).toThrow(/between 1 and 10/)
+    expect(() => parseCount('11')).toThrow(/between 1 and 10/)
+    expect(() => parseCount('-2')).toThrow(/between 1 and 10/)
+    expect(() => parseCount('2.5')).toThrow(/between 1 and 10/)
+    expect(() => parseCount('abc')).toThrow(/between 1 and 10/)
   })
 })
 
