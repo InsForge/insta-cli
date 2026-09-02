@@ -549,7 +549,7 @@ export function applyExecResult(res: { status: number; body: any }, json?: boole
   // visible. Normal codes pass through untouched.
   if (exitCode < 0 || exitCode > 255) {
     process.stderr.write(`note: remote exit code ${exitCode} out of range — exiting 1\n`)
-    process.exitCode = 1
+    relayExitCode(1)
   } else {
     relayExitCode(exitCode)
   }

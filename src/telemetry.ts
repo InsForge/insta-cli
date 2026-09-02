@@ -21,10 +21,9 @@ const SEND_TIMEOUT_MS = 1500
 const REDACTED = '[REDACTED]'
 
 // Only ids, enums and numbers leave the machine. Positionals are kept by (command → index); every
-// other string is the user's (names, keys, paths, secret values, free text) and is dropped.
+// other string is the user's (names, branches, keys, paths, secret values, free text) and is dropped.
 const SAFE_ARGS: Record<string, number[]> = {
-  'env use': [0], 'project link': [0], run: [0],
-  'branch create': [0], 'branch switch': [0], 'branch delete': [0], 'branch merge': [0],
+  'env use': [0], 'project link': [0],
   'services add': [0], 'services remove': [0], 'services rename': [0], 'services set-access': [0, 2],
   'services scale': [0, 2, 3], 'services upgrade': [0, 2], 'services secrets': [0],
   'compute always-on': [0], 'db always-on': [0], metrics: [0], logs: [0],
@@ -32,7 +31,7 @@ const SAFE_ARGS: Record<string, number[]> = {
   'policy set': [0, 1], autoupdate: [0],
 }
 const SAFE_OPTIONS = new Set([
-  'branch', 'into', 'org', 'project', 'region', 'env', 'oauth', 'agent', 'type', 'component', 'severity',
+  'org', 'project', 'region', 'env', 'oauth', 'agent', 'type', 'component', 'severity',
   'status', 'limit', 'step', 'since', 'port', 'memory', 'cpu', 'size', 'volume',
 ])
 // `--set NAME=value`: the name is structure, the value is the user's.
@@ -145,7 +144,6 @@ export function buildCommandEvent(
       auth_kind: token ? (token.startsWith('insta_') ? 'api_key' : 'session') : null,
       project_id: ctx.project?.projectId ?? null,
       org_id: ctx.project?.orgId ?? null,
-      branch: ctx.project?.branch ?? null,
       tty: ctx.tty,
       ci: !!ctx.env.CI,
       agent: detectAgent(ctx.env),

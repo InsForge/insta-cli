@@ -75,7 +75,7 @@ describe('redaction', () => {
       image: 'ghcr.io/acme/app:1', output: '/Users/jane/f.pdf', group: 'api', prefix: 'customers/', to: 'compute/api',
     })
     expect(out).toEqual({
-      json: true, create: true, limit: '100', branch: 'main', org: 'org_1', region: 'us-east', type: 'bug',
+      json: true, create: true, limit: '100', branch: '[REDACTED]', org: 'org_1', region: 'us-east', type: 'bug',
       password: '[REDACTED]', apiKey: '[REDACTED]', email: '[REDACTED]', detail: '[REDACTED]', command: '[REDACTED]',
       image: '[REDACTED]', output: '[REDACTED]', group: '[REDACTED]', prefix: '[REDACTED]', to: '[REDACTED]',
     })
@@ -89,7 +89,8 @@ describe('redaction', () => {
     expect(redactArgs('services add', ['postgres', 'main'])).toEqual(['postgres', '[REDACTED]'])
     expect(redactArgs('services scale', ['compute', 'api', '3', 'us-east'])).toEqual(['compute', '[REDACTED]', '3', 'us-east'])
     expect(redactArgs('policy set', ['deploy', 'approve'])).toEqual(['deploy', 'approve'])
-    expect(redactArgs('run', ['npm', 'run', 'dev'])).toEqual(['npm', '[REDACTED]', '[REDACTED]'])
+    expect(redactArgs('run', ['/Users/jane/bin/dev.sh', 'x'])).toEqual(['[REDACTED]', '[REDACTED]'])
+    expect(redactArgs('branch create', ['feat/acme-pilot'])).toEqual(['[REDACTED]'])
     expect(redactArgs('secrets set', ['DB_PASSWORD', 's3cret'])).toEqual(['[REDACTED]', '[REDACTED]'])
     expect(redactArgs('org create', ['Acme Inc'])).toEqual(['[REDACTED]'])
     expect(redactArgs('storage get', ['customers/acme/tax.pdf'])).toEqual(['[REDACTED]'])
@@ -117,8 +118,9 @@ describe('buildCommandEvent', () => {
     expect(e.properties).toMatchObject({
       command: 'deploy', args: ['[REDACTED]'], options: { json: true }, success: false, cancelled: false, exit_code: 2,
       duration_ms: 900, env: 'prod', api_host: 'api.instacloud.com', logged_in: true, auth_kind: 'api_key',
-      project_id: 'p1', org_id: 'o1', branch: 'feat', ci: true, agent: 'claude-code', cli_version: '1.2.3', channel: 'npm',
+      project_id: 'p1', org_id: 'o1', ci: true, agent: 'claude-code', cli_version: '1.2.3', channel: 'npm',
     })
+    expect(JSON.stringify(e)).not.toContain('feat')
     const s = buildCommandEvent('status', [], {}, { durationMs: 1, exitCode: 0 }, ctx({ apiUrl: CUSTOM, accessToken: 'eyJsession' }))
     expect(s.properties).toMatchObject({ env: 'custom', api_host: 'localhost:4800', auth_kind: 'session', success: true })
     expect(buildCommandEvent('status', [], {}, { durationMs: 1, exitCode: 0 }, ctx(anon)).properties.auth_kind).toBeNull()
