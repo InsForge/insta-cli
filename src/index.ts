@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs'
 import { Command } from 'commander'
 import { ApiError } from './api.js'
 import { CliCancel, CliExit, fail, relayedExitCode } from './util.js'
 import { trackCommand } from './telemetry.js'
+import { cliVersion } from './version.js'
 import * as auth from './commands/auth.js'
 import * as envCmd_ from './commands/env.js'
 import { ENV_NAMES } from './env.js'
@@ -46,7 +46,7 @@ const guard = (fn: (...a: any[]) => Promise<unknown>) => async (...a: any[]): Pr
   try { await fn(...a) } catch (e) { error = e; onError(e) }
   await trackCommand(a[a.length - 1] as Command, a.slice(0, -2), {
     error, durationMs: Date.now() - started, exitCode: Number(process.exitCode ?? 0), childExitCode: relayedExitCode(),
-  }, resolveVersion())
+  }, cliVersion())
 }
 
 const program = new Command()
@@ -58,15 +58,7 @@ const program = new Command()
 // group's own options only match before the subcommand name, so occurrences after it are matched
 // against the subcommand's own (identically-named) option instead.
 program.enablePositionalOptions()
-// Version resolution: INSTA_CLI_VERSION (baked into the standalone binary via bun build --define) →
-// the installed package.json (npm/node — ../package.json sits beside dist/) → 0.0.0.
-function resolveVersion(): string {
-  if (process.env.INSTA_CLI_VERSION) return process.env.INSTA_CLI_VERSION
-  try {
-    return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version as string
-  } catch { return '0.0.0' }
-}
-program.name('insta').description('InstaCloud CLI — manage projects, branches, secrets, deploys').version(resolveVersion())
+program.name('insta').description('InstaCloud CLI — manage projects, branches, secrets, deploys').version(cliVersion())
 
 // ---- auth ----
 program.command('login').description('Log in — bare: sign in from your browser (any account type); or --email <email> + password, --oauth <github|google>, --device (headless), --api-key <insta_…> (headless, durable token)')
@@ -386,10 +378,10 @@ program.command('feedback')
 
 // ---- self-update ----
 program.command('upgrade').description('Update the insta CLI to the latest release (binary or npm install)')
-  .action(guard(() => selfUpdate.upgrade(resolveVersion())))
+  .action(guard(() => selfUpdate.upgrade(cliVersion())))
 program.command('autoupdate [mode]').description('Show or set auto-update: on | off (default: on while pre-1.0)')
   .action(guard((mode) => selfUpdate.autoupdate(mode)))
-program.command('__update-check', { hidden: true }).action(guard(() => selfUpdate.backgroundCheck(resolveVersion())))
+program.command('__update-check', { hidden: true }).action(guard(() => selfUpdate.backgroundCheck(cliVersion())))
 
-selfUpdate.maybeUpdate(resolveVersion(), process.argv)
+selfUpdate.maybeUpdate(cliVersion(), process.argv)
 program.parseAsync(computeArgv)
