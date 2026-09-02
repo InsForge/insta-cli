@@ -31,7 +31,7 @@ const MANIFEST: TemplateManifest = {
         optional: { SMTP_HOST: 'SMTP relay host' },
       },
     },
-    worker: { type: 'worker', image: 'ghcr.io/plausible/community-edition:v2.1.1', volume: { size: 10 } },
+    worker: { type: 'worker', image: 'ghcr.io/plausible/community-edition:v2.1.1', volume: true },
   },
 }
 
@@ -154,11 +154,18 @@ describe('validateManifest', () => {
     const m: TemplateManifest = { code: 'x', version: '1', services: { a: { type: 'worker', image: 123 as any } } }
     expect(validateManifest(m)).toEqual(['services.a: image 123 has no tag — pin a version (or a @sha256 digest)'])
   })
-  it('rejects out-of-range ports and fractional volumes', () => {
-    const m: TemplateManifest = { code: 'x', version: '1', services: { a: { type: 'worker', image: 'a:1', port: 70000, volume: { size: 1.5 } } } }
+  it('rejects out-of-range ports, and any volume that is not `true`', () => {
+    // Sizing is the platform's (insta-platform#357), so the CLI refuses an authored size rather
+    // than range-checking it — the same answer publish gives, before the upload instead of after.
+    const m = { code: 'x', version: '1', services: { a: { type: 'worker', image: 'a:1', port: 70000, volume: { size: 10 } } } } as unknown as TemplateManifest
     const problems = validateManifest(m).join('\n')
     expect(problems).toMatch(/port must be an integer/)
-    expect(problems).toMatch(/volume.size must be a whole Gi/)
+    expect(problems).toMatch(/the volume size is the platform's to choose/)
+    // `spec` was never checked here before; it is refused now, for the same reason.
+    const withSpec = { code: 'x', version: '1', services: { a: { type: 'worker', image: 'a:1', spec: '1vcpu-1gb' } } } as unknown as TemplateManifest
+    expect(validateManifest(withSpec).join('\n')).toMatch(/compute size is the platform's to choose/)
+    // The shape a manifest authors today passes.
+    expect(validateManifest({ code: 'x', version: '1', services: { a: { type: 'worker', image: 'a:1', volume: true } } })).toEqual([])
   })
 })
 
@@ -245,10 +252,18 @@ describe('templateInfoLines', () => {
     expect(lines.join('\n')).not.toContain('<b>SMTP_HOST')
   })
   it('renders manifest-shaped (map) services too, normalized or not', () => {
-    expect(normalizeInfoServices({ app: { type: 'web', port: 80 }, worker: { type: 'worker', volume: { size: 5 } }, norm: { volumeGib: 3 } })).toEqual([
-      { name: 'app', type: 'web', port: 80, volumeGib: undefined },
-      { name: 'worker', type: 'worker', port: undefined, volumeGib: 5 },
-      { name: 'norm', type: undefined, port: undefined, volumeGib: 3 },
+    // Three registry vintages at once: the boolean a manifest declares now, and the two sized
+    // shapes older rows still carry. All three must read back as "has a disk".
+    expect(normalizeInfoServices({
+      app: { type: 'web', port: 80 },
+      bool: { type: 'worker', volume: true },
+      worker: { type: 'worker', volume: { size: 5 } },
+      norm: { volumeGib: 3 },
+    })).toEqual([
+      { name: 'app', type: 'web', port: 80, volumeGib: undefined, volume: false },
+      { name: 'bool', type: 'worker', port: undefined, volumeGib: undefined, volume: true },
+      { name: 'worker', type: 'worker', port: undefined, volumeGib: 5, volume: true },
+      { name: 'norm', type: undefined, port: undefined, volumeGib: 3, volume: true },
     ])
   })
   it('accepts flat variable arrays too', () => {

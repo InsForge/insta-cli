@@ -27,7 +27,7 @@ export type ManifestService = {
   build?: string
   port?: number
   healthcheck?: string
-  volume?: { size?: number }
+  volume?: boolean // needs a /data disk; the platform owns the size
   env?: ManifestEnv
 }
 
@@ -134,8 +134,16 @@ export function validateManifest(m: TemplateManifest): string[] {
     }
     if (svc.type === 'web' && !svc.healthcheck) problems.push(`${where}: web services must declare a healthcheck path`)
     if (svc.healthcheck && !String(svc.healthcheck).startsWith('/')) problems.push(`${where}: healthcheck must be an absolute path (start with /)`)
-    if (svc.volume !== undefined && (!Number.isInteger(svc.volume?.size) || (svc.volume!.size as number) < 1)) {
-      problems.push(`${where}: volume.size must be a whole Gi ≥ 1, got: ${svc.volume?.size}`)
+    // Sizing is the platform's, capped for the org's plan (insta-platform#357). Same answers the
+    // publish endpoint gives, said here so an author does not upload to find out. Read as unknown:
+    // the type above admits only what is SUPPORTED, and the document is a cast over YAML.parse, so
+    // a refused shape arrives as a value that type does not describe.
+    const authored = svc as { volume?: unknown; spec?: unknown }
+    if (authored.volume !== undefined && authored.volume !== true) {
+      problems.push(`${where}: the volume size is the platform's to choose — declare 'volume: true'`)
+    }
+    if (authored.spec !== undefined) {
+      problems.push(`${where}: compute size is the platform's to choose — remove spec`)
     }
     const env = svc.env ?? {}
     for (const group of ['fixed', 'generated', 'required', 'optional'] as const) {
