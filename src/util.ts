@@ -60,6 +60,24 @@ export class CliExit extends Error {
   }
 }
 
+let relayedCode: number | undefined
+
+/** A child's exit status the CLI passes through as its own (run, db connect, compute exec). */
+export function relayExitCode(code: number): void {
+  relayedCode = code
+  process.exitCode = code
+}
+
+export function relayedExitCode(): number | undefined { return relayedCode }
+
+/** The user cancelled an interactive prompt: exit 0 with nothing printed. */
+export class CliCancel extends Error {
+  constructor() {
+    super('cancelled')
+    this.name = 'CliCancel'
+  }
+}
+
 export function fail(msg: string): void {
   process.stderr.write(`error: ${msg}\n`)
   process.exitCode = 1

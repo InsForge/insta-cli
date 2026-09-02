@@ -12,7 +12,7 @@ import os from 'node:os'
 import * as clack from '@clack/prompts'
 import { readGlobal, readProject } from '../config.js'
 import { envForApiUrl } from '../env.js'
-import { info, printJson } from '../util.js'
+import { info, printJson, CliCancel } from '../util.js'
 import { clean } from '../redact.js'
 
 export const TYPES = ['bug', 'feature-request', 'friction', 'other'] as const
@@ -100,7 +100,7 @@ async function promptMissing(opts: FeedbackOpts): Promise<void> {
         { value: 'other', label: 'other' },
       ],
     })
-    if (clack.isCancel(answer)) process.exit(0)
+    if (clack.isCancel(answer)) throw new CliCancel()
     opts.type = answer as string
   }
   if (!opts.component) {
@@ -108,7 +108,7 @@ async function promptMissing(opts: FeedbackOpts): Promise<void> {
       message: 'Where in the InstaCloud toolkit is the issue?',
       options: COMPONENTS.map((c) => ({ value: c, label: c })),
     })
-    if (clack.isCancel(answer)) process.exit(0)
+    if (clack.isCancel(answer)) throw new CliCancel()
     opts.component = answer as string
   }
   if (!opts.title) {
@@ -116,7 +116,7 @@ async function promptMissing(opts: FeedbackOpts): Promise<void> {
       message: 'One-line summary:',
       validate: (v) => (v.trim() ? undefined : 'required'),
     })
-    if (clack.isCancel(answer)) process.exit(0)
+    if (clack.isCancel(answer)) throw new CliCancel()
     opts.title = answer.trim()
   }
   if (!opts.detail && !opts.file) {
@@ -124,7 +124,7 @@ async function promptMissing(opts: FeedbackOpts): Promise<void> {
       message: 'What happened, and what did you expect?',
       validate: (v) => (v.trim() ? undefined : 'required'),
     })
-    if (clack.isCancel(answer)) process.exit(0)
+    if (clack.isCancel(answer)) throw new CliCancel()
     opts.detail = answer.trim()
   }
 }

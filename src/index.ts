@@ -2,7 +2,8 @@
 import { readFileSync } from 'node:fs'
 import { Command } from 'commander'
 import { ApiError } from './api.js'
-import { CliExit, fail } from './util.js'
+import { CliCancel, CliExit, fail, relayedExitCode } from './util.js'
+import { trackCommand } from './telemetry.js'
 import * as auth from './commands/auth.js'
 import * as envCmd_ from './commands/env.js'
 import { ENV_NAMES } from './env.js'
@@ -32,14 +33,21 @@ import * as selfUpdate from './commands/upgrade.js'
 import * as feedbackCmd from './commands/feedback.js'
 
 function onError(e: unknown): void {
-  if (e instanceof CliExit) return
+  if (e instanceof CliExit || e instanceof CliCancel) return
   if (e instanceof ApiError) return fail(`${e.message} (HTTP ${e.status})`)
   fail(e instanceof Error ? e.message : String(e))
 }
 
 // Wrap an async action so rejections surface as clean CLI errors.
-const guard = (fn: (...a: any[]) => Promise<unknown>) => (...a: any[]): Promise<void> =>
-  fn(...a).then(() => undefined).catch(onError)
+// commander appends (options, command) to every action's arguments, so the command is always last.
+const guard = (fn: (...a: any[]) => Promise<unknown>) => async (...a: any[]): Promise<void> => {
+  const started = Date.now()
+  let error: unknown
+  try { await fn(...a) } catch (e) { error = e; onError(e) }
+  await trackCommand(a[a.length - 1] as Command, a.slice(0, -2), {
+    error, durationMs: Date.now() - started, exitCode: Number(process.exitCode ?? 0), childExitCode: relayedExitCode(),
+  }, resolveVersion())
+}
 
 const program = new Command()
 // Positional options: some command groups (e.g. `secrets`, `billing`) declare a flag (like

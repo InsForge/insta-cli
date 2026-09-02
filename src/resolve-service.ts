@@ -6,6 +6,7 @@
 // as an error, because nothing was created and a silent exit 0 would read as success.
 import * as clack from '@clack/prompts'
 import { SERVICE_TYPES, assertServiceName, parsePort, type ServiceType } from './commands/services.js'
+import { CliCancel } from './util.js'
 
 export type ServiceKind = {
   id: string
@@ -123,7 +124,7 @@ export async function promptServiceKind(kinds: readonly ServiceKind[]): Promise<
     message: 'What do you want to add?',
     options: kinds.map((k) => ({ value: k.id, label: k.label, hint: k.hint })),
   })
-  if (clack.isCancel(picked)) process.exit(0)
+  if (clack.isCancel(picked)) throw new CliCancel()
   // Resolve against the list that was displayed — a subset must not fall through to the registry.
   return kinds.find((k) => k.id === picked)!
 }
@@ -134,7 +135,7 @@ export async function promptImageRef(): Promise<string> {
     placeholder: 'nginx:latest',
     validate: (v) => (normalizeImageRef(v) ? undefined : 'an image reference is required'),
   })
-  if (clack.isCancel(answer)) process.exit(0)
+  if (clack.isCancel(answer)) throw new CliCancel()
   return answer
 }
 
@@ -152,7 +153,7 @@ export async function promptServiceName(kind: ServiceKind, suggested: string): P
       }
     },
   })
-  if (clack.isCancel(answer)) process.exit(0)
+  if (clack.isCancel(answer)) throw new CliCancel()
   return answer.trim()
 }
 
@@ -170,7 +171,7 @@ export async function promptPort(fallback: string): Promise<string> {
       }
     },
   })
-  if (clack.isCancel(answer)) process.exit(0)
+  if (clack.isCancel(answer)) throw new CliCancel()
   return answer.trim()
 }
 

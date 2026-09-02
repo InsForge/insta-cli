@@ -4,7 +4,7 @@
 // as the process does.
 import { spawn } from 'node:child_process'
 import { ApiClient, requireProject } from '../api.js'
-import { die, handleApproval } from '../util.js'
+import { CliExit, die, handleApproval, relayExitCode } from '../util.js'
 
 export type RunDeps = {
   fetchBundle: () => Promise<Record<string, string>>
@@ -35,13 +35,12 @@ export async function run(cmdAndArgs: string[], opts: { branch?: string }): Prom
   const code = await runWithSecrets(cmd!, rest, {
     fetchBundle: async () => {
       const res = await api.rawRequest('GET', `/projects/${p.projectId}/secrets?branch=${encodeURIComponent(branch)}`)
-      // exit() with no argument honors the exit code handleApproval just set (2).
-      if (handleApproval(res)) process.exit()
+      if (handleApproval(res)) throw new CliExit()
       // stderr, not stdout: `insta run`'s stdout belongs entirely to the child command (that's why
       // run has no --json — wrapping would break the child's own output contract).
       process.stderr.write(`running with ${Object.keys(res.body.secrets).length} injected secrets (branch ${branch}) — nothing written to disk\n`)
       return res.body.secrets as Record<string, string>
     },
   })
-  process.exit(code)
+  relayExitCode(code)
 }

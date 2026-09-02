@@ -8,7 +8,7 @@ import { homedir } from 'node:os'
 import * as clack from '@clack/prompts'
 import { ApiClient, ApiError, requireProject } from '../api.js'
 import type { ProjectConfig } from '../config.js'
-import { info, printJson, handleApproval, renderNextActions } from '../util.js'
+import { info, printJson, handleApproval, renderNextActions, CliCancel } from '../util.js'
 import { MANIFEST_FILE, collectManifestVariables, loadTemplateManifest, type TemplateManifest, type TemplateVar } from '../template-manifest.js'
 
 // ---- pure, unit-tested helpers ----
@@ -314,7 +314,7 @@ async function promptVariable(v: TemplateVar): Promise<string> {
     message: `${v.name}${v.description ? ` — ${v.description}` : ''}:`,
     validate: (s) => (s.trim() ? undefined : 'required'),
   })
-  if (clack.isCancel(answer)) process.exit(0)
+  if (clack.isCancel(answer)) throw new CliCancel()
   return answer.trim()
 }
 

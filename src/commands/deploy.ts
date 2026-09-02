@@ -1,7 +1,7 @@
 import { resolve, join } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { ApiClient, ApiError, requireProject } from '../api.js'
-import { info, die, printJson, handleApproval, renderNextActions } from '../util.js'
+import { info, die, printJson, handleApproval, renderNextActions, CliExit } from '../util.js'
 import { flyctlBuildAndPush, ensureFlyctl, defaultBuildRunner, stderrBuildRunner, type BuildRunner } from '../flyctl-build.js'
 
 type DeployOpts = { image?: string; branch?: string; group?: string; port?: string; websocket?: boolean; json?: boolean }
@@ -128,8 +128,7 @@ export async function buildFromSource(
     log(`  built ${built}`)
     return built
   }
-  // exit() with no argument honors the exit code handleApproval just set (2).
-  if (handleApproval(tok, opts.json)) process.exit()
+  if (handleApproval(tok, opts.json)) throw new CliExit()
   const { token, flyApp } = tok.body
 
   await ensureFlyctl() // cloud path only — the local path needs docker, which the daemon requires anyway
