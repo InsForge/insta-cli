@@ -224,6 +224,25 @@ describe('trackCommand', () => {
     expect(hidden.calls).toHaveLength(0)
   })
 
+  it('routes a login by the deployment it targeted, not by the previous configuration', async () => {
+    const login = () => new Command('insta').command('login').option('--env <name>').option('--api-url <url>')
+    const staging = await deps(loggedIn)
+    const toStaging = login(); toStaging.setOptionValue('env', 'staging')
+    await trackCommand(toStaging, [], { durationMs: 1, exitCode: 1, error: new ApiError(401, 'bad password') }, '1.0.0', staging)
+    expect(staging.calls[0]!.body.api_key).toBe(telemetryKey(STAGING))
+    expect(staging.calls[0]!.body.batch[0].distinct_id).not.toBe('user_1')
+
+    const custom = await deps(loggedIn)
+    const toCustom = login(); toCustom.setOptionValue('apiUrl', CUSTOM)
+    await trackCommand(toCustom, [], { durationMs: 1, exitCode: 1, error: new ApiError(401, 'bad password') }, '1.0.0', custom)
+    expect(custom.calls).toHaveLength(0)
+
+    const same = await deps(loggedIn)
+    const toProd = login(); toProd.setOptionValue('env', 'prod')
+    await trackCommand(toProd, [], { durationMs: 1, exitCode: 0 }, '1.0.0', same)
+    expect(same.calls[0]!.body.batch[0].distinct_id).toBe('user_1')
+  })
+
   it('never throws, even when the config cannot be read', async () => {
     const d = { ...(await deps(loggedIn)), loadConfig: async () => { throw new Error('unknown INSTA_ENV') } }
     const { leaf } = tree()

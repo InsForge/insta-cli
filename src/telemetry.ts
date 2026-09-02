@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import type { Command } from 'commander'
 import { ApiError } from './api.js'
 import { readGlobal, readProject, type GlobalConfig, type ProjectConfig } from './config.js'
-import { envForApiUrl, type EnvName } from './env.js'
+import { ENVS, envForApiUrl, isEnvName, normalizeUrl, type EnvName } from './env.js'
 import { detectChannel } from './commands/upgrade.js'
 import { CliCancel, CliExit } from './util.js'
 
@@ -59,6 +59,14 @@ export function redactOptions(opts: Record<string, unknown>): Record<string, unk
 export function redactArgs(command: string, args: unknown[]): unknown[] {
   const keep = SAFE_ARGS[command] ?? []
   return args.map((a, i) => (a === undefined ? null : keep.includes(i) ? a : REDACTED))
+}
+
+/** The deployment a `login --env|--api-url` targets. It is persisted only when the login succeeds, so
+ *  a failed attempt must be routed from the options, never from the previous configuration. */
+export function loginTarget(command: string, opts: Record<string, unknown>): string | undefined {
+  if (command !== 'login') return undefined
+  if (typeof opts.apiUrl === 'string') return opts.apiUrl
+  return typeof opts.env === 'string' && isEnvName(opts.env) ? ENVS[opts.env].api : undefined
 }
 
 /** `secrets set`, `services add`, … — the subcommand chain without the program name. */
@@ -197,7 +205,9 @@ export async function trackCommand(cmd: Command, args: unknown[], outcome: Outco
     if (telemetryDisabled(env)) return
     const command = commandPath(cmd)
     if (command.startsWith('__')) return
-    const config = await (deps.loadConfig ?? readGlobal)()
+    let config = await (deps.loadConfig ?? readGlobal)()
+    const target = loginTarget(command, cmd.opts())
+    if (target && normalizeUrl(target) !== normalizeUrl(config.apiUrl)) config = { apiUrl: target }
     const key = telemetryKey(config.apiUrl)
     if (!key) return
     const project = await (deps.loadProject ?? readProject)()
