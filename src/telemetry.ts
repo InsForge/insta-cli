@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import type { Command } from 'commander'
 import { ApiError } from './api.js'
 import { readGlobal, readProject, type GlobalConfig, type ProjectConfig } from './config.js'
-import { ENVS, ENV_NAMES, envForApiUrl, isEnvName, normalizeUrl, type EnvName } from './env.js'
+import { ENVS, envForApiUrl, isEnvName, normalizeUrl, type EnvName } from './env.js'
 import { COMPONENTS, SEVERITIES, TYPES } from './commands/feedback.js'
 import { SERVICE_TYPES } from './commands/services.js'
 import { detectChannel } from './commands/upgrade.js'
@@ -31,12 +31,14 @@ const SLUG: Check = (v) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(v)
 const NUMBER: Check = (v) => /^\d+(?:\.\d+)?[a-z]{0,3}$/i.test(v)
 const REGION: Check = (v) => /^[a-z]{2,3}(?:-[a-z0-9]+)+$/.test(v)
 const SERVICE = oneOf(SERVICE_TYPES)
+// `login`/`env use` accept the name case-insensitively; so does this.
+const ENV: Check = (v) => isEnvName(v.trim().toLowerCase())
 const ON_OFF = oneOf(['on', 'off'])
 const TARGET = oneOf(['db', 'compute', 'redis', 'mysql', 'mongodb'])
 const POLICY_ACTION: Check = (v) => /^(?:secrets|deploy|project|branch|service|storage)(?:\.[a-zA-Z]+)?$/.test(v)
 
 const SAFE_ARGS: Record<string, Record<number, Check>> = {
-  'env use': { 0: oneOf(ENV_NAMES) }, 'project link': { 0: ID },
+  'env use': { 0: ENV }, 'project link': { 0: ID },
   'services add': { 0: SERVICE }, 'services remove': { 0: SERVICE }, 'services rename': { 0: SERVICE }, 'services secrets': { 0: SERVICE },
   'services set-access': { 0: SERVICE, 2: oneOf(['public', 'private']) },
   'services scale': { 0: SERVICE, 2: NUMBER, 3: REGION }, 'services upgrade': { 0: SERVICE, 2: SLUG },
@@ -46,7 +48,7 @@ const SAFE_ARGS: Record<string, Record<number, Check>> = {
   'policy set': { 0: POLICY_ACTION, 1: oneOf(['allow', 'deny', 'approve']) }, autoupdate: { 0: ON_OFF },
 }
 const SAFE_OPTIONS: Record<string, Check> = {
-  org: ID, project: ID, region: REGION, env: oneOf(ENV_NAMES), oauth: oneOf(['github', 'google']),
+  org: ID, project: ID, region: REGION, env: ENV, oauth: oneOf(['github', 'google']),
   agent: oneOf(['claude-code', 'cursor', 'codex', 'opencode', 'copilot', 'factory-droid']),
   type: oneOf(TYPES), component: oneOf(COMPONENTS), severity: oneOf(SEVERITIES),
   status: oneOf(['pending', 'granted', 'denied', 'consumed']),

@@ -86,6 +86,8 @@ describe('redaction', () => {
       .toEqual({ port: '[REDACTED]', limit: '100', region: '[REDACTED]', org: '[REDACTED]', project: 'proj_1', env: '[REDACTED]', memory: '512mb' })
     expect(redactArgs('services add', ['lambda', 'x'])).toEqual(['[REDACTED]', '[REDACTED]'])
     expect(redactArgs('env use', ['stagng'])).toEqual(['[REDACTED]'])
+    expect(redactArgs('env use', ['STAGING'])).toEqual(['STAGING'])
+    expect(redactOptions({ env: 'Prod' })).toEqual({ env: 'Prod' })
     expect(redactArgs('approvals approve', ['appr_1'])).toEqual(['appr_1'])
     expect(redactArgs('approvals approve', ['please'])).toEqual(['[REDACTED]'])
     expect(redactArgs('metrics', ['db'])).toEqual(['db'])
