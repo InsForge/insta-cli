@@ -6,6 +6,7 @@
 // as an error, because nothing was created and a silent exit 0 would read as success.
 import * as clack from '@clack/prompts'
 import { SERVICE_TYPES, assertServiceName, parsePort, type ServiceType } from './commands/services.js'
+import { CliCancel } from './util.js'
 
 export type ServiceKind = {
   id: string
