@@ -17,16 +17,16 @@ export type ServiceKind = {
   needsImage?: boolean
 }
 
-// Same order, labels and default names as the dashboard's Add Service menu. Github Repo is left
-// out: the platform has no repo path yet, so a CLI entry could only say "coming soon".
+// Same order, labels and default names as the dashboard's Add Service menu. Github Repo and
+// View Templates are left out: neither is a type-and-name create, so `insta services add` has no shape for them.
 export const SERVICE_KINDS: readonly ServiceKind[] = [
   { id: 'image', label: 'Docker Image', type: 'compute', hint: 'run an existing container image', needsImage: true },
+  { id: 'compute', label: 'Empty Service', type: 'compute', hint: 'an app to deploy code to (empty until `insta deploy`)', defaultName: 'compute' },
   { id: 'postgres', label: 'Postgres', type: 'postgres', hint: 'relational DB, usable as soon as it is added', defaultName: 'main-db' },
   { id: 'redis', label: 'Redis', type: 'redis', hint: 'private Redis-compatible cache', defaultName: 'cache' },
   { id: 'mysql', label: 'MySQL', type: 'mysql', hint: 'private MySQL database', defaultName: 'mysql-db' },
   { id: 'mongodb', label: 'MongoDB', type: 'mongodb', hint: 'private MongoDB database', defaultName: 'mongo-db' },
-  { id: 'storage', label: 'Storage', type: 'storage', hint: 'S3-compatible bucket, private by default', defaultName: 'assets' },
-  { id: 'compute', label: 'Empty Service', type: 'compute', hint: 'an app to deploy code to (empty until `insta deploy`)', defaultName: 'compute' },
+  { id: 'storage', label: 'Object Storage', type: 'storage', hint: 'S3-compatible bucket, private by default', defaultName: 'assets' },
 ]
 
 // The platform's own default; the dialog prefills the same number.
