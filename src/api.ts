@@ -3,6 +3,7 @@
 import { readGlobal, writeGlobal, readProject, writeProject, type GlobalConfig, type ProjectConfig } from './config.js'
 import { autoResolveProject, promptChoice, type ProjectItem } from './resolve-project.js'
 import { die } from './util.js'
+import { USER_AGENT } from './version.js'
 
 export class ApiError extends Error {
   // body carries the parsed error payload for callers that branch on machine-readable errors
@@ -20,7 +21,7 @@ export function storeApiKeyCredential(cfg: GlobalConfig, token: string, user?: G
 type RawResult = { status: number; body: any }
 
 export class ApiClient {
-  constructor(private cfg: GlobalConfig) {}
+  constructor(private cfg: GlobalConfig, private readonly fetchImpl: typeof fetch = fetch) {}
 
   static async load(): Promise<ApiClient> { return new ApiClient(await readGlobal()) }
 
@@ -71,9 +72,9 @@ export class ApiClient {
   }
 
   private async fetch(method: string, path: string, body: unknown, auth: boolean): Promise<RawResult> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Insta-Hints': '1' }
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Insta-Hints': '1', 'User-Agent': USER_AGENT }
     if (auth && this.cfg.accessToken) headers.Authorization = `Bearer ${this.cfg.accessToken}`
-    const res = await fetch(this.apiUrl + path, {
+    const res = await this.fetchImpl(this.apiUrl + path, {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),

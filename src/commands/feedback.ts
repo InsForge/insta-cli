@@ -14,6 +14,7 @@ import { readGlobal, readProject } from '../config.js'
 import { envForApiUrl } from '../env.js'
 import { info, printJson, CliCancel } from '../util.js'
 import { clean } from '../redact.js'
+import { cliVersion } from '../version.js'
 
 export const TYPES = ['bug', 'feature-request', 'friction', 'other'] as const
 export const COMPONENTS = ['cli', 'mcp', 'platform', 'skills', 'docs', 'other'] as const
@@ -68,17 +69,6 @@ export type FeedbackDeps = {
   /** Prompts run on a real terminal only — an agent's stdin is not one, and must never block. */
   interactive?: boolean
   cliVersion?: string
-}
-
-function resolveCliVersion(): string {
-  // Same resolution as index.ts: the standalone binary bakes INSTA_CLI_VERSION via --define;
-  // npm/node reads the installed package.json next to dist/.
-  if (process.env.INSTA_CLI_VERSION) return process.env.INSTA_CLI_VERSION
-  try {
-    return JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version as string
-  } catch {
-    return '0.0.0'
-  }
 }
 
 function requireEnum(value: string, allowed: readonly string[], flag: string): string {
@@ -238,7 +228,7 @@ export async function feedback(opts: FeedbackOpts, deps: FeedbackDeps = {}): Pro
   // transport-failure shapes) instead of guard()'s plaintext stderr line.
   let payload: Record<string, unknown>
   try {
-    payload = await buildPayload(opts, { cliVersion: deps.cliVersion ?? resolveCliVersion() })
+    payload = await buildPayload(opts, { cliVersion: deps.cliVersion ?? cliVersion() })
   } catch (e) {
     if (!opts.json) throw e
     printJson({ status: 'error', submitted: false, error: e instanceof Error ? e.message : String(e) })
