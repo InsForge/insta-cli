@@ -238,7 +238,7 @@ describe('trackCommand', () => {
   it('routes a login by the deployment it targeted, not by the previous configuration', async () => {
     const login = () => new Command('insta').command('login').option('--env <name>').option('--api-url <url>')
     const staging = await deps(loggedIn)
-    const toStaging = login(); toStaging.setOptionValue('env', 'staging')
+    const toStaging = login(); toStaging.setOptionValue('env', 'STAGING')
     await trackCommand(toStaging, [], { durationMs: 1, exitCode: 1, error: new ApiError(401, 'bad password') }, '1.0.0', staging)
     expect(staging.calls[0]!.body.api_key).toBe(telemetryKey(STAGING))
     expect(staging.calls[0]!.body.batch[0].distinct_id).not.toBe('user_1')

@@ -84,7 +84,8 @@ export function redactArgs(command: string, args: unknown[]): unknown[] {
 export function loginTarget(command: string, opts: Record<string, unknown>): string | undefined {
   if (command !== 'login') return undefined
   if (typeof opts.apiUrl === 'string') return opts.apiUrl
-  return typeof opts.env === 'string' && isEnvName(opts.env) ? ENVS[opts.env].api : undefined
+  const env = typeof opts.env === 'string' ? opts.env.trim().toLowerCase() : ''
+  return isEnvName(env) ? ENVS[env].api : undefined
 }
 
 /** `secrets set`, `services add`, … — the subcommand chain without the program name. */
