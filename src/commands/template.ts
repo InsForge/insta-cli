@@ -15,18 +15,20 @@ import { MANIFEST_FILE, collectManifestVariables, loadTemplateManifest, type Tem
 
 export type TemplateIndexEntry = {
   code: string; version: string; name: string; tagline?: string; category?: string
-  requiredVarCount?: number; deployCount?: number
+  maintainer?: string; totalProjects?: number; successRate?: number | null
 }
 
 // One aligned row per template; numeric columns right-aligned. Plain padded columns, as the rest
 // of the CLI (storage list, compute check-domain) — no table library.
 export function templateListLines(templates: TemplateIndexEntry[]): string[] {
   if (!templates.length) return ['(no templates published yet)']
-  const head = ['CODE', 'VERSION', 'CATEGORY', 'VARS', 'DEPLOYS', 'NAME']
+  const head = ['CODE', 'VERSION', 'CATEGORY', 'PROJECTS', 'SUCCESS', 'NAME']
   const numeric = [false, false, false, true, true, false]
   const rows = templates.map((t) => [
     t.code, t.version ?? '', t.category ?? '-',
-    String(t.requiredVarCount ?? 0), String(t.deployCount ?? 0),
+    String(t.totalProjects ?? 0),
+    // null = nothing has concluded yet; the platform never sends 0 for that.
+    t.successRate == null ? '-' : `${t.successRate}%`,
     t.tagline ? `${t.name} — ${t.tagline}` : (t.name ?? ''),
   ])
   const widths = head.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i]!.length)))
@@ -161,11 +163,11 @@ export async function resolveVariables(vars: TemplateVar[], given: Record<string
 }
 
 // The platform's machine-readable "you forgot these" answer to the POST (error=missing_variables,
-// missing: [{name, key, description}] with a missingVariables alias) — turned back into promptable
-// variables. null = some other error, not ours to interpret.
+// missing: [{name, key, description}]) — turned back into promptable variables. null = some other
+// error, not ours to interpret.
 export function missingVariablesFrom(body: any): TemplateVar[] | null {
   if ((body?.error ?? body?.code) !== 'missing_variables') return null
-  const list = body?.missing ?? body?.missingVariables ?? []
+  const list = body?.missing ?? []
   if (!Array.isArray(list)) return []
   return list.map((v: any) => ({ name: String(v.name ?? v.key ?? v), required: true, description: v.description }))
 }
