@@ -183,21 +183,23 @@ export function buildCommandEvent(
   }
 }
 
-export async function anonymousId(file = ID_FILE): Promise<string> {
+/** The pre-login id events are sent under, and the account it has been merged into, if any. */
+export type TelemetryState = { anonymousId: string; identifiedAs?: string }
+
+export async function readState(file = ID_FILE): Promise<TelemetryState> {
   try {
-    const parsed = JSON.parse(await readFile(file, 'utf8')) as { anonymousId?: unknown }
-    if (typeof parsed.anonymousId === 'string' && parsed.anonymousId) return parsed.anonymousId
+    const parsed = JSON.parse(await readFile(file, 'utf8')) as TelemetryState
+    if (typeof parsed.anonymousId === 'string' && parsed.anonymousId) return parsed
   } catch {}
-  return rotateAnonymousId(file)
+  return writeState({ anonymousId: randomUUID() }, file)
 }
 
-async function rotateAnonymousId(file = ID_FILE): Promise<string> {
-  const id = randomUUID()
+async function writeState(state: TelemetryState, file = ID_FILE): Promise<TelemetryState> {
   try {
     await mkdir(dirname(file), { recursive: true })
-    await writeFile(file, JSON.stringify({ anonymousId: id }, null, 2))
+    await writeFile(file, JSON.stringify(state, null, 2))
   } catch {}
-  return id
+  return state
 }
 
 export async function sendBatch(key: string, batch: object[], fetchImpl: typeof fetch = fetch): Promise<boolean> {
@@ -235,24 +237,26 @@ export async function trackCommand(cmd: Command, args: unknown[], outcome: Outco
     let config = await (deps.loadConfig ?? readGlobal)()
     const target = loginTarget(command, cmd.opts())
     if (target && normalizeUrl(target) !== normalizeUrl(config.apiUrl)) config = { apiUrl: target }
-    const anon = await anonymousId(deps.idFile)
-    if (command === 'logout') await rotateAnonymousId(deps.idFile)
     const key = telemetryKey(config.apiUrl)
     if (!key) return
     const project = await (deps.loadProject ?? readProject)()
+    const userId = config.user?.id
+    let state = await readState(deps.idFile)
+    // Session gone or switched: the id belongs to the account that left, so later commands get a fresh one.
+    if (state.identifiedAs && state.identifiedAs !== userId) state = await writeState({ anonymousId: randomUUID() }, deps.idFile)
     const event = buildCommandEvent(command, args.flat(), cmd.opts(), outcome, {
       cliVersion,
       channel: deps.channel ?? detectChannel(),
       config,
       project,
-      anonymousId: anon,
+      anonymousId: state.anonymousId,
       env,
       tty: deps.tty ?? !!process.stdout.isTTY,
     })
     const batch: object[] = [event]
-    if (command === 'login' && event.properties.success && config.user?.id) {
-      batch.push({ event: '$identify', distinct_id: config.user.id, timestamp: event.timestamp, properties: { $anon_distinct_id: anon } })
-    }
-    await sendBatch(key, batch, deps.fetchImpl)
+    const merge = userId !== undefined && state.identifiedAs !== userId
+    if (merge) batch.push({ event: '$identify', distinct_id: userId, timestamp: event.timestamp, properties: { $anon_distinct_id: state.anonymousId } })
+    const sent = await sendBatch(key, batch, deps.fetchImpl)
+    if (merge && sent) await writeState({ ...state, identifiedAs: userId }, deps.idFile)
   } catch {}
 }
