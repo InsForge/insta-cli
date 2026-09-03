@@ -131,9 +131,12 @@ describe('buildCommandEvent', () => {
     expect(e.properties).toMatchObject({
       command: 'deploy', args: ['[REDACTED]'], options: { json: true }, success: false, cancelled: false, exit_code: 2,
       duration_ms: 900, env: 'prod', api_host: 'api.instacloud.com', logged_in: true, auth_kind: 'api_key',
-      project_id: 'p1', org_id: 'o1', ci: true, agent: 'claude-code', cli_version: '1.2.3', channel: 'npm',
+      project_id: 'p1', org_id: 'o1', $groups: { org: 'o1', project: 'p1' }, ci: true, agent: 'claude-code', cli_version: '1.2.3', channel: 'npm',
     })
     expect(e.properties).not.toHaveProperty('branch')
+    expect(buildCommandEvent('org list', [], {}, { durationMs: 1, exitCode: 0 }, ctx(loggedIn)).properties).not.toHaveProperty('$groups')
+    const envOnly = buildCommandEvent('deploy', [], {}, { durationMs: 1, exitCode: 0 }, ctx(loggedIn, { project: { projectId: 'p1', orgId: '', branch: 'main' } }))
+    expect(envOnly.properties.$groups).toEqual({ project: 'p1' })
     const s = buildCommandEvent('status', [], {}, { durationMs: 1, exitCode: 0 }, ctx({ apiUrl: CUSTOM, accessToken: 'eyJsession' }))
     expect(s.properties).toMatchObject({ env: 'custom', api_host: 'localhost:4800', auth_kind: 'session', success: true })
     expect(buildCommandEvent('status', [], {}, { durationMs: 1, exitCode: 0 }, ctx(anon)).properties.auth_kind).toBeNull()
@@ -254,6 +257,24 @@ describe('trackCommand', () => {
     const toProd = login(); toProd.setOptionValue('env', 'prod')
     await trackCommand(toProd, [], { durationMs: 1, exitCode: 0 }, '1.0.0', same)
     expect(same.calls[0]!.body.batch[0].distinct_id).toBe('user_1')
+  })
+
+  it('merges the anonymous id into the account on a successful login, and retires it on logout', async () => {
+    const d = await deps(loggedIn)
+    const anon = await anonymousId(d.idFile)
+    await trackCommand(new Command('insta').command('login'), [], { durationMs: 1, exitCode: 0 }, '1.0.0', d)
+    expect(d.calls[0]!.body.batch.map((e: any) => e.event)).toEqual(['cli_command', '$identify'])
+    expect(d.calls[0]!.body.batch[1]).toMatchObject({ distinct_id: 'user_1', properties: { $anon_distinct_id: anon } })
+
+    const failed = await deps(loggedIn)
+    await trackCommand(new Command('insta').command('login'), [], { durationMs: 1, exitCode: 1, error: new ApiError(401, 'bad password') }, '1.0.0', failed)
+    expect(failed.calls[0]!.body.batch.map((e: any) => e.event)).toEqual(['cli_command'])
+
+    const out = await deps({ apiUrl: PROD })
+    const id = await anonymousId(out.idFile)
+    await trackCommand(new Command('insta').command('logout'), [], { durationMs: 1, exitCode: 0 }, '1.0.0', out)
+    expect(out.calls[0]!.body.batch[0].distinct_id).toBe(id)
+    expect(await anonymousId(out.idFile)).not.toBe(id)
   })
 
   it('never throws, even when the config cannot be read', async () => {

@@ -20,6 +20,7 @@ const PROJECT_KEYS: Record<EnvName, string> = {
 }
 // The send is awaited before the process exits, so it gets one bounded attempt and no retry.
 const SEND_TIMEOUT_MS = 1500
+const ID_FILE = join(os.homedir(), '.insta', 'telemetry.json')
 const REDACTED = '[REDACTED]'
 
 // Only ids, enums and numbers leave the machine, and only when the value has that shape; every other
@@ -170,6 +171,7 @@ export function buildCommandEvent(
       auth_kind: token ? (token.startsWith('insta_') ? 'api_key' : 'session') : null,
       project_id: ctx.project?.projectId ?? null,
       org_id: ctx.project?.orgId ?? null,
+      ...(ctx.project ? { $groups: { project: ctx.project.projectId, ...(ID(ctx.project.orgId) ? { org: ctx.project.orgId } : {}) } } : {}),
       tty: ctx.tty,
       ci: !!ctx.env.CI,
       agent: detectAgent(ctx.env),
@@ -181,11 +183,15 @@ export function buildCommandEvent(
   }
 }
 
-export async function anonymousId(file = join(os.homedir(), '.insta', 'telemetry.json')): Promise<string> {
+export async function anonymousId(file = ID_FILE): Promise<string> {
   try {
     const parsed = JSON.parse(await readFile(file, 'utf8')) as { anonymousId?: unknown }
     if (typeof parsed.anonymousId === 'string' && parsed.anonymousId) return parsed.anonymousId
   } catch {}
+  return rotateAnonymousId(file)
+}
+
+async function rotateAnonymousId(file = ID_FILE): Promise<string> {
   const id = randomUUID()
   try {
     await mkdir(dirname(file), { recursive: true })
@@ -229,6 +235,8 @@ export async function trackCommand(cmd: Command, args: unknown[], outcome: Outco
     let config = await (deps.loadConfig ?? readGlobal)()
     const target = loginTarget(command, cmd.opts())
     if (target && normalizeUrl(target) !== normalizeUrl(config.apiUrl)) config = { apiUrl: target }
+    const anon = await anonymousId(deps.idFile)
+    if (command === 'logout') await rotateAnonymousId(deps.idFile)
     const key = telemetryKey(config.apiUrl)
     if (!key) return
     const project = await (deps.loadProject ?? readProject)()
@@ -237,10 +245,14 @@ export async function trackCommand(cmd: Command, args: unknown[], outcome: Outco
       channel: deps.channel ?? detectChannel(),
       config,
       project,
-      anonymousId: await anonymousId(deps.idFile),
+      anonymousId: anon,
       env,
       tty: deps.tty ?? !!process.stdout.isTTY,
     })
-    await sendBatch(key, [event], deps.fetchImpl)
+    const batch: object[] = [event]
+    if (command === 'login' && event.properties.success && config.user?.id) {
+      batch.push({ event: '$identify', distinct_id: config.user.id, timestamp: event.timestamp, properties: { $anon_distinct_id: anon } })
+    }
+    await sendBatch(key, batch, deps.fetchImpl)
   } catch {}
 }

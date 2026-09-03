@@ -233,7 +233,7 @@ build never reaches a production installer.
 | `INSTA_PROJECT_ID` · `INSTA_ORG_ID` · `INSTA_BRANCH` | Target a project, org or branch without linking |
 | `INSTA_PASSWORD` | Password for non-interactive login |
 | `INSTA_NO_AUTOUPDATE` | Disable self-update |
-| `INSTA_NO_TELEMETRY` · `DO_NOT_TRACK` | Disable usage analytics. Each command sends one event (command, flags, outcome, version, OS) to the same PostHog project as the console. Only ids, enums and numbers among the arguments are kept — names, branches, keys, paths, secret values, free text and error messages never leave the machine; custom API hosts report nothing |
+| `INSTA_NO_TELEMETRY` · `DO_NOT_TRACK` | Disable usage analytics. Each command sends one event (command, flags, outcome, version, OS) to the same PostHog project as the console. Only ids, enums and numbers among the arguments are kept — names, branches, keys, paths, secret values, free text and error messages never leave the machine; custom API hosts report nothing. Before you sign in, events carry a random id stored in `~/.insta/telemetry.json`; a successful login sends one extra event merging that id into your account, and logout retires it |
 
 ## Agent skills
 
