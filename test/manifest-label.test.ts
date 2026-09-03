@@ -52,6 +52,11 @@ describe('resourceLine', () => {
     expect(resourceLine({ kind: 'insta-db', name: 'db', status: 'active', ref: { pgVersion: 16 } })).toBe('    - insta-db(db)    pg 16  [active]')
     expect(resourceLine({ kind: 'insta-db', name: 'db', status: 'active', ref: {} })).toBe('    - insta-db(db)    [active]')
   })
+  it('omits the badge when ref.pgVersion is not an integer (untyped API JSON)', () => {
+    for (const bad of [true, '16', 16.4, NaN] as unknown[]) {
+      expect(resourceLine({ kind: 'insta-db', name: 'db', status: 'active', ref: { pgVersion: bad as number } })).toBe('    - insta-db(db)    [active]')
+    }
+  })
   it('renders the microvm row exactly as staging should have shown it', () => {
     expect(resourceLine({
       kind: 'fly', provider: 'microvm', name: 'api', status: 'active',

@@ -37,7 +37,8 @@ export function resourceLabel(r: ManifestResource): string {
 // One `manifest` resource line. Pure, so the label is unit-tested without a network mock.
 export function resourceLine(r: ManifestResource): string {
   const where = r.ref?.url ?? r.ref?.bucket ?? r.ref?.neonProjectId ?? ''
-  const pg = r.ref?.pgVersion ? `  pg ${r.ref.pgVersion}` : ''
+  // Integer-guarded: ref is untyped API JSON, and a malformed value must not render as a version.
+  const pg = Number.isInteger(r.ref?.pgVersion) ? `  pg ${r.ref?.pgVersion}` : ''
   return `    - ${resourceLabel(r)}  ${where}${pg}  [${r.status}]`
 }
 

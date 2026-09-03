@@ -145,7 +145,9 @@ export function serviceListLine(s: { type: string; name: string; status: string;
       : s.type === 'storage' ? `  ${s.public ? 'public' : 'private'}`
         // Postgres major, so the reader picks matching pg_dump/psql BEFORE connecting (a newer client
         // dumps statements an older server cannot restore). Older platforms send no pg_version.
-        : s.type === 'postgres' && s.pg_version ? `  pg ${s.pg_version}` : ''
+        // Integer-guarded: the field arrives from API JSON untyped, and a malformed value must not
+        // render as a version an agent would act on.
+        : s.type === 'postgres' && Number.isInteger(s.pg_version) ? `  pg ${s.pg_version}` : ''
   return `${s.type}/${s.name}  [${s.status}]${extra}${s.domain ? `  ${s.domain}` : ''}  ${s.id}`
 }
 

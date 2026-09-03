@@ -173,6 +173,11 @@ describe('serviceListLine', () => {
     expect(serviceListLine({ type: 'postgres', name: 'db', status: 'active', id: 'svc_pg', pg_version: null })).not.toContain('pg ')
     expect(serviceListLine({ type: 'storage', name: 'assets', status: 'active', id: 'svc_s3', pg_version: 16 })).not.toContain('pg 16')
   })
+  it('omits the badge when pg_version is not an integer (the API JSON is untyped on the wire)', () => {
+    for (const bad of [true, '16', 16.4, NaN, {}] as unknown[]) {
+      expect(serviceListLine({ type: 'postgres', name: 'db', status: 'active', id: 'svc_pg', pg_version: bad as number })).not.toContain('pg ')
+    }
+  })
   it('renders a compute row with the running image when present', () => {
     const line = serviceListLine({ type: 'compute', name: 'api', status: 'active', id: 'svc_1', machine_count: 1, image: 'ghcr.io/acme/api:latest', port: 8080 })
     expect(line).toBe('compute/api  [active]  x1  running ghcr.io/acme/api:latest:8080  svc_1')
