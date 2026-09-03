@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   assertType, assertServiceName, parseCount, parsePort, parseAccess, resolveServiceId, resolveComputeServiceId, SERVICE_TYPES,
-  servicesAddRequestBody, servicesAdd, serviceListLine,
+  servicesAddRequestBody, servicesAdd, serviceListLine, serviceAddedLine,
 } from '../src/commands/services.js'
 
 describe('assertType', () => {
@@ -160,6 +160,18 @@ describe('servicesAdd validation (throws before any network/config access)', () 
   })
   it('rejects an unknown service type before any option checks', async () => {
     await expect(servicesAdd('lambda', 'x', {})).rejects.toThrow(/postgres\|storage\|compute/)
+  })
+})
+
+describe('serviceAddedLine', () => {
+  it('carries the Postgres major next to the connect hint for a postgres service', () => {
+    expect(serviceAddedLine('postgres', 'db', 'main', { id: 'svc_pg', type: 'postgres', region: 'us-east', domain: 'db.example.test', pg_version: 16 }))
+      .toBe('added postgres service db on main (svc_pg)  us-east  pg 16 — db.example.test')
+  })
+  it('never badges a non-postgres service, and omits the badge when the platform sent no major', () => {
+    expect(serviceAddedLine('storage', 'assets', undefined, { id: 'svc_s3', type: 'storage', public: false, pg_version: 16 }))
+      .toBe('added storage service assets on default (svc_s3)  [private]')
+    expect(serviceAddedLine('postgres', 'db', 'main', { id: 'svc_pg', type: 'postgres', pg_version: null })).not.toContain('pg ')
   })
 })
 

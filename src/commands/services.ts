@@ -121,12 +121,7 @@ export async function servicesAdd(type: string, name: string, opts: ServicesAddO
   if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson(res.body.service)
   const svc = res.body.service
-  const access = svc.type === 'storage' ? `  [${svc.public ? 'public' : 'private'}]` : ''
-  const img = svc.image ? `  running ${svc.image}${svc.port ? `:${svc.port}` : ''}` : ''
-  const vol = svc.volume_gib ? `  vol ${svc.volume_gib}Gi at /data` : ''
-  // The major belongs next to the connect hint: it decides which psql/pg_dump to reach for.
-  const pg = svc.type === 'postgres' ? pgBadge(svc.pg_version) : ''
-  info(`added ${type} service ${name} on ${branch ?? 'default'} (${svc.id})${access}${svc.region ? `  ${svc.region}` : ''}${img}${vol}${pg}${svc.domain ? ` — ${svc.domain}` : ''}`)
+  info(serviceAddedLine(type, name, branch, svc))
   // Discoverability: the DB is directly dialable, but its DSN is deliberately absent from the
   // general `insta secrets` bundle — without this line nothing in the product says how to reach it.
   if (type === 'postgres') {
@@ -136,6 +131,17 @@ export async function servicesAdd(type: string, name: string, opts: ServicesAddO
     info(`  connect: \`insta db url${flags}\` prints the connection string, \`insta db connect${flags}\` opens psql (--group optional with a single postgres service)`)
   }
   renderNextActions(res.body.nextActions)
+}
+
+// The `services add` success line. Pure, so the badge's placement is unit-tested: a template string
+// nothing asserts on silently loses a segment.
+export function serviceAddedLine(type: string, name: string, branch: string | undefined, svc: { id: string; type: string; public?: boolean; image?: string; port?: number; volume_gib?: number | null; region?: string; domain?: string; pg_version?: number | null }): string {
+  const access = svc.type === 'storage' ? `  [${svc.public ? 'public' : 'private'}]` : ''
+  const img = svc.image ? `  running ${svc.image}${svc.port ? `:${svc.port}` : ''}` : ''
+  const vol = svc.volume_gib ? `  vol ${svc.volume_gib}Gi at /data` : ''
+  // The major belongs next to the connect hint: it decides which psql/pg_dump to reach for.
+  const pg = svc.type === 'postgres' ? pgBadge(svc.pg_version) : ''
+  return `added ${type} service ${name} on ${branch ?? 'default'} (${svc.id})${access}${svc.region ? `  ${svc.region}` : ''}${img}${vol}${pg}${svc.domain ? ` — ${svc.domain}` : ''}`
 }
 
 // `  pg <major>` for a postgres row, or '' when the platform sent nothing usable. The field arrives
