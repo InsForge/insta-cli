@@ -277,9 +277,14 @@ describe('trackCommand', () => {
     expect(await readState(idFile)).toEqual({ anonymousId: first, identifiedAs: 'user_1' })
     expect((await run(loggedIn, 'org list')).map((e) => e.event)).toEqual(['cli_command'])
 
+    // another account signs in over this one: a fresh id is merged, never the one user_1 already owns
+    const switched = await run({ ...loggedIn, user: { id: 'user_2', email: null, name: null } }, 'login')
+    expect(switched[1]!.properties.$anon_distinct_id).not.toBe(first)
+    expect(await readState(idFile)).toEqual({ anonymousId: switched[1]!.properties.$anon_distinct_id, identifiedAs: 'user_2' })
+
     // logout or `env use`: the next command runs under a fresh id
     const [after] = await run({ apiUrl: PROD }, 'env use')
-    expect(after!.distinct_id).not.toBe(first)
+    expect(after!.distinct_id).not.toBe(switched[1]!.properties.$anon_distinct_id)
     expect(await readState(idFile)).toEqual({ anonymousId: after!.distinct_id })
   })
 
