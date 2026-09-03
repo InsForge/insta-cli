@@ -1,4 +1,5 @@
 import { ApiClient, requireProject } from '../api.js'
+import { pgBadge } from './services.js'
 import { info, printJson } from '../util.js'
 
 // A resource row as the platform's project-detail read returns it.
@@ -10,7 +11,9 @@ export type ManifestResource = {
   name?: string | null
   branchId?: string | null
   status?: string
-  ref?: { url?: string; bucket?: string; neonProjectId?: string } | null
+  // pgVersion: the Postgres MAJOR a database row runs (root and branch rows alike); absent on
+  // older platforms and on legacy rows that never recorded one.
+  ref?: { url?: string; bucket?: string; neonProjectId?: string; pgVersion?: number } | null
 }
 
 /**
@@ -35,7 +38,9 @@ export function resourceLabel(r: ManifestResource): string {
 // One `manifest` resource line. Pure, so the label is unit-tested without a network mock.
 export function resourceLine(r: ManifestResource): string {
   const where = r.ref?.url ?? r.ref?.bucket ?? r.ref?.neonProjectId ?? ''
-  return `    - ${resourceLabel(r)}  ${where}  [${r.status}]`
+  // Database rows only: the platform stamps ref.pgVersion on insta-db (and legacy neon) resources.
+  const pg = r.kind === 'insta-db' || r.kind === 'neon' ? pgBadge(r.ref?.pgVersion) : ''
+  return `    - ${resourceLabel(r)}  ${where}${pg}  [${r.status}]`
 }
 
 // Agent-legible view of each environment's databases / storage / compute.

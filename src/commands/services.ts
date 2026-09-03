@@ -121,10 +121,7 @@ export async function servicesAdd(type: string, name: string, opts: ServicesAddO
   if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson(res.body.service)
   const svc = res.body.service
-  const access = svc.type === 'storage' ? `  [${svc.public ? 'public' : 'private'}]` : ''
-  const img = svc.image ? `  running ${svc.image}${svc.port ? `:${svc.port}` : ''}` : ''
-  const vol = svc.volume_gib ? `  vol ${svc.volume_gib}Gi at /data` : ''
-  info(`added ${type} service ${name} on ${branch ?? 'default'} (${svc.id})${access}${svc.region ? `  ${svc.region}` : ''}${img}${vol}${svc.domain ? ` — ${svc.domain}` : ''}`)
+  info(serviceAddedLine(type, name, branch, svc))
   // Discoverability: the DB is directly dialable, but its DSN is deliberately absent from the
   // general `insta secrets` bundle — without this line nothing in the product says how to reach it.
   if (type === 'postgres') {
@@ -136,13 +133,34 @@ export async function servicesAdd(type: string, name: string, opts: ServicesAddO
   renderNextActions(res.body.nextActions)
 }
 
+// The `services add` success line. Pure, so the badge's placement is unit-tested: a template string
+// nothing asserts on silently loses a segment.
+export function serviceAddedLine(type: string, name: string, branch: string | undefined, svc: { id: string; type: string; public?: boolean; image?: string; port?: number; volume_gib?: number | null; region?: string; domain?: string; pg_version?: number | null }): string {
+  const access = svc.type === 'storage' ? `  [${svc.public ? 'public' : 'private'}]` : ''
+  const img = svc.image ? `  running ${svc.image}${svc.port ? `:${svc.port}` : ''}` : ''
+  const vol = svc.volume_gib ? `  vol ${svc.volume_gib}Gi at /data` : ''
+  // The major belongs next to the connect hint: it decides which psql/pg_dump to reach for.
+  const pg = svc.type === 'postgres' ? pgBadge(svc.pg_version) : ''
+  return `added ${type} service ${name} on ${branch ?? 'default'} (${svc.id})${access}${svc.region ? `  ${svc.region}` : ''}${img}${vol}${pg}${svc.domain ? ` — ${svc.domain}` : ''}`
+}
+
+// `  pg <major>` for a postgres row, or '' when the platform sent nothing usable. The field arrives
+// as untyped API JSON: only a positive integer renders, so a malformed or nonsense value (true,
+// '16', 16.4, 0, -1) can never print as a version an agent would pick tooling by.
+export function pgBadge(v: unknown): string {
+  return typeof v === 'number' && Number.isInteger(v) && v > 0 ? `  pg ${v}` : ''
+}
+
 // Render one `services list` row. Pure, so it's unit-tested without a network mock (mirrors
 // billingLines in billing.ts). Compute rows show the running image when the platform reports one.
-export function serviceListLine(s: { type: string; name: string; status: string; id: string; domain?: string; machine_count?: number; public?: boolean; image?: string; port?: number; volume_gib?: number | null }): string {
+export function serviceListLine(s: { type: string; name: string; status: string; id: string; domain?: string; machine_count?: number; public?: boolean; image?: string; port?: number; volume_gib?: number | null; pg_version?: number | null }): string {
   const extra = s.type === 'compute'
     ? `  x${s.machine_count}${s.volume_gib ? `  vol ${s.volume_gib}Gi` : ''}${s.image ? `  running ${s.image}${s.port ? `:${s.port}` : ''}` : ''}`
     : ['redis', 'mysql', 'mongodb'].includes(s.type) ? `  tcp/${s.port ?? defaultDatabasePort(s.type)}${s.volume_gib ? `  vol ${s.volume_gib}Gi` : ''}`
-      : s.type === 'storage' ? `  ${s.public ? 'public' : 'private'}` : ''
+      : s.type === 'storage' ? `  ${s.public ? 'public' : 'private'}`
+        // Postgres major, so the reader picks matching pg_dump/psql BEFORE connecting (a newer client
+        // dumps statements an older server cannot restore). Older platforms send no pg_version.
+        : s.type === 'postgres' ? pgBadge(s.pg_version) : ''
   return `${s.type}/${s.name}  [${s.status}]${extra}${s.domain ? `  ${s.domain}` : ''}  ${s.id}`
 }
 

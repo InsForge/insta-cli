@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   assertType, assertServiceName, parseCount, parsePort, parseAccess, resolveServiceId, resolveComputeServiceId, SERVICE_TYPES,
-  servicesAddRequestBody, servicesAdd, serviceListLine,
+  servicesAddRequestBody, servicesAdd, serviceListLine, serviceAddedLine,
 } from '../src/commands/services.js'
 
 describe('assertType', () => {
@@ -163,7 +163,33 @@ describe('servicesAdd validation (throws before any network/config access)', () 
   })
 })
 
+describe('serviceAddedLine', () => {
+  it('carries the Postgres major next to the connect hint for a postgres service', () => {
+    expect(serviceAddedLine('postgres', 'db', 'main', { id: 'svc_pg', type: 'postgres', region: 'us-east', domain: 'db.example.test', pg_version: 16 }))
+      .toBe('added postgres service db on main (svc_pg)  us-east  pg 16 — db.example.test')
+  })
+  it('never badges a non-postgres service, and omits the badge when the platform sent no major', () => {
+    expect(serviceAddedLine('storage', 'assets', undefined, { id: 'svc_s3', type: 'storage', public: false, pg_version: 16 }))
+      .toBe('added storage service assets on default (svc_s3)  [private]')
+    expect(serviceAddedLine('postgres', 'db', 'main', { id: 'svc_pg', type: 'postgres', pg_version: null })).not.toContain('pg ')
+  })
+})
+
 describe('serviceListLine', () => {
+  it('shows the Postgres major on a postgres row, so the reader picks matching client tooling', () => {
+    const line = serviceListLine({ type: 'postgres', name: 'db', status: 'active', id: 'svc_pg', domain: 'db.example.test', pg_version: 16 })
+    expect(line).toContain('pg 16')
+    expect(line).toContain('db.example.test')
+  })
+  it('omits the badge when the platform sent no pg_version (older platform, legacy row)', () => {
+    expect(serviceListLine({ type: 'postgres', name: 'db', status: 'active', id: 'svc_pg', pg_version: null })).not.toContain('pg ')
+    expect(serviceListLine({ type: 'storage', name: 'assets', status: 'active', id: 'svc_s3', pg_version: 16 })).not.toContain('pg 16')
+  })
+  it('omits the badge when pg_version is not a positive integer (the API JSON is untyped on the wire)', () => {
+    for (const bad of [true, '16', 16.4, NaN, {}, 0, -1] as unknown[]) {
+      expect(serviceListLine({ type: 'postgres', name: 'db', status: 'active', id: 'svc_pg', pg_version: bad as number })).not.toContain('pg ')
+    }
+  })
   it('renders a compute row with the running image when present', () => {
     const line = serviceListLine({ type: 'compute', name: 'api', status: 'active', id: 'svc_1', machine_count: 1, image: 'ghcr.io/acme/api:latest', port: 8080 })
     expect(line).toBe('compute/api  [active]  x1  running ghcr.io/acme/api:latest:8080  svc_1')
