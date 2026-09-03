@@ -138,11 +138,14 @@ export async function servicesAdd(type: string, name: string, opts: ServicesAddO
 
 // Render one `services list` row. Pure, so it's unit-tested without a network mock (mirrors
 // billingLines in billing.ts). Compute rows show the running image when the platform reports one.
-export function serviceListLine(s: { type: string; name: string; status: string; id: string; domain?: string; machine_count?: number; public?: boolean; image?: string; port?: number; volume_gib?: number | null }): string {
+export function serviceListLine(s: { type: string; name: string; status: string; id: string; domain?: string; machine_count?: number; public?: boolean; image?: string; port?: number; volume_gib?: number | null; pg_version?: number | null }): string {
   const extra = s.type === 'compute'
     ? `  x${s.machine_count}${s.volume_gib ? `  vol ${s.volume_gib}Gi` : ''}${s.image ? `  running ${s.image}${s.port ? `:${s.port}` : ''}` : ''}`
     : ['redis', 'mysql', 'mongodb'].includes(s.type) ? `  tcp/${s.port ?? defaultDatabasePort(s.type)}${s.volume_gib ? `  vol ${s.volume_gib}Gi` : ''}`
-      : s.type === 'storage' ? `  ${s.public ? 'public' : 'private'}` : ''
+      : s.type === 'storage' ? `  ${s.public ? 'public' : 'private'}`
+        // Postgres major, so the reader picks matching pg_dump/psql BEFORE connecting (a newer client
+        // dumps statements an older server cannot restore). Older platforms send no pg_version.
+        : s.type === 'postgres' && s.pg_version ? `  pg ${s.pg_version}` : ''
   return `${s.type}/${s.name}  [${s.status}]${extra}${s.domain ? `  ${s.domain}` : ''}  ${s.id}`
 }
 

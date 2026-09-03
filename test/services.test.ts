@@ -164,6 +164,15 @@ describe('servicesAdd validation (throws before any network/config access)', () 
 })
 
 describe('serviceListLine', () => {
+  it('shows the Postgres major on a postgres row, so the reader picks matching client tooling', () => {
+    const line = serviceListLine({ type: 'postgres', name: 'db', status: 'active', id: 'svc_pg', domain: 'db.example.test', pg_version: 16 })
+    expect(line).toContain('pg 16')
+    expect(line).toContain('db.example.test')
+  })
+  it('omits the badge when the platform sent no pg_version (older platform, legacy row)', () => {
+    expect(serviceListLine({ type: 'postgres', name: 'db', status: 'active', id: 'svc_pg', pg_version: null })).not.toContain('pg ')
+    expect(serviceListLine({ type: 'storage', name: 'assets', status: 'active', id: 'svc_s3', pg_version: 16 })).not.toContain('pg 16')
+  })
   it('renders a compute row with the running image when present', () => {
     const line = serviceListLine({ type: 'compute', name: 'api', status: 'active', id: 'svc_1', machine_count: 1, image: 'ghcr.io/acme/api:latest', port: 8080 })
     expect(line).toBe('compute/api  [active]  x1  running ghcr.io/acme/api:latest:8080  svc_1')

@@ -48,6 +48,10 @@ describe('resourceLabel', () => {
 })
 
 describe('resourceLine', () => {
+  it('names the Postgres major on a database row when the platform sends one', () => {
+    expect(resourceLine({ kind: 'insta-db', name: 'db', status: 'active', ref: { pgVersion: 16 } })).toBe('    - insta-db(db)    pg 16  [active]')
+    expect(resourceLine({ kind: 'insta-db', name: 'db', status: 'active', ref: {} })).toBe('    - insta-db(db)    [active]')
+  })
   it('renders the microvm row exactly as staging should have shown it', () => {
     expect(resourceLine({
       kind: 'fly', provider: 'microvm', name: 'api', status: 'active',
