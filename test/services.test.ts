@@ -173,7 +173,7 @@ describe('serviceListLine', () => {
     expect(serviceListLine({ type: 'postgres', name: 'db', status: 'active', id: 'svc_pg', pg_version: null })).not.toContain('pg ')
     expect(serviceListLine({ type: 'storage', name: 'assets', status: 'active', id: 'svc_s3', pg_version: 16 })).not.toContain('pg 16')
   })
-  it('omits the badge when pg_version is not an integer (the API JSON is untyped on the wire)', () => {
+  it('omits the badge when pg_version is not a positive integer (the API JSON is untyped on the wire)', () => {
     for (const bad of [true, '16', 16.4, NaN, {}, 0, -1] as unknown[]) {
       expect(serviceListLine({ type: 'postgres', name: 'db', status: 'active', id: 'svc_pg', pg_version: bad as number })).not.toContain('pg ')
     }
