@@ -38,7 +38,8 @@ export function resourceLabel(r: ManifestResource): string {
 // One `manifest` resource line. Pure, so the label is unit-tested without a network mock.
 export function resourceLine(r: ManifestResource): string {
   const where = r.ref?.url ?? r.ref?.bucket ?? r.ref?.neonProjectId ?? ''
-  const pg = pgBadge(r.ref?.pgVersion)
+  // Database rows only: the platform stamps ref.pgVersion on insta-db (and legacy neon) resources.
+  const pg = r.kind === 'insta-db' || r.kind === 'neon' ? pgBadge(r.ref?.pgVersion) : ''
   return `    - ${resourceLabel(r)}  ${where}${pg}  [${r.status}]`
 }
 
