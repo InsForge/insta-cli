@@ -1,4 +1,5 @@
 import { ApiClient, requireProject } from '../api.js'
+import { pgBadge } from './services.js'
 import { info, printJson } from '../util.js'
 
 // A resource row as the platform's project-detail read returns it.
@@ -37,8 +38,7 @@ export function resourceLabel(r: ManifestResource): string {
 // One `manifest` resource line. Pure, so the label is unit-tested without a network mock.
 export function resourceLine(r: ManifestResource): string {
   const where = r.ref?.url ?? r.ref?.bucket ?? r.ref?.neonProjectId ?? ''
-  // Integer-guarded: ref is untyped API JSON, and a malformed value must not render as a version.
-  const pg = Number.isInteger(r.ref?.pgVersion) ? `  pg ${r.ref?.pgVersion}` : ''
+  const pg = pgBadge(r.ref?.pgVersion)
   return `    - ${resourceLabel(r)}  ${where}${pg}  [${r.status}]`
 }
 

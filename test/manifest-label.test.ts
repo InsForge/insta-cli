@@ -53,7 +53,7 @@ describe('resourceLine', () => {
     expect(resourceLine({ kind: 'insta-db', name: 'db', status: 'active', ref: {} })).toBe('    - insta-db(db)    [active]')
   })
   it('omits the badge when ref.pgVersion is not an integer (untyped API JSON)', () => {
-    for (const bad of [true, '16', 16.4, NaN] as unknown[]) {
+    for (const bad of [true, '16', 16.4, NaN, 0, -1] as unknown[]) {
       expect(resourceLine({ kind: 'insta-db', name: 'db', status: 'active', ref: { pgVersion: bad as number } })).toBe('    - insta-db(db)    [active]')
     }
   })
