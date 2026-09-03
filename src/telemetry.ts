@@ -20,6 +20,7 @@ const PROJECT_KEYS: Record<EnvName, string> = {
 }
 // The send is awaited before the process exits, so it gets one bounded attempt and no retry.
 const SEND_TIMEOUT_MS = 1500
+const ID_FILE = join(os.homedir(), '.insta', 'telemetry.json')
 const REDACTED = '[REDACTED]'
 
 // Only ids, enums and numbers leave the machine, and only when the value has that shape; every other
@@ -170,6 +171,7 @@ export function buildCommandEvent(
       auth_kind: token ? (token.startsWith('insta_') ? 'api_key' : 'session') : null,
       project_id: ctx.project?.projectId ?? null,
       org_id: ctx.project?.orgId ?? null,
+      ...(ctx.project ? { $groups: { project: ctx.project.projectId, ...(ID(ctx.project.orgId) ? { org: ctx.project.orgId } : {}) } } : {}),
       tty: ctx.tty,
       ci: !!ctx.env.CI,
       agent: detectAgent(ctx.env),
@@ -181,17 +183,23 @@ export function buildCommandEvent(
   }
 }
 
-export async function anonymousId(file = join(os.homedir(), '.insta', 'telemetry.json')): Promise<string> {
+/** The pre-login id events are sent under, and the account it has been merged into, if any. */
+export type TelemetryState = { anonymousId: string; identifiedAs?: string }
+
+export async function readState(file = ID_FILE): Promise<TelemetryState> {
   try {
-    const parsed = JSON.parse(await readFile(file, 'utf8')) as { anonymousId?: unknown }
-    if (typeof parsed.anonymousId === 'string' && parsed.anonymousId) return parsed.anonymousId
+    const parsed = JSON.parse(await readFile(file, 'utf8')) as TelemetryState
+    if (typeof parsed.anonymousId === 'string' && parsed.anonymousId) return parsed
   } catch {}
-  const id = randomUUID()
+  return writeState({ anonymousId: randomUUID() }, file)
+}
+
+async function writeState(state: TelemetryState, file = ID_FILE): Promise<TelemetryState> {
   try {
     await mkdir(dirname(file), { recursive: true })
-    await writeFile(file, JSON.stringify({ anonymousId: id }, null, 2))
+    await writeFile(file, JSON.stringify(state, null, 2))
   } catch {}
-  return id
+  return state
 }
 
 export async function sendBatch(key: string, batch: object[], fetchImpl: typeof fetch = fetch): Promise<boolean> {
@@ -232,15 +240,23 @@ export async function trackCommand(cmd: Command, args: unknown[], outcome: Outco
     const key = telemetryKey(config.apiUrl)
     if (!key) return
     const project = await (deps.loadProject ?? readProject)()
+    const userId = config.user?.id
+    let state = await readState(deps.idFile)
+    // Session gone or switched: the id belongs to the account that left, so later commands get a fresh one.
+    if (state.identifiedAs && state.identifiedAs !== userId) state = await writeState({ anonymousId: randomUUID() }, deps.idFile)
     const event = buildCommandEvent(command, args.flat(), cmd.opts(), outcome, {
       cliVersion,
       channel: deps.channel ?? detectChannel(),
       config,
       project,
-      anonymousId: await anonymousId(deps.idFile),
+      anonymousId: state.anonymousId,
       env,
       tty: deps.tty ?? !!process.stdout.isTTY,
     })
-    await sendBatch(key, [event], deps.fetchImpl)
+    const batch: object[] = [event]
+    const merge = userId !== undefined && state.identifiedAs !== userId
+    if (merge) batch.push({ event: '$identify', distinct_id: userId, timestamp: event.timestamp, properties: { $anon_distinct_id: state.anonymousId } })
+    const sent = await sendBatch(key, batch, deps.fetchImpl)
+    if (merge && sent) await writeState({ ...state, identifiedAs: userId }, deps.idFile)
   } catch {}
 }

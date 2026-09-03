@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 import { ApiError } from '../src/api.js'
 import type { GlobalConfig } from '../src/config.js'
 import {
-  anonymousId, buildCommandEvent, commandPath, detectAgent, redactArgs, redactOptions,
+  buildCommandEvent, commandPath, detectAgent, readState, redactArgs, redactOptions,
   sendBatch, telemetryDisabled, telemetryKey, trackCommand, POSTHOG_HOST,
 } from '../src/telemetry.js'
 import { CliCancel, die } from '../src/util.js'
@@ -131,9 +131,12 @@ describe('buildCommandEvent', () => {
     expect(e.properties).toMatchObject({
       command: 'deploy', args: ['[REDACTED]'], options: { json: true }, success: false, cancelled: false, exit_code: 2,
       duration_ms: 900, env: 'prod', api_host: 'api.instacloud.com', logged_in: true, auth_kind: 'api_key',
-      project_id: 'p1', org_id: 'o1', ci: true, agent: 'claude-code', cli_version: '1.2.3', channel: 'npm',
+      project_id: 'p1', org_id: 'o1', $groups: { org: 'o1', project: 'p1' }, ci: true, agent: 'claude-code', cli_version: '1.2.3', channel: 'npm',
     })
     expect(e.properties).not.toHaveProperty('branch')
+    expect(buildCommandEvent('org list', [], {}, { durationMs: 1, exitCode: 0 }, ctx(loggedIn)).properties).not.toHaveProperty('$groups')
+    const envOnly = buildCommandEvent('deploy', [], {}, { durationMs: 1, exitCode: 0 }, ctx(loggedIn, { project: { projectId: 'p1', orgId: '', branch: 'main' } }))
+    expect(envOnly.properties.$groups).toEqual({ project: 'p1' })
     const s = buildCommandEvent('status', [], {}, { durationMs: 1, exitCode: 0 }, ctx({ apiUrl: CUSTOM, accessToken: 'eyJsession' }))
     expect(s.properties).toMatchObject({ env: 'custom', api_host: 'localhost:4800', auth_kind: 'session', success: true })
     expect(buildCommandEvent('status', [], {}, { durationMs: 1, exitCode: 0 }, ctx(anon)).properties.auth_kind).toBeNull()
@@ -176,12 +179,12 @@ describe('buildCommandEvent', () => {
   })
 })
 
-describe('anonymousId', () => {
-  it('mints once and reuses', async () => {
+describe('readState', () => {
+  it('mints an anonymous id once and reuses it', async () => {
     const file = join(await mkdtemp(join(tmpdir(), 'insta-telemetry-')), 'nested', 'telemetry.json')
-    const first = await anonymousId(file)
+    const { anonymousId: first } = await readState(file)
     expect(first).toMatch(/^[0-9a-f-]{36}$/)
-    expect(await anonymousId(file)).toBe(first)
+    expect(await readState(file)).toEqual({ anonymousId: first })
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ anonymousId: first })
   })
 })
@@ -254,6 +257,35 @@ describe('trackCommand', () => {
     const toProd = login(); toProd.setOptionValue('env', 'prod')
     await trackCommand(toProd, [], { durationMs: 1, exitCode: 0 }, '1.0.0', same)
     expect(same.calls[0]!.body.batch[0].distinct_id).toBe('user_1')
+  })
+
+  it('merges the anonymous id into whichever session appears, once, and retires it when the session goes', async () => {
+    const idFile = join(await mkdtemp(join(tmpdir(), 'insta-telemetry-')), 'telemetry.json')
+    const run = async (config: GlobalConfig, name: string, status = 200) => {
+      const d = { ...(await deps(config)), ...fakeFetch(status), idFile }
+      await trackCommand(new Command('insta').command(name), [], { durationMs: 1, exitCode: 0 }, '1.0.0', d)
+      return d.calls[0]!.body.batch as Array<{ event: string; distinct_id: string; properties: Record<string, unknown> }>
+    }
+    const { anonymousId: first } = await readState(idFile)
+    expect((await run(anon, 'org list')).map((e) => e.event)).toEqual(['cli_command'])
+
+    // PostHog never got the merge: keep offering it until it lands.
+    expect((await run(loggedIn, 'setup agent', 500)).map((e) => e.event)).toEqual(['cli_command', '$identify'])
+    expect(await readState(idFile)).toEqual({ anonymousId: first })
+    const merged = await run(loggedIn, 'status')
+    expect(merged[1]).toMatchObject({ event: '$identify', distinct_id: 'user_1', properties: { $anon_distinct_id: first } })
+    expect(await readState(idFile)).toEqual({ anonymousId: first, identifiedAs: 'user_1' })
+    expect((await run(loggedIn, 'org list')).map((e) => e.event)).toEqual(['cli_command'])
+
+    // another account signs in over this one: a fresh id is merged, never the one user_1 already owns
+    const switched = await run({ ...loggedIn, user: { id: 'user_2', email: null, name: null } }, 'login')
+    expect(switched[1]!.properties.$anon_distinct_id).not.toBe(first)
+    expect(await readState(idFile)).toEqual({ anonymousId: switched[1]!.properties.$anon_distinct_id, identifiedAs: 'user_2' })
+
+    // logout or `env use`: the next command runs under a fresh id
+    const [after] = await run({ apiUrl: PROD }, 'env use')
+    expect(after!.distinct_id).not.toBe(switched[1]!.properties.$anon_distinct_id)
+    expect(await readState(idFile)).toEqual({ anonymousId: after!.distinct_id })
   })
 
   it('never throws, even when the config cannot be read', async () => {
