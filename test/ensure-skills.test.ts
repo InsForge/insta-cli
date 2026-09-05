@@ -76,6 +76,19 @@ test('when every skill add fails nothing was written, so nothing is gitignored a
   expect(out.join('\n')).not.toMatch(/\.gitignore \+=/)
 })
 
+test('an offline run still prints the git rm --cached hint: tracked files are independent of today\'s adds', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'insta-'))
+  const git = (...args: string[]) => spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: dir })
+  expect(git('init', '-q').status).toBe(0)
+  writeFileSync(join(dir, 'skills-lock.json'), '{}\n')
+  expect(git('add', '-f', 'skills-lock.json').status).toBe(0)
+  expect(git('commit', '-q', '-m', 'oops').status).toBe(0)
+  const out: string[] = []
+  await installSkills({ cwd: dir, run: async () => ({ ok: false }), print: (s) => out.push(s) })
+  expect(out.join('\n')).toMatch(/git rm -r --cached skills-lock\.json/)
+  expect(out.join('\n')).not.toMatch(/\.gitignore \+=/) // the ignore entries still wait for a successful add
+})
+
 test('skills already committed before the CLI ignored them get the git rm --cached hint', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'insta-'))
   const git = (...args: string[]) => spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: dir })

@@ -86,12 +86,15 @@ function claudeEntry(): Group {
 // a fresh clone with no ./.insta anywhere above is a silent no-op. The script must stay free of
 // characters either shell rewrites inside double quotes: `$` and backticks (sh), `%` and `!`
 // (cmd.exe), and `"` (both). Codex has each user trust the entry before it runs, so shareable is safe.
+// Exit code: the hook's own status when it ran; 0 when it could not be started or was killed
+// (status null) — every other arm of this install is silent best-effort, and Codex reports any
+// non-zero exit as a failed hook after EVERY tool call, which is worse than a missed audit line.
 const CODEX_HOOK_SCRIPT = [
   "const f=require('fs'),p=require('path'),c=require('child_process');",
   'let d=process.cwd();',
   'for(;;){',
   "const h=p.join(d,'.insta/observe/hook.js');",
-  "if(f.existsSync(h)){const r=c.spawnSync(process.execPath,[h],{stdio:'inherit'});process.exitCode=r.status===null?1:r.status;break}",
+  "if(f.existsSync(h)){const r=c.spawnSync(process.execPath,[h],{stdio:'inherit'});process.exitCode=r.status===null?0:r.status;break}",
   'const u=p.dirname(d);if(u===d)break;d=u}',
 ].join('')
 

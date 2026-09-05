@@ -102,13 +102,15 @@ export async function installSkills(deps: Deps): Promise<void> {
       if (r.ok) installed++
       print(r.ok ? `  ${s.label} ✓` : `  ${s.label} failed — add manually: npx ${s.args.join(' ')}`)
     }
-    // Only when something was actually written: an offline run that failed every add has no
-    // skill dirs or lock to ignore, and a `.gitignore +=` line there would claim otherwise.
+    // The already-tracked hint is independent of this run: a repo that committed the skill dirs
+    // or the lock months ago needs the `git rm --cached` line whether or not today's adds worked.
+    const hint = untrackHint(alreadyTracked(deps.cwd, SKILL_DIRS))
+    if (hint) print(hint)
+    // The ignore entries only when something was actually written: an offline run that failed
+    // every add has no new skill dirs or lock, and a `.gitignore +=` line would claim otherwise.
     if (installed === 0) return
     const added = ensureGitignore(deps.cwd, SKILL_DIRS, GITIGNORE_COMMENT)
     if (added.length) print(`  .gitignore += ${added.join(', ')}`)
-    const hint = untrackHint(alreadyTracked(deps.cwd, SKILL_DIRS))
-    if (hint) print(hint)
   } catch {
     /* best-effort convenience — never block the host command */
   }
