@@ -5,13 +5,17 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { installObserve, uninstallObserve } from '../observe/install.js'
 import { untrackHint } from '../gitignore.js'
+import { findProjectRoot } from '../config.js'
 import { renderReport } from '../observe/report.js'
 import { ApiClient, requireProject } from '../api.js'
 import { info, printJson } from '../util.js'
 
+// The audit lives at the linked project root (where the hook is materialized), so report/sync
+// work from any subdirectory of the project, like every other project-scoped command.
 async function readAudit(): Promise<Array<Record<string, unknown>>> {
   try {
-    const txt = await readFile(join(process.cwd(), '.insta', 'audit.jsonl'), 'utf8')
+    const root = (await findProjectRoot()) ?? process.cwd()
+    const txt = await readFile(join(root, '.insta', 'audit.jsonl'), 'utf8')
     return txt.split('\n').filter(Boolean).map((l) => JSON.parse(l))
   } catch {
     return []

@@ -3,11 +3,16 @@
 // ${CLAUDE_PROJECT_DIR} template — nothing expands it, so node threw MODULE_NOT_FOUND after EVERY
 // tool call in every linked project. Found live (user report, 2026-07-12).
 import { test, expect } from 'vitest'
-import { mkdtempSync, readFileSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { installObserve } from '../src/observe/install.js'
+import { projectRootFor } from '../src/observe/hook.js'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const posixTest = process.platform === 'win32' ? test.skip : test
 
@@ -74,6 +79,46 @@ test('codex hook climbs to the insta root from a nested monorepo project and pas
   const atRoot = runHook(cmd, root)
   expect(atRoot.status).toBe(0)
   expect(atRoot.stdout.toString() + atRoot.stderr.toString()).toBe('')
+})
+
+// Finding the right hook.js is only half of it: the hook must also WRITE to that project root.
+// It used to record into `CLAUDE_PROJECT_DIR || event.cwd`, and Codex's event.cwd is the session
+// cwd — so a session started in apps/api/src/routes ran apps/api/.insta/observe/hook.js but left
+// an unignored apps/api/src/routes/.insta/audit.jsonl behind (review of #178, round 2). Now the
+// hook derives the root from its own entry path (<root>/.insta/observe/hook.js).
+test('projectRootFor: the materialized entry path wins; env / event cwd are only fallbacks', () => {
+  const root = join(tmpdir(), 'proj')
+  expect(projectRootFor(join(root, '.insta', 'observe', 'hook.js'), { CLAUDE_PROJECT_DIR: '/elsewhere' }, '/session'))
+    .toBe(root)
+  expect(projectRootFor('/somewhere/else/hook.js', { CLAUDE_PROJECT_DIR: '/claude' }, '/session')).toBe('/claude')
+  expect(projectRootFor('/somewhere/else/hook.js', {}, '/session')).toBe('/session')
+  expect(projectRootFor(undefined, {}, undefined)).toBe('.')
+})
+
+// End to end with the REAL hook source (loaded through tsx via NODE_OPTIONS so no build step is
+// needed): the generated Codex command, run from a nested session cwd with a Codex-shaped event
+// carrying a credential, must append to <project root>/.insta/audit.jsonl and nothing else.
+test('codex command from a nested session cwd records findings at the linked project root', () => {
+  const mono = realpathSync(mkdtempSync(join(tmpdir(), 'obs-mono-')))
+  const project = join(mono, 'apps', 'api')
+  mkdirSync(project, { recursive: true })
+  installObserve({ cwd: project, assetDir: fakeAssets() })
+  // materialized entry → the real hook's main(), so process.argv[1] is <project>/.insta/observe/hook.js
+  const hookSrc = pathToFileURL(resolve(__dirname, '..', 'src', 'observe', 'hook.ts')).href
+  writeFileSync(join(project, '.insta', 'observe', 'hook.js'), `import { main } from ${JSON.stringify(hookSrc)}\nmain()\n`)
+  const tsxLoader = pathToFileURL(createRequire(import.meta.url).resolve('tsx/esm')).href
+  const session = join(project, 'src', 'routes')
+  mkdirSync(session, { recursive: true })
+  const event = JSON.stringify({ tool_name: 'Bash', cwd: session, tool_input: { command: 'psql postgres://user:secretpass@db:5432/app' } })
+  const r = spawnSync(codexCommand(project), { cwd: session, shell: true, input: event,
+    env: { ...process.env, NODE_OPTIONS: `--import ${tsxLoader}`, CLAUDE_PROJECT_DIR: '' } })
+  expect(r.stderr.toString()).toBe('')
+  expect(r.status).toBe(0)
+  const audit = join(project, '.insta', 'audit.jsonl')
+  expect(existsSync(audit)).toBe(true)
+  expect(readFileSync(audit, 'utf8')).toMatch(/"fingerprint":/)
+  expect(readFileSync(audit, 'utf8')).not.toContain('secretpass') // redacted, never raw
+  expect(existsSync(join(session, '.insta'))).toBe(false) // nothing written at the session cwd
 })
 
 test('codex hook is a silent no-op on a fresh clone with no ./.insta anywhere above', () => {
