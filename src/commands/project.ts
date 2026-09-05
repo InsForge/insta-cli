@@ -3,6 +3,7 @@ import { ApiClient, requireProject } from '../api.js'
 import { writeProject } from '../config.js'
 import { info, die, printJson, handleApproval, renderNextActions } from '../util.js'
 import { installObserve } from '../observe/install.js'
+import { untrackHint } from '../gitignore.js'
 import { installSkills } from '../ensure-skills.js'
 
 // Generic directory names that make a useless project name ("projects", "~", "tmp", …). When the
@@ -19,10 +20,11 @@ const GENERIC_DIRS = new Set([
 function tryInstallObserve(quiet = false): void {
   try {
     const r = installObserve({ cwd: process.cwd() })
-    if (r.claude || r.codex) {
-      const line = '  installed observe hook (credential audit) → ./.insta/observe'
-      quiet ? process.stderr.write(line + '\n') : info(line)
-    }
+    const say = (line: string) => (quiet ? process.stderr.write(line + '\n') : info(line))
+    if (r.claude || r.codex) say('  installed observe hook (credential audit) → ./.insta/observe')
+    if (r.ignored.length) say(`  .gitignore += ${r.ignored.join(', ')}`)
+    const hint = untrackHint(r.tracked)
+    if (hint) say(hint)
   } catch { /* assets missing (dev/unbuilt) — skip silently */ }
 }
 

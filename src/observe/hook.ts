@@ -1,7 +1,7 @@
 // PostToolUse hook: reads a tool-use event on stdin (Claude Code / Codex), scans every string
 // surface for credential exposure, and appends findings to ./.insta/audit.jsonl. Ported from firth.
 import { appendFileSync, mkdirSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { scanEvent, type ToolEvent } from './scanner.js'
 
@@ -34,10 +34,23 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8')
 }
 
+// Where findings go. The materialized hook lives at <project root>/.insta/observe/hook.js, so its
+// own entry path names the linked project root — the one directory whose .insta/audit.jsonl is
+// gitignored and that `insta observe report` reads. Anything else (the harness's project-dir env,
+// the event cwd) is only a guess: Codex passes the SESSION cwd, which in a monorepo can be a
+// subdirectory of the project, and writing there would leave an unignored audit log behind.
+export function projectRootFor(entry: string | undefined, env: NodeJS.ProcessEnv, eventCwd: string | undefined): string {
+  if (entry) {
+    const dir = resolve(dirname(entry))
+    if (basename(dir) === 'observe' && basename(dirname(dir)) === '.insta') return dirname(dirname(dir))
+  }
+  return env.CLAUDE_PROJECT_DIR || eventCwd || '.'
+}
+
 export async function main(): Promise<void> {
   let event: ToolEvent
   try { event = JSON.parse(await readStdin()) } catch { process.exit(0) }
-  const base = process.env.CLAUDE_PROJECT_DIR || (event.cwd as string) || '.'
+  const base = projectRootFor(process.argv[1], process.env, event.cwd as string | undefined)
   try { recordFindings(event, base) } catch (e) { process.stderr.write(`insta-observe: ${e instanceof Error ? e.message : e}\n`) }
   process.exit(0)
 }

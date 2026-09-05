@@ -3,13 +3,170 @@
 // ${CLAUDE_PROJECT_DIR} template — nothing expands it, so node threw MODULE_NOT_FOUND after EVERY
 // tool call in every linked project. Found live (user report, 2026-07-12).
 import { test, expect } from 'vitest'
-import { mkdtempSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { installObserve } from '../src/observe/install.js'
+import { projectRootFor } from '../src/observe/hook.js'
+import { auditRoot } from '../src/commands/observe.js'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const posixTest = process.platform === 'win32' ? test.skip : test
+
+// The install materializes ./.insta/observe (this CLI version's hook, regenerated on every link)
+// and the hook appends ./.insta/audit.jsonl (this machine's findings: partial fingerprints +
+// redacted context). Neither is project source; both used to be left for the user to discover in
+// `git status` (user report, 2026-09-04). ./.insta/project.json is the team binding and must NOT
+// be caught by these entries.
+test('install gitignores the machine-local .insta state but not project.json, idempotently', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'obs-proj-'))
+  writeFileSync(join(cwd, '.gitignore'), 'node_modules\n')
+  const first = installObserve({ cwd, assetDir: fakeAssets() })
+  expect(first.ignored).toEqual(['.insta/observe/', '.insta/audit.jsonl'])
+  const gi = readFileSync(join(cwd, '.gitignore'), 'utf8')
+  expect(gi).toMatch(/^node_modules$/m) // existing content preserved
+  expect(gi).toMatch(/^\.insta\/observe\/$/m)
+  expect(gi).toMatch(/^\.insta\/audit\.jsonl$/m)
+  expect(gi).not.toMatch(/^\.insta\/?$/m) // never the whole dir: project.json stays committable
+  expect(installObserve({ cwd, assetDir: fakeAssets() }).ignored).toEqual([]) // re-link adds nothing
+})
+
+// Codex has no $CLAUDE_PROJECT_DIR, so the installer used to bake the absolute project path into
+// .codex/hooks.json — a file teams commit — which shipped /Users/<author>/… to every clone and
+// failed there after every tool call. The replacement must ALSO survive two things a first cut
+// got wrong (review of #178): a monorepo where the insta project root is below the git root
+// (`git rev-parse --show-toplevel` finds the wrong dir → hook silently dead), and Windows, where
+// Codex hands `command` verbatim to cmd.exe unless a `commandWindows` override exists (POSIX
+// `[ ! -f … ]` → parse error after every tool call). So: one shell-neutral `node -e` that climbs
+// from the session cwd. These tests run the command through the platform shell (`shell: true` →
+// sh on POSIX, cmd.exe on Windows), so the Windows CI job exercises the real thing.
+const codexCommand = (cwd: string): string =>
+  JSON.parse(readFileSync(join(cwd, '.codex', 'hooks.json'), 'utf8')).hooks.PostToolUse.at(-1).hooks[0].command
+const runHook = (cmd: string, cwd: string, input = '{}') => spawnSync(cmd, { cwd, shell: true, input })
+
+test('codex hook entry is shell-neutral: no absolute path, no POSIX syntax, nothing sh or cmd.exe rewrites', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'obs-proj-'))
+  installObserve({ cwd, assetDir: fakeAssets() })
+  const cmd = codexCommand(cwd)
+  expect(cmd).not.toContain(cwd)
+  expect(cmd).toMatch(/^node -e "[^"]+"$/) // one double-quoted script, no inner quotes
+  expect(cmd).not.toMatch(/[$`%!]/) // $ and ` expand in sh; % and ! in cmd.exe
+  expect(cmd).not.toContain('[ ') // no test(1)
+  expect(cmd).toContain('.insta/observe/hook.js') // keeps the legacy-entry marker isInstaHook keys on
+})
+
+test('codex hook climbs to the insta root from a nested monorepo project and passes stdin through', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'obs-mono-')))
+  expect(spawnSync('git', ['init', '-q'], { cwd: root }).status).toBe(0) // git root ≠ project root
+  const project = join(root, 'apps', 'api')
+  mkdirSync(project, { recursive: true })
+  installObserve({ cwd: project, assetDir: fakeAssets() })
+  writeFileSync(join(project, '.insta', 'observe', 'hook.js'),
+    "process.stdin.on('data', (d) => process.stdout.write('got:' + d))")
+  const cmd = codexCommand(project)
+  // from the project dir, and from a subdirectory of it (the session cwd is wherever Codex runs)
+  const sub = join(project, 'src', 'routes')
+  mkdirSync(sub, { recursive: true })
+  for (const dir of [project, sub]) {
+    const r = runHook(cmd, dir, '{"tool_name":"Bash"}')
+    expect(r.status).toBe(0)
+    expect(r.stdout.toString()).toBe('got:{"tool_name":"Bash"}')
+  }
+  // from the git root itself there is no .insta above → silent no-op, not an error
+  const atRoot = runHook(cmd, root)
+  expect(atRoot.status).toBe(0)
+  expect(atRoot.stdout.toString() + atRoot.stderr.toString()).toBe('')
+})
+
+// Finding the right hook.js is only half of it: the hook must also WRITE to that project root.
+// It used to record into `CLAUDE_PROJECT_DIR || event.cwd`, and Codex's event.cwd is the session
+// cwd — so a session started in apps/api/src/routes ran apps/api/.insta/observe/hook.js but left
+// an unignored apps/api/src/routes/.insta/audit.jsonl behind (review of #178, round 2). Now the
+// hook derives the root from its own entry path (<root>/.insta/observe/hook.js).
+test('projectRootFor: the materialized entry path wins; env / event cwd are only fallbacks', () => {
+  const root = join(tmpdir(), 'proj')
+  expect(projectRootFor(join(root, '.insta', 'observe', 'hook.js'), { CLAUDE_PROJECT_DIR: '/elsewhere' }, '/session'))
+    .toBe(root)
+  expect(projectRootFor('/somewhere/else/hook.js', { CLAUDE_PROJECT_DIR: '/claude' }, '/session')).toBe('/claude')
+  expect(projectRootFor('/somewhere/else/hook.js', {}, '/session')).toBe('/session')
+  expect(projectRootFor(undefined, {}, undefined)).toBe('.')
+})
+
+// End to end with the REAL hook source (loaded through tsx via NODE_OPTIONS so no build step is
+// needed): the generated Codex command, run from a nested session cwd with a Codex-shaped event
+// carrying a credential, must append to <project root>/.insta/audit.jsonl and nothing else.
+test('codex command from a nested session cwd records findings at the linked project root', () => {
+  const mono = realpathSync(mkdtempSync(join(tmpdir(), 'obs-mono-')))
+  const project = join(mono, 'apps', 'api')
+  mkdirSync(project, { recursive: true })
+  installObserve({ cwd: project, assetDir: fakeAssets() })
+  // materialized entry → the real hook's main(), so process.argv[1] is <project>/.insta/observe/hook.js
+  const hookSrc = pathToFileURL(resolve(__dirname, '..', 'src', 'observe', 'hook.ts')).href
+  writeFileSync(join(project, '.insta', 'observe', 'hook.js'), `import { main } from ${JSON.stringify(hookSrc)}\nmain()\n`)
+  const tsxLoader = pathToFileURL(createRequire(import.meta.url).resolve('tsx/esm')).href
+  const session = join(project, 'src', 'routes')
+  mkdirSync(session, { recursive: true })
+  const event = JSON.stringify({ tool_name: 'Bash', cwd: session, tool_input: { command: 'psql postgres://user:secretpass@db:5432/app' } })
+  const r = spawnSync(codexCommand(project), { cwd: session, shell: true, input: event,
+    env: { ...process.env, NODE_OPTIONS: `--import ${tsxLoader}`, CLAUDE_PROJECT_DIR: '' } })
+  expect(r.stderr.toString()).toBe('')
+  expect(r.status).toBe(0)
+  const audit = join(project, '.insta', 'audit.jsonl')
+  expect(existsSync(audit)).toBe(true)
+  expect(readFileSync(audit, 'utf8')).toMatch(/"fingerprint":/)
+  expect(readFileSync(audit, 'utf8')).not.toContain('secretpass') // redacted, never raw
+  expect(existsSync(join(session, '.insta'))).toBe(false) // nothing written at the session cwd
+})
+
+// The other half of "record at the project root": report/sync must READ from the same root the
+// hook writes to, from any subdirectory — anchored on the link file when there is one, else on
+// the materialized hook (a standalone `insta observe install` in an unlinked dir has no
+// project.json), else cwd.
+test('auditRoot: link file, else the materialized hook, else cwd — resolved from a subdirectory', async () => {
+  const linked = realpathSync(mkdtempSync(join(tmpdir(), 'obs-linked-')))
+  mkdirSync(join(linked, '.insta'), { recursive: true })
+  writeFileSync(join(linked, '.insta', 'project.json'), '{"projectId":"p","orgId":"o","branch":"main"}')
+  mkdirSync(join(linked, 'src', 'routes'), { recursive: true })
+  expect(await auditRoot(join(linked, 'src', 'routes'))).toBe(linked)
+
+  const unlinked = realpathSync(mkdtempSync(join(tmpdir(), 'obs-unlinked-')))
+  installObserve({ cwd: unlinked, assetDir: fakeAssets() }) // hook materialized, no project.json
+  mkdirSync(join(unlinked, 'src', 'routes'), { recursive: true })
+  expect(await auditRoot(join(unlinked, 'src', 'routes'))).toBe(unlinked)
+
+  const bare = realpathSync(mkdtempSync(join(tmpdir(), 'obs-bare-')))
+  expect(await auditRoot(bare)).toBe(bare)
+})
+
+test('codex hook is a silent no-op on a fresh clone with no ./.insta anywhere above', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'obs-proj-'))
+  installObserve({ cwd, assetDir: fakeAssets() })
+  const bare = mkdtempSync(join(tmpdir(), 'obs-clone-'))
+  const r = runHook(codexCommand(cwd), bare)
+  expect(r.status).toBe(0)
+  expect(r.stdout.toString() + r.stderr.toString()).toBe('')
+})
+
+// A .gitignore entry does nothing for a path git already tracks — and the repos that most need
+// these entries are the ones where audit.jsonl was committed before the CLI ignored it. The
+// install reports those so the command can print the `git rm --cached` hint.
+posixTest('install reports LOCAL_PATHS entries git already tracks', () => {
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'obs-proj-')))
+  const git = (...args: string[]) => spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd })
+  expect(git('init', '-q').status).toBe(0)
+  mkdirSync(join(cwd, '.insta'), { recursive: true })
+  writeFileSync(join(cwd, '.insta', 'audit.jsonl'), '{}\n')
+  expect(git('add', '-f', '.insta/audit.jsonl').status).toBe(0) // -f: immune to a global excludes file
+  expect(git('commit', '-q', '-m', 'oops').status).toBe(0)
+  const r = installObserve({ cwd, assetDir: fakeAssets() })
+  expect(r.tracked).toEqual(['.insta/audit.jsonl']) // observe/ is untracked → not reported
+  const fresh = installObserve({ cwd: mkdtempSync(join(tmpdir(), 'obs-nogit-')), assetDir: fakeAssets() })
+  expect(fresh.tracked).toEqual([]) // not a repo → nothing to report, no error
+})
 
 function fakeAssets(): string {
   const d = mkdtempSync(join(tmpdir(), 'obs-assets-'))
