@@ -31,25 +31,75 @@ test('install gitignores the machine-local .insta state but not project.json, id
 
 // Codex has no $CLAUDE_PROJECT_DIR, so the installer used to bake the absolute project path into
 // .codex/hooks.json — a file teams commit — which shipped /Users/<author>/… to every clone and
-// failed there after every tool call. Codex runs project hooks with the project as cwd and its own
-// docs resolve repo-local scripts via `git rev-parse --show-toplevel`; use that, guarded like the
-// Claude entry, so the file is portable.
-posixTest('codex hook entry is portable (no absolute path), no-ops without ./.insta, runs from a subdir', () => {
-  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'obs-proj-')))
+// failed there after every tool call. The replacement must ALSO survive two things a first cut
+// got wrong (review of #178): a monorepo where the insta project root is below the git root
+// (`git rev-parse --show-toplevel` finds the wrong dir → hook silently dead), and Windows, where
+// Codex hands `command` verbatim to cmd.exe unless a `commandWindows` override exists (POSIX
+// `[ ! -f … ]` → parse error after every tool call). So: one shell-neutral `node -e` that climbs
+// from the session cwd. These tests run the command through the platform shell (`shell: true` →
+// sh on POSIX, cmd.exe on Windows), so the Windows CI job exercises the real thing.
+const codexCommand = (cwd: string): string =>
+  JSON.parse(readFileSync(join(cwd, '.codex', 'hooks.json'), 'utf8')).hooks.PostToolUse.at(-1).hooks[0].command
+const runHook = (cmd: string, cwd: string, input = '{}') => spawnSync(cmd, { cwd, shell: true, input })
+
+test('codex hook entry is shell-neutral: no absolute path, no POSIX syntax, nothing sh or cmd.exe rewrites', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'obs-proj-'))
   installObserve({ cwd, assetDir: fakeAssets() })
-  const hooks = JSON.parse(readFileSync(join(cwd, '.codex', 'hooks.json'), 'utf8'))
-  const cmd: string = hooks.hooks.PostToolUse.at(-1).hooks[0].command
+  const cmd = codexCommand(cwd)
   expect(cmd).not.toContain(cwd)
-  expect(cmd).toContain('git rev-parse --show-toplevel')
-  const run = (dir: string) => spawnSync('sh', ['-c', cmd], { cwd: dir })
-  const bare = mkdtempSync(join(tmpdir(), 'obs-clone-')) // fresh clone: no .insta → silent no-op
-  expect(run(bare).status).toBe(0)
-  expect(run(bare).stderr.toString()).toBe('')
-  // in a git repo, resolves from the toplevel even when the session cwd is a subdirectory
-  expect(spawnSync('git', ['init', '-q'], { cwd }).status).toBe(0)
-  mkdirSync(join(cwd, 'sub'))
-  writeFileSync(join(cwd, '.insta', 'observe', 'hook.js'), 'process.stdout.write("ran")')
-  expect(run(join(cwd, 'sub')).stdout.toString()).toBe('ran')
+  expect(cmd).toMatch(/^node -e "[^"]+"$/) // one double-quoted script, no inner quotes
+  expect(cmd).not.toMatch(/[$`%!]/) // $ and ` expand in sh; % and ! in cmd.exe
+  expect(cmd).not.toContain('[ ') // no test(1)
+  expect(cmd).toContain('.insta/observe/hook.js') // keeps the legacy-entry marker isInstaHook keys on
+})
+
+test('codex hook climbs to the insta root from a nested monorepo project and passes stdin through', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'obs-mono-')))
+  expect(spawnSync('git', ['init', '-q'], { cwd: root }).status).toBe(0) // git root ≠ project root
+  const project = join(root, 'apps', 'api')
+  mkdirSync(project, { recursive: true })
+  installObserve({ cwd: project, assetDir: fakeAssets() })
+  writeFileSync(join(project, '.insta', 'observe', 'hook.js'),
+    "process.stdin.on('data', (d) => process.stdout.write('got:' + d))")
+  const cmd = codexCommand(project)
+  // from the project dir, and from a subdirectory of it (the session cwd is wherever Codex runs)
+  const sub = join(project, 'src', 'routes')
+  mkdirSync(sub, { recursive: true })
+  for (const dir of [project, sub]) {
+    const r = runHook(cmd, dir, '{"tool_name":"Bash"}')
+    expect(r.status).toBe(0)
+    expect(r.stdout.toString()).toBe('got:{"tool_name":"Bash"}')
+  }
+  // from the git root itself there is no .insta above → silent no-op, not an error
+  const atRoot = runHook(cmd, root)
+  expect(atRoot.status).toBe(0)
+  expect(atRoot.stdout.toString() + atRoot.stderr.toString()).toBe('')
+})
+
+test('codex hook is a silent no-op on a fresh clone with no ./.insta anywhere above', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'obs-proj-'))
+  installObserve({ cwd, assetDir: fakeAssets() })
+  const bare = mkdtempSync(join(tmpdir(), 'obs-clone-'))
+  const r = runHook(codexCommand(cwd), bare)
+  expect(r.status).toBe(0)
+  expect(r.stdout.toString() + r.stderr.toString()).toBe('')
+})
+
+// A .gitignore entry does nothing for a path git already tracks — and the repos that most need
+// these entries are the ones where audit.jsonl was committed before the CLI ignored it. The
+// install reports those so the command can print the `git rm --cached` hint.
+posixTest('install reports LOCAL_PATHS entries git already tracks', () => {
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'obs-proj-')))
+  const git = (...args: string[]) => spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd })
+  expect(git('init', '-q').status).toBe(0)
+  mkdirSync(join(cwd, '.insta'), { recursive: true })
+  writeFileSync(join(cwd, '.insta', 'audit.jsonl'), '{}\n')
+  expect(git('add', '-f', '.insta/audit.jsonl').status).toBe(0) // -f: immune to a global excludes file
+  expect(git('commit', '-q', '-m', 'oops').status).toBe(0)
+  const r = installObserve({ cwd, assetDir: fakeAssets() })
+  expect(r.tracked).toEqual(['.insta/audit.jsonl']) // observe/ is untracked → not reported
+  const fresh = installObserve({ cwd: mkdtempSync(join(tmpdir(), 'obs-nogit-')), assetDir: fakeAssets() })
+  expect(fresh.tracked).toEqual([]) // not a repo → nothing to report, no error
 })
 
 function fakeAssets(): string {

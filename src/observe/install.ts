@@ -3,7 +3,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ensureGitignore } from '../gitignore.js'
+import { alreadyTracked, ensureGitignore } from '../gitignore.js'
 
 const MARKER = 'insta-observe'
 
@@ -73,28 +73,55 @@ function claudeEntry(): Group {
   return { matcher: '*', hooks: [{ type: 'command',
     command: `[ ! -f ${hook} ] || node ${hook}`, timeout: 15, _insta: MARKER }] }
 }
+// The Codex hook command. Constraints that rule out every simpler form:
+//  - no absolute path: it made .codex/hooks.json machine-specific (a teammate committing it shipped
+//    /Users/<author>/… to every clone, where node failed after each tool call);
+//  - not `git rev-parse --show-toplevel`: the insta project root is wherever `project link` ran,
+//    which in a monorepo is below the git root (`findProjectRoot` climbs for .insta/project.json
+//    for exactly that reason), so the hook would silently never fire there;
+//  - no POSIX shell syntax: with no `commandWindows` override Codex hands `command` verbatim to
+//    cmd.exe on Windows, where `[ ! -f … ]` / `$(…)` are parse errors — after every tool call.
+// So: one shell-neutral `node -e` that climbs from the session cwd (Codex runs project hooks with
+// the project as cwd) to the nearest .insta/observe/hook.js and runs it with stdin passed through;
+// a fresh clone with no ./.insta anywhere above is a silent no-op. The script must stay free of
+// characters either shell rewrites inside double quotes: `$` and backticks (sh), `%` and `!`
+// (cmd.exe), and `"` (both). Codex has each user trust the entry before it runs, so shareable is safe.
+const CODEX_HOOK_SCRIPT = [
+  "const f=require('fs'),p=require('path'),c=require('child_process');",
+  'let d=process.cwd();',
+  'for(;;){',
+  "const h=p.join(d,'.insta/observe/hook.js');",
+  "if(f.existsSync(h)){const r=c.spawnSync(process.execPath,[h],{stdio:'inherit'});process.exitCode=r.status===null?1:r.status;break}",
+  'const u=p.dirname(d);if(u===d)break;d=u}',
+].join('')
+
 function codexEntry(): Group {
-  // Codex runs project hooks with the session cwd (the project) as working directory and has no
-  // $CLAUDE_PROJECT_DIR; its own docs resolve repo-local scripts via `git rev-parse --show-toplevel`.
-  // Same guard as the Claude entry so a fresh clone without ./.insta no-ops. No absolute path:
-  // an absolute one made .codex/hooks.json machine-specific (a teammate committing it shipped
-  // /Users/<you>/… to everyone) — this form is shareable, and Codex has each user trust it first.
-  const hook = '"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.insta/observe/hook.js"'
   return { matcher: '*', hooks: [{ type: 'command',
-    command: `[ ! -f ${hook} ] || node ${hook}`, timeout: 15, _insta: MARKER }] }
+    command: `node -e "${CODEX_HOOK_SCRIPT}"`, timeout: 15, _insta: MARKER }] }
 }
 
-export function installObserve(opts: { cwd: string; assetDir?: string }): { claude: boolean; codex: boolean; ignored: string[] } {
+export type ObserveInstall = {
+  claude: boolean
+  codex: boolean
+  /** .gitignore entries added by this call (empty on a re-link). */
+  ignored: string[]
+  /** LOCAL_PATHS entries git already tracks — an ignore entry can't help those; see `untrackHint`. */
+  tracked: string[]
+}
+
+export function installObserve(opts: { cwd: string; assetDir?: string }): ObserveInstall {
   materialize(opts.cwd, opts.assetDir ?? DEFAULT_ASSET_DIR) // hook required → let a missing asset throw to the caller
   // Ignore the local state in the same step that creates it, so nobody discovers it via
   // `git status`. Best-effort: an unwritable .gitignore must not fail the hook install.
+  // (Uninstall deliberately leaves the entries: a stale audit.jsonl should stay ignored.)
   let ignored: string[] = []
   try { ignored = ensureGitignore(opts.cwd, LOCAL_PATHS, GITIGNORE_COMMENT) } catch { /* keep going */ }
+  const tracked = alreadyTracked(opts.cwd, LOCAL_PATHS)
   let claude = false
   let codex = false
   try { registerHarness(join(opts.cwd, '.claude', 'settings.json'), claudeEntry()); claude = true } catch { /* skip malformed */ }
   try { registerHarness(join(opts.cwd, '.codex', 'hooks.json'), codexEntry()); codex = true } catch { /* skip malformed */ }
-  return { claude, codex, ignored }
+  return { claude, codex, ignored, tracked }
 }
 
 export function uninstallObserve(cwd: string): void {

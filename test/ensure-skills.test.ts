@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, test } from 'vitest'
@@ -65,6 +66,28 @@ test('a failed skill add still continues to the rest and reports the failure', a
   await installSkills({ cwd: dir, run, print: (s) => out.push(s) })
   expect(out.join('\n')).toMatch(/tigris failed — add manually: npx -y skills add tigrisdata\/skills/)
   expect(out.join('\n')).toMatch(/better-auth ✓/) // reached the skill after the failure
+})
+
+test('when every skill add fails nothing was written, so nothing is gitignored and no += line is printed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'insta-'))
+  const out: string[] = []
+  await installSkills({ cwd: dir, run: async () => ({ ok: false }), print: (s) => out.push(s) })
+  expect(existsSync(join(dir, '.gitignore'))).toBe(false)
+  expect(out.join('\n')).not.toMatch(/\.gitignore \+=/)
+})
+
+test('skills already committed before the CLI ignored them get the git rm --cached hint', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'insta-'))
+  const git = (...args: string[]) => spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: dir })
+  expect(git('init', '-q').status).toBe(0)
+  writeFileSync(join(dir, 'skills-lock.json'), '{}\n')
+  mkdirSync(join(dir, '.claude', 'skills', 'insta'), { recursive: true })
+  writeFileSync(join(dir, '.claude', 'skills', 'insta', 'SKILL.md'), '# insta\n')
+  expect(git('add', '-f', '-A').status).toBe(0) // -f: a global excludes file must not blank the test
+  expect(git('commit', '-q', '-m', 'oops').status).toBe(0)
+  const out: string[] = []
+  await installSkills({ cwd: dir, run: fakeRun().run, print: (s) => out.push(s) })
+  expect(out.join('\n')).toMatch(/git rm -r --cached \.claude\/skills\/ skills-lock\.json/)
 })
 
 test('ensureGitignore appends missing entries idempotently, preserving existing content', async () => {

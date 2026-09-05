@@ -4,6 +4,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { installObserve, uninstallObserve } from '../observe/install.js'
+import { untrackHint } from '../gitignore.js'
 import { renderReport } from '../observe/report.js'
 import { ApiClient, requireProject } from '../api.js'
 import { info, printJson } from '../util.js'
@@ -29,6 +30,8 @@ export async function observeInstall(): Promise<void> {
   const res = installObserve({ cwd: process.cwd() })
   info(`installed observe hook (claude: ${res.claude}, codex: ${res.codex}) → ./.insta/observe`)
   if (res.ignored.length) info(`  .gitignore += ${res.ignored.join(', ')}`)
+  const hint = untrackHint(res.tracked)
+  if (hint) info(hint)
   info('it scans agent tool-use for credential exposure; findings append to ./.insta/audit.jsonl')
   info('run `insta observe report` to review, `insta observe sync` to upload to the project timeline')
 }

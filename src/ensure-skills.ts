@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process'
 import { resolveEnv } from './config.js'
 import { resolveSpawnable } from './commands/setup.js'
 import { DEFAULT_ENV, ENVS } from './env.js'
-import { ensureGitignore } from './gitignore.js'
+import { alreadyTracked, ensureGitignore, untrackHint } from './gitignore.js'
 
 export { ensureGitignore } from './gitignore.js'
 
@@ -92,16 +92,23 @@ export async function installSkills(deps: Deps): Promise<void> {
       targets = skillTargets(skills)
     } catch { /* keep production defaults */ }
     print('  installing related agent skills (insta, tigris, better-auth) …')
+    let installed = 0
     for (const s of targets) {
       // Don't stream: the `skills` tool's clack UI (clone spinner, banners) is noise. Run it
       // silent (stdio 'ignore') and let the per-skill ✓/failed line below be the clean output —
       // it appears as each skill finishes, so there's still live progress. (Also avoids the
       // child inheriting a piped stdin.)
       const r = await run('npx', s.args)
+      if (r.ok) installed++
       print(r.ok ? `  ${s.label} ✓` : `  ${s.label} failed — add manually: npx ${s.args.join(' ')}`)
     }
+    // Only when something was actually written: an offline run that failed every add has no
+    // skill dirs or lock to ignore, and a `.gitignore +=` line there would claim otherwise.
+    if (installed === 0) return
     const added = ensureGitignore(deps.cwd, SKILL_DIRS, GITIGNORE_COMMENT)
     if (added.length) print(`  .gitignore += ${added.join(', ')}`)
+    const hint = untrackHint(alreadyTracked(deps.cwd, SKILL_DIRS))
+    if (hint) print(hint)
   } catch {
     /* best-effort convenience — never block the host command */
   }
