@@ -28,6 +28,7 @@ function* chunk<T>(a: T[], n: number): Generator<T[]> {
 export async function observeInstall(): Promise<void> {
   const res = installObserve({ cwd: process.cwd() })
   info(`installed observe hook (claude: ${res.claude}, codex: ${res.codex}) → ./.insta/observe`)
+  if (res.ignored.length) info(`  .gitignore += ${res.ignored.join(', ')}`)
   info('it scans agent tool-use for credential exposure; findings append to ./.insta/audit.jsonl')
   info('run `insta observe report` to review, `insta observe sync` to upload to the project timeline')
 }

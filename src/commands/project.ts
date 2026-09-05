@@ -19,10 +19,9 @@ const GENERIC_DIRS = new Set([
 function tryInstallObserve(quiet = false): void {
   try {
     const r = installObserve({ cwd: process.cwd() })
-    if (r.claude || r.codex) {
-      const line = '  installed observe hook (credential audit) → ./.insta/observe'
-      quiet ? process.stderr.write(line + '\n') : info(line)
-    }
+    const say = (line: string) => (quiet ? process.stderr.write(line + '\n') : info(line))
+    if (r.claude || r.codex) say('  installed observe hook (credential audit) → ./.insta/observe')
+    if (r.ignored.length) say(`  .gitignore += ${r.ignored.join(', ')}`)
   } catch { /* assets missing (dev/unbuilt) — skip silently */ }
 }
 

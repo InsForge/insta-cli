@@ -3,13 +3,54 @@
 // ${CLAUDE_PROJECT_DIR} template — nothing expands it, so node threw MODULE_NOT_FOUND after EVERY
 // tool call in every linked project. Found live (user report, 2026-07-12).
 import { test, expect } from 'vitest'
-import { mkdtempSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { installObserve } from '../src/observe/install.js'
 
 const posixTest = process.platform === 'win32' ? test.skip : test
+
+// The install materializes ./.insta/observe (this CLI version's hook, regenerated on every link)
+// and the hook appends ./.insta/audit.jsonl (this machine's findings: partial fingerprints +
+// redacted context). Neither is project source; both used to be left for the user to discover in
+// `git status` (user report, 2026-09-04). ./.insta/project.json is the team binding and must NOT
+// be caught by these entries.
+test('install gitignores the machine-local .insta state but not project.json, idempotently', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'obs-proj-'))
+  writeFileSync(join(cwd, '.gitignore'), 'node_modules\n')
+  const first = installObserve({ cwd, assetDir: fakeAssets() })
+  expect(first.ignored).toEqual(['.insta/observe/', '.insta/audit.jsonl'])
+  const gi = readFileSync(join(cwd, '.gitignore'), 'utf8')
+  expect(gi).toMatch(/^node_modules$/m) // existing content preserved
+  expect(gi).toMatch(/^\.insta\/observe\/$/m)
+  expect(gi).toMatch(/^\.insta\/audit\.jsonl$/m)
+  expect(gi).not.toMatch(/^\.insta\/?$/m) // never the whole dir: project.json stays committable
+  expect(installObserve({ cwd, assetDir: fakeAssets() }).ignored).toEqual([]) // re-link adds nothing
+})
+
+// Codex has no $CLAUDE_PROJECT_DIR, so the installer used to bake the absolute project path into
+// .codex/hooks.json — a file teams commit — which shipped /Users/<author>/… to every clone and
+// failed there after every tool call. Codex runs project hooks with the project as cwd and its own
+// docs resolve repo-local scripts via `git rev-parse --show-toplevel`; use that, guarded like the
+// Claude entry, so the file is portable.
+posixTest('codex hook entry is portable (no absolute path), no-ops without ./.insta, runs from a subdir', () => {
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'obs-proj-')))
+  installObserve({ cwd, assetDir: fakeAssets() })
+  const hooks = JSON.parse(readFileSync(join(cwd, '.codex', 'hooks.json'), 'utf8'))
+  const cmd: string = hooks.hooks.PostToolUse.at(-1).hooks[0].command
+  expect(cmd).not.toContain(cwd)
+  expect(cmd).toContain('git rev-parse --show-toplevel')
+  const run = (dir: string) => spawnSync('sh', ['-c', cmd], { cwd: dir })
+  const bare = mkdtempSync(join(tmpdir(), 'obs-clone-')) // fresh clone: no .insta → silent no-op
+  expect(run(bare).status).toBe(0)
+  expect(run(bare).stderr.toString()).toBe('')
+  // in a git repo, resolves from the toplevel even when the session cwd is a subdirectory
+  expect(spawnSync('git', ['init', '-q'], { cwd }).status).toBe(0)
+  mkdirSync(join(cwd, 'sub'))
+  writeFileSync(join(cwd, '.insta', 'observe', 'hook.js'), 'process.stdout.write("ran")')
+  expect(run(join(cwd, 'sub')).stdout.toString()).toBe('ran')
+})
 
 function fakeAssets(): string {
   const d = mkdtempSync(join(tmpdir(), 'obs-assets-'))

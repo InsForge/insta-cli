@@ -52,6 +52,10 @@ test('installSkills adds insta + the service stack skills, non-interactively, an
   expect(gi).toMatch(/\.claude\/skills\//)
   expect(gi).toMatch(/\.agents\/skills\//)
   expect(gi).toMatch(/\.github\/skills\//)
+  // …and so is the skills-lock.json the tool writes at the project root: a lockfile whose payload
+  // is ignored (and which pins only a content hash, not our per-env source) is noise in `git status`.
+  expect(gi).toMatch(/^skills-lock\.json$/m)
+  expect(out.join('\n')).toMatch(/\.gitignore \+= .*skills-lock\.json/)
 })
 
 test('a failed skill add still continues to the rest and reports the failure', async () => {
@@ -72,4 +76,15 @@ test('ensureGitignore appends missing entries idempotently, preserving existing 
   expect(gi).toMatch(/^node_modules$/m)
   expect((gi.match(/^\.env$/gm) || []).length).toBe(1) // not duplicated
   expect(ensureGitignore(dir, ['.claude/skills/', '.env'])).toEqual([]) // re-run adds nothing
+})
+
+test('ensureGitignore writes its comment header once per block, and creates the file when absent', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'insta-'))
+  const c = '# InstaCloud: test block'
+  expect(ensureGitignore(dir, ['a/'], c)).toEqual(['a/']) // no .gitignore yet → created
+  expect(ensureGitignore(dir, ['a/', 'b'], c)).toEqual(['b']) // later addition under the same block
+  const gi = readFileSync(join(dir, '.gitignore'), 'utf8')
+  expect((gi.match(/^# InstaCloud: test block$/gm) || []).length).toBe(1) // header not repeated
+  expect(gi).toMatch(/^a\/$/m)
+  expect(gi).toMatch(/^b$/m)
 })

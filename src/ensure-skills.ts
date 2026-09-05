@@ -6,16 +6,21 @@
 // repo moved) prints a manual fallback and never blocks or fails the host command — same contract
 // as the observe-hook install.
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { resolveEnv } from './config.js'
 import { resolveSpawnable } from './commands/setup.js'
 import { DEFAULT_ENV, ENVS } from './env.js'
+import { ensureGitignore } from './gitignore.js'
+
+export { ensureGitignore } from './gitignore.js'
 
 // Where `npx skills add` drops skills for the agents we pin below: Claude Code → .claude/skills/,
-// Codex → .agents/skills/ (.github/skills/ is the third well-known dir). These are regenerable
-// agent context, not the developer's source — keep them out of git.
-const SKILL_DIRS = ['.claude/skills/', '.agents/skills/', '.github/skills/']
+// Codex → .agents/skills/ (.github/skills/ is the third well-known dir), plus the skills-lock.json
+// it writes at the project root. All regenerable agent context, not the developer's source — keep
+// them out of git. The lock goes too: its payload is already ignored, it pins only a content hash
+// (not the prod/staging source this CLI resolves per environment), and `insta project link` is
+// the restore path — so a committed lock would be a lockfile for nothing.
+const SKILL_DIRS = ['.claude/skills/', '.agents/skills/', '.github/skills/', 'skills-lock.json']
+const GITIGNORE_COMMENT = '# InstaCloud: agent skills installed by `npx skills add` (regenerable, not source)'
 
 export type Runner = (cmd: string, args: string[], inherit?: boolean) => Promise<{ ok: boolean }>
 
@@ -95,23 +100,9 @@ export async function installSkills(deps: Deps): Promise<void> {
       const r = await run('npx', s.args)
       print(r.ok ? `  ${s.label} ✓` : `  ${s.label} failed — add manually: npx ${s.args.join(' ')}`)
     }
-    const added = ensureGitignore(deps.cwd, SKILL_DIRS)
+    const added = ensureGitignore(deps.cwd, SKILL_DIRS, GITIGNORE_COMMENT)
     if (added.length) print(`  .gitignore += ${added.join(', ')}`)
   } catch {
     /* best-effort convenience — never block the host command */
   }
-}
-
-// Append any missing entries to the project's ./.gitignore (creating it if absent). Idempotent:
-// entries already present are left alone. Returns the entries it added.
-export function ensureGitignore(cwd: string, entries: string[]): string[] {
-  const p = join(cwd, '.gitignore')
-  const existing = existsSync(p) ? readFileSync(p, 'utf8') : ''
-  const have = new Set(existing.split('\n').map((l) => l.trim()))
-  const missing = entries.filter((e) => !have.has(e))
-  if (missing.length === 0) return []
-  const prefix = existing && !existing.endsWith('\n') ? '\n' : ''
-  const comment = '# InstaCloud: agent skills installed by `npx skills add` (regenerable, not source)'
-  writeFileSync(p, existing + `${prefix}\n${comment}\n${missing.join('\n')}\n`)
-  return missing
 }
