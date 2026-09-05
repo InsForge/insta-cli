@@ -11,7 +11,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { installObserve } from '../src/observe/install.js'
 import { projectRootFor } from '../src/observe/hook.js'
-import { auditRoot } from '../src/commands/observe.js'
+import { auditRoot, installRoot } from '../src/commands/observe.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -123,15 +123,16 @@ test('codex command from a nested session cwd records findings at the linked pro
 })
 
 // The other half of "record at the project root": report/sync must READ from the same root the
-// hook writes to, from any subdirectory — anchored on the link file when there is one, else on
-// the materialized hook (a standalone `insta observe install` in an unlinked dir has no
-// project.json), else cwd.
-test('auditRoot: link file, else the materialized hook, else cwd — resolved from a subdirectory', async () => {
+// hook writes to, from any subdirectory. The hook writes at the NEAREST materialized hook above
+// the session cwd, so that is the anchor; the link file is only where the next install will
+// land (fallback), then cwd. The fourth case — link file and hook at different depths — is the
+// one where precedence is observable and was wrong (post-merge review of #178).
+test('auditRoot: nearest materialized hook, else link file, else cwd — resolved from a subdirectory', async () => {
   const linked = realpathSync(mkdtempSync(join(tmpdir(), 'obs-linked-')))
   mkdirSync(join(linked, '.insta'), { recursive: true })
   writeFileSync(join(linked, '.insta', 'project.json'), '{"projectId":"p","orgId":"o","branch":"main"}')
   mkdirSync(join(linked, 'src', 'routes'), { recursive: true })
-  expect(await auditRoot(join(linked, 'src', 'routes'))).toBe(linked)
+  expect(await auditRoot(join(linked, 'src', 'routes'))).toBe(linked) // link file only
 
   const unlinked = realpathSync(mkdtempSync(join(tmpdir(), 'obs-unlinked-')))
   installObserve({ cwd: unlinked, assetDir: fakeAssets() }) // hook materialized, no project.json
@@ -140,6 +141,30 @@ test('auditRoot: link file, else the materialized hook, else cwd — resolved fr
 
   const bare = realpathSync(mkdtempSync(join(tmpdir(), 'obs-bare-')))
   expect(await auditRoot(bare)).toBe(bare)
+
+  // link file at the repo root, hook materialized below it: the hook wins — that is where the
+  // Codex wrapper / Claude entry run and where projectRootFor writes
+  const mono = realpathSync(mkdtempSync(join(tmpdir(), 'obs-mono-')))
+  mkdirSync(join(mono, '.insta'), { recursive: true })
+  writeFileSync(join(mono, '.insta', 'project.json'), '{"projectId":"p","orgId":"o","branch":"main"}')
+  const project = join(mono, 'apps', 'api')
+  mkdirSync(join(project, 'src'), { recursive: true })
+  installObserve({ cwd: project, assetDir: fakeAssets() })
+  expect(await auditRoot(join(project, 'src'))).toBe(project)
+  expect(await auditRoot(mono)).toBe(mono) // above the hook, the link file still anchors
+})
+
+// And the installers no longer create that split in the first place: inside a linked project,
+// install anchors at the link root (like writeProject), so a re-link or `observe install` from a
+// subdirectory refreshes the project's hook instead of minting a second one.
+test('installRoot: the linked project root from a subdirectory, else cwd', async () => {
+  const linked = realpathSync(mkdtempSync(join(tmpdir(), 'obs-linked-')))
+  mkdirSync(join(linked, '.insta'), { recursive: true })
+  writeFileSync(join(linked, '.insta', 'project.json'), '{"projectId":"p","orgId":"o","branch":"main"}')
+  mkdirSync(join(linked, 'apps', 'api'), { recursive: true })
+  expect(await installRoot(join(linked, 'apps', 'api'))).toBe(linked)
+  const bare = realpathSync(mkdtempSync(join(tmpdir(), 'obs-bare-')))
+  expect(await installRoot(bare)).toBe(bare)
 })
 
 test('codex hook is a silent no-op on a fresh clone with no ./.insta anywhere above', () => {

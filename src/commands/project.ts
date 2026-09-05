@@ -3,6 +3,7 @@ import { ApiClient, requireProject } from '../api.js'
 import { writeProject } from '../config.js'
 import { info, die, printJson, handleApproval, renderNextActions } from '../util.js'
 import { installObserve } from '../observe/install.js'
+import { installRoot } from './observe.js'
 import { untrackHint } from '../gitignore.js'
 import { installSkills } from '../ensure-skills.js'
 
@@ -16,10 +17,12 @@ const GENERIC_DIRS = new Set([
 ])
 
 // Best-effort: wire the credential-audit hook into the project (no-op if assets aren't built).
+// Anchored at the linked project root (writeProject just updated it), not cwd: a re-link from a
+// subdirectory must refresh the project's hook, not mint a second one the readers never see.
 // quiet: with --json the install still runs, but its note moves to stderr (stdout is JSON-only).
-function tryInstallObserve(quiet = false): void {
+async function tryInstallObserve(quiet = false): Promise<void> {
   try {
-    const r = installObserve({ cwd: process.cwd() })
+    const r = installObserve({ cwd: await installRoot() })
     const say = (line: string) => (quiet ? process.stderr.write(line + '\n') : info(line))
     if (r.claude || r.codex) say('  installed observe hook (credential audit) → ./.insta/observe')
     if (r.ignored.length) say(`  .gitignore += ${r.ignored.join(', ')}`)
@@ -79,7 +82,7 @@ export async function projectCreate(name: string | undefined, opts: { org?: stri
     info(`  linked ./.insta/project.json (branch ${out.defaultBranch.name})`)
     renderNextActions(out.nextActions)
   }
-  tryInstallObserve(opts.json)
+  await tryInstallObserve(opts.json)
   await installSkills({ cwd: process.cwd(), print: skillsPrint(opts.json) })
 }
 
@@ -98,7 +101,7 @@ export async function projectLink(id: string, opts: { json?: boolean } = {}): Pr
   await writeProject({ projectId: project.id, orgId: project.org_id, branch: 'main' })
   if (opts.json) printJson({ project, linked: { projectId: project.id, orgId: project.org_id, branch: 'main' } })
   else info(`linked project ${project.id} (${project.name})`)
-  tryInstallObserve(opts.json)
+  await tryInstallObserve(opts.json)
   await installSkills({ cwd: process.cwd(), print: skillsPrint(opts.json) })
 }
 
