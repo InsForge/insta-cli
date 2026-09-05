@@ -1,8 +1,9 @@
 // `insta observe` — the local credential-audit hook. install wires a PostToolUse hook into the
 // agent harness; report renders the local audit; sync uploads findings into the project timeline
 // (idempotent via a stable dedup key, matching the platform's audit-event ingest).
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { installObserve, uninstallObserve } from '../observe/install.js'
 import { untrackHint } from '../gitignore.js'
 import { findProjectRoot } from '../config.js'
@@ -10,12 +11,26 @@ import { renderReport } from '../observe/report.js'
 import { ApiClient, requireProject } from '../api.js'
 import { info, printJson } from '../util.js'
 
-// The audit lives at the linked project root (where the hook is materialized), so report/sync
-// work from any subdirectory of the project, like every other project-scoped command.
+// Where the audit lives: the hook records at the directory it is materialized in
+// (<root>/.insta/observe/hook.js — see projectRootFor), so report/sync must anchor on the same
+// thing. The link file is the usual root, but a standalone `insta observe install` in an
+// unlinked directory has no project.json — climb for the hook itself then, so both halves agree
+// from any subdirectory. Falls back to cwd when neither exists (→ "audit log is empty").
+export async function auditRoot(cwd = process.cwd()): Promise<string> {
+  const linked = await findProjectRoot(cwd)
+  if (linked) return linked
+  let dir = resolve(cwd)
+  for (;;) {
+    if (existsSync(join(dir, '.insta', 'observe', 'hook.js'))) return dir
+    const parent = dirname(dir)
+    if (parent === dir) return cwd
+    dir = parent
+  }
+}
+
 async function readAudit(): Promise<Array<Record<string, unknown>>> {
   try {
-    const root = (await findProjectRoot()) ?? process.cwd()
-    const txt = await readFile(join(root, '.insta', 'audit.jsonl'), 'utf8')
+    const txt = await readFile(join(await auditRoot(), '.insta', 'audit.jsonl'), 'utf8')
     return txt.split('\n').filter(Boolean).map((l) => JSON.parse(l))
   } catch {
     return []
