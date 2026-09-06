@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { Command } from 'commander'
-import { ApiError } from './api.js'
+import { configureAgent, detectAgent } from './agent.js'
+import * as agentPolicy from './commands/agent-policy.js'
+import { ApiError, AgentApprovalRequired } from './api.js'
 import { CliCancel, CliExit, fail, relayedExitCode } from './util.js'
 import { trackCommand } from './telemetry.js'
 import { cliVersion } from './version.js'
@@ -33,6 +35,12 @@ import * as selfUpdate from './commands/upgrade.js'
 import * as feedbackCmd from './commands/feedback.js'
 
 function onError(e: unknown): void {
+  if (e instanceof AgentApprovalRequired) {
+    if (process.argv.includes('--json')) process.stdout.write(JSON.stringify(e.body) + '\n')
+    else process.stderr.write(e.message + '\n')
+    process.exitCode = 2
+    return
+  }
   if (e instanceof CliExit || e instanceof CliCancel) return
   if (e instanceof ApiError) return fail(`${e.message} (HTTP ${e.status})`)
   fail(e instanceof Error ? e.message : String(e))
@@ -59,6 +67,8 @@ const program = new Command()
 // against the subcommand's own (identically-named) option instead.
 program.enablePositionalOptions()
 program.name('insta').description('InstaCloud CLI — manage projects, branches, secrets, deploys').version(cliVersion())
+program.option('--agent', 'run as an agent with a verified project session and project agent policy')
+program.hook('preAction', () => configureAgent(detectAgent(!!program.opts().agent)))
 
 // ---- auth ----
 program.command('login').description('Log in — bare: sign in from your browser (any account type); or --email <email> + password, --oauth <github|google>, --device (headless), --api-key <insta_…> (headless, durable token)')
@@ -354,6 +364,16 @@ ob.command('report').description('Render the local credential audit').option('--
 ob.command('sync').description('Upload findings into the project timeline').action(guard(() => observe.observeSync()))
 
 // ---- policy ----
+const agentPol = program.command('agent-policy').description('Project agent access policy (separate from human governance)')
+agentPol.command('get').option('--json').action(guard((o) => agentPolicy.get(o)))
+agentPol.command('set <mode>').description('full-access | read-only | branch-developer')
+  .option('--json').action(guard((mode, o) => agentPolicy.set(mode, o)))
+agentPol.command('protect-branch <branch>').option('--json').action(guard((branch, o) => agentPolicy.protect(branch, true, o)))
+agentPol.command('unprotect-branch <branch>').option('--json').action(guard((branch, o) => agentPolicy.protect(branch, false, o)))
+agentPol.command('rule').command('set <action> <decision>').description('Set an unprotected-branch rule: allow | deny | approve')
+  .option('--json').action(guard((action, decision, o) => agentPolicy.rule(action, decision, o)))
+agentPol.command('revoke-sessions').description('Revoke ALL CLI agent sessions for this project')
+  .option('--json').action(guard((o) => agentPolicy.revoke(o)))
 const pol = program.command('policy').description('Governance policy')
 pol.command('get').option('--json').action(guard((o) => govern.policyGet(o)))
 pol.command('set <action> <decision>').description('action: secrets.read|secrets.write|deploy|project.delete|branch.delete|service.add|service.remove|service.scale|service.upgrade|service.setAccess|storage.read|storage.write|storage.delete; decision: allow|deny|approve').option('--json').action(guard((a, d, o) => govern.policySet(a, d, o)))

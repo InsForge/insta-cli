@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import os from 'node:os'
 import { createInterface } from 'node:readline'
 import { ApiClient } from '../api.js'
+import { setupProjectAgentSession } from '../agent.js'
 import { readPersistedGlobal, resolveEnv, type GlobalConfig } from '../config.js'
 import { DEFAULT_ENV, ENVS, ENV_NAMES, envForApiUrl, envFromEnvVar, isEnvName, mcpServerName, type EnvName } from '../env.js'
 import { info, openUrl } from '../util.js'
@@ -398,6 +399,7 @@ export async function setupAgent(
   },
   link: (id: string) => Promise<void> = projectLink,
   create: (name?: string) => Promise<void> = (n) => projectCreate(n, {}),
+  enroll: () => Promise<boolean> = async () => setupProjectAgentSession(await ApiClient.load()),
 ): Promise<void> {
   if (!opts.yes && !process.stdout.isTTY) {
     info('non-interactive shell — assuming -y')
@@ -484,6 +486,11 @@ export async function setupAgent(
         return
       }
     }
+  }
+  if (loggedIn) {
+    if (await enroll()) info('✓ Project agent session ready (expires in 24 hours; refresh with insta setup agent)')
+  } else {
+    info('  project agent session not created — run `insta login`, then `insta setup agent`')
   }
   // THE summary line. The restart note exists because config-file agents only read their MCP
   // config at startup; the skill files need no restart.

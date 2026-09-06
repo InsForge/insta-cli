@@ -431,6 +431,7 @@ function operandIndices(argv: string[], from: number, to: number = argv.length):
 function execCommandIndex(argv: string[]): number {
   for (let cursor = 2; cursor < argv.length; cursor++) {
     const token = argv[cursor]!
+    if (token === '--agent') continue
     if (token.startsWith('-')) return -1 // a global flag, or `--`: either way not our command path
     return token === 'compute' && argv[cursor + 1] === 'exec' ? cursor : -1
   }

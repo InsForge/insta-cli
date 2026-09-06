@@ -1,4 +1,5 @@
 import { homedir } from 'node:os'
+import { agentMode, setupProjectAgentSession } from '../agent.js'
 import { ApiClient, requireProject } from '../api.js'
 import { writeProject } from '../config.js'
 import { info, die, printJson, handleApproval, renderNextActions } from '../util.js'
@@ -74,6 +75,7 @@ export async function projectCreate(name: string | undefined, opts: { org?: stri
   const orgId = await resolveOrg(api, opts.org)
   const out = await api.request('POST', `/orgs/${orgId}/projects`, { name: resolved })
   await writeProject({ projectId: out.project.id, orgId, branch: out.defaultBranch.name })
+  if (agentMode()) await setupProjectAgentSession(api, out.project.id)
   if (opts.json) {
     printJson({ ...out, linked: { projectId: out.project.id, orgId, branch: out.defaultBranch.name } })
   } else {
@@ -97,6 +99,7 @@ export async function projectList(opts: { org?: string; json?: boolean }): Promi
 
 export async function projectLink(id: string, opts: { json?: boolean } = {}): Promise<void> {
   const api = await ApiClient.load()
+  if (agentMode()) await setupProjectAgentSession(api, id)
   const { project } = await api.request('GET', `/projects/${id}`)
   await writeProject({ projectId: project.id, orgId: project.org_id, branch: 'main' })
   if (opts.json) printJson({ project, linked: { projectId: project.id, orgId: project.org_id, branch: 'main' } })
