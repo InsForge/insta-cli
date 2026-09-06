@@ -116,7 +116,8 @@ describe('git runner', () => {
 
   it('captures stdout and a zero exit code', async () => {
     const r = await defaultGitRunner(['--version'], { timeoutMs: LS_REMOTE_TIMEOUT_MS })
-    expect(r.code).toBe(0)
+    // The message carries the whole result: a spawn that went wrong is unreadable from `code` alone.
+    expect(r.code, JSON.stringify(r)).toBe(0)
     expect(r.timedOut).toBe(false)
     expect(r.stdout).toMatch(/^git version/)
   })
@@ -141,7 +142,9 @@ describe('git runner', () => {
   // The real shape of the problem: git spawns ssh, ssh inherits the pipes, git dies, ssh does not.
   // Node's 'close' waits for the pipes, so a runner that waits for 'close' overshoots its budget.
   // Measured before the fix: child exited at 94ms, 'close' arrived at 5086ms.
-  it('returns on time even when a grandchild holds the pipes open', async () => {
+  // Windows only: a grandchild does not hold the parent's pipe handles the way POSIX does, so the
+  // condition this guards cannot be built there — the child simply exits and 'close' arrives early.
+  it.skipIf(process.platform === 'win32')('returns on time even when a grandchild holds the pipes open', async () => {
     // The child spawns its own long-lived child on the SAME stdout/stderr, then exits quickly.
     const parentSrc = `
       const { spawn } = require('node:child_process')

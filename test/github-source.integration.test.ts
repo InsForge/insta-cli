@@ -64,6 +64,13 @@ afterAll(() => { rmSync(root, { recursive: true, force: true }) })
 const headOf = (ref: string) => execFileSync('git', ['rev-parse', ref], { cwd: repo }).toString().trim()
 
 describe('fetchGitHubTemplate against a real repository', () => {
+  // First, because everything below is unreadable if the harness itself cannot run git: this one
+  // failing means the runner's spawn is wrong, not that a ref or a manifest is missing.
+  it('reaches the fixture repository over file://', async () => {
+    const r = await localRunner(['ls-remote', '--symref', 'https://github.com/acme/tpl.git'], { timeoutMs: 30_000 })
+    expect(`code=${r.code} timedOut=${r.timedOut} stdout=${r.stdout} stderr=${r.stderr}`).toContain('refs/heads/main')
+  })
+
   it('clones the default branch and reads the root manifest', async () => {
     const got = await fetchGitHubTemplate(TARGET(''), localRunner)
     expect(got.manifest.code).toBe('root-tpl')
