@@ -74,10 +74,15 @@ export function gitMissingMessage(): string {
 // git asks for nothing: no terminal credential prompt, no SSH host-key or passphrase prompt (an
 // insteadOf rewrite can send the clone over SSH). The environment stops it asking; only the
 // timeout stops it waiting.
-const NON_INTERACTIVE_ENV = {
-  GIT_TERMINAL_PROMPT: '0',
-  GIT_SSH_COMMAND: 'ssh -o BatchMode=yes',
-  GCM_INTERACTIVE: 'never',
+// GIT_SSH_COMMAND is EXTENDED, never replaced: a user's own `ssh -i <key>` IS how their private
+// repository authenticates, and overwriting it would drop the credentials this feature runs on.
+function nonInteractiveEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const ssh = env.GIT_SSH_COMMAND?.trim()
+  return {
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_SSH_COMMAND: ssh ? `${ssh} -o BatchMode=yes` : 'ssh -o BatchMode=yes',
+    GCM_INTERACTIVE: 'never',
+  }
 }
 
 // git spawns helpers (ssh, a credential manager) that inherit its pipes, so a timeout has to take
@@ -115,7 +120,7 @@ export function makeGitRunner(spawnFn: SpawnFn = nodeSpawn): GitRunner {
       // dies with `'C:\Program' is not recognized`. git ships a real git.exe, which spawn finds
       // through PATHEXT by itself; a `.cmd`-only git fails ENOENT, which reads as gitMissingMessage.
       const child = spawnFn('git', args, {
-        env: { ...process.env, ...NON_INTERACTIVE_ENV },
+        env: { ...process.env, ...nonInteractiveEnv() },
         stdio: ['ignore', 'pipe', 'pipe'],
         // Own process group on POSIX, so killTree can reach git's helpers.
         detached: process.platform !== 'win32',

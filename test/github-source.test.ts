@@ -196,6 +196,25 @@ describe('git runner', () => {
     expect(elapsed).toBeLessThan(8000)
   }, 40_000)
 
+  // A user's GIT_SSH_COMMAND carries the identity a private repo authenticates with (`ssh -i …`,
+  // or a wrapper). Replacing it would drop exactly the credentials this feature promises to use.
+  it('extends an existing GIT_SSH_COMMAND instead of replacing it', async () => {
+    const original = process.env.GIT_SSH_COMMAND
+    process.env.GIT_SSH_COMMAND = 'ssh -i /tmp/work_key'
+    try {
+      let seenEnv: Record<string, string> = {}
+      const spySpawn: SpawnFn = ((_cmd: string, _args: string[], opts: any) => {
+        seenEnv = opts.env
+        return spawn(process.execPath, ['-e', ''], opts)
+      }) as SpawnFn
+      await makeGitRunner(spySpawn)(['--version'], { timeoutMs: LS_REMOTE_TIMEOUT_MS })
+      expect(seenEnv.GIT_SSH_COMMAND).toBe('ssh -i /tmp/work_key -o BatchMode=yes')
+    } finally {
+      if (original === undefined) delete process.env.GIT_SSH_COMMAND
+      else process.env.GIT_SSH_COMMAND = original
+    }
+  })
+
   it('disables every git prompt through the child environment', async () => {
     let seenEnv: Record<string, string> = {}
     const spySpawn: SpawnFn = ((_cmd: string, _args: string[], opts: any) => {
