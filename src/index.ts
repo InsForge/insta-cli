@@ -296,12 +296,12 @@ storage.command('delete <key>').description('DELETES one object from the bucket 
   .option('--branch <b>', 'branch (default: current)').option('--json')
   .action(guard((key, o) => storageCmd.storageDelete(key, o)))
 
-// ---- templates (registry + local insta.template.yaml deploys) ----
-const tpl = program.command('template').description('Browse and deploy app templates (registry, or a local dir with insta.template.yaml)')
+// ---- templates (registry, local insta.template.yaml, or a GitHub URL) ----
+const tpl = program.command('template').description('Browse and deploy app templates (registry, a local dir, or a GitHub URL)')
 tpl.command('list').description('List templates in the platform registry').option('--json').action(guard((o) => template.templateList(o)))
 tpl.command('info <code>').description('Show a template: version, upstream pin, services, and its required/optional variables')
   .option('--json').action(guard((code, o) => template.templateInfo(code, o)))
-tpl.command('deploy <code-or-dir>').description('Deploy a template onto a branch — a registry code, or a local directory containing insta.template.yaml (a path-looking target is always read as a directory). Missing required variables are prompted for on a terminal; generator-backed (secret:N) and defaulted ones are resolved by the platform')
+tpl.command('deploy <code-or-dir-or-url>').description('Deploy a template onto a branch — a registry code, a local directory containing insta.template.yaml (a path-looking target is always read as a directory), or a github.com URL (https://github.com/<owner>/<repo>[/tree/<ref>[/<dir>]]) whose manifest is fetched with your own git credentials. Missing required variables are prompted for on a terminal; generator-backed (secret:N) and defaulted ones are resolved by the platform')
   .option('--branch <b>', 'target branch (default: current)')
   .option('--set <NAME=value>', 'set a template variable (repeatable)', (v: string, prev: string[]) => [...prev, v], [] as string[])
   .option('-y, --yes', 'non-interactive: missing required variables fail with a --set list instead of prompting')

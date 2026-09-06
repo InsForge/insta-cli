@@ -1,5 +1,6 @@
 // `insta template` — browse the platform template registry and deploy a template (by registry
-// code, or from a local directory carrying insta.template.yaml) onto a branch. The deploy is a
+// code, from a local directory carrying insta.template.yaml, or from a github.com URL whose
+// manifest github-source.ts fetches with the user's own git credentials) onto a branch. The deploy is a
 // platform-side pipeline (create services → write variables → deploy → health check); the CLI
 // submits it and renders progress by polling the deployment resource.
 import { join, resolve } from 'node:path'
@@ -10,6 +11,7 @@ import { ApiClient, ApiError, requireProject } from '../api.js'
 import type { ProjectConfig } from '../config.js'
 import { info, printJson, handleApproval, renderNextActions, CliCancel } from '../util.js'
 import { MANIFEST_FILE, collectManifestVariables, loadTemplateManifest, type TemplateManifest, type TemplateVar } from '../template-manifest.js'
+import { parseGitHubTemplateUrl, fetchGitHubTemplate, type GitHubTarget, type GitHubSource, type FetchedTemplate } from '../github-source.js'
 
 // ---- pure, unit-tested helpers ----
 
@@ -178,7 +180,10 @@ export function looksLikePath(target: string): boolean {
   return target.startsWith('.') || target.startsWith('/') || target.startsWith('~') || target.includes('/') || target.includes('\\')
 }
 
-export type DeployMode = { kind: 'local'; dir: string } | { kind: 'registry'; code: string }
+export type DeployMode =
+  | { kind: 'local'; dir: string }
+  | { kind: 'registry'; code: string }
+  | { kind: 'github'; target: GitHubTarget }
 
 // Expanding `~` is normally the shell's job, but it only does it unquoted — `deploy "~/tpl"`, or a
 // target assembled by an agent, arrives literally, and path.resolve() would then look for a
@@ -188,12 +193,17 @@ export type DeployMode = { kind: 'local'; dir: string } | { kind: 'registry'; co
 const expandHome = (target: string): string => target.replace(/^~(?=[/\\]|$)/, () => homedir())
 
 /**
- * Which deploy mode a target selects. Local mode is OPTED INTO by a path-looking target (./dir,
- * /abs, sub/dir); a bare word is ALWAYS a registry code — even when a same-named directory with a
- * manifest sits in the working directory, deploying it must be explicit (./plausible), never a
- * cwd coincidence. And a path-looking target with no manifest is a mistake, never a registry code.
+ * Which deploy mode a target selects. A URL is classified FIRST — it contains `/`, which
+ * looksLikePath would otherwise claim as a directory, and a non-GitHub URL must be named as
+ * unsupported rather than reported as a missing manifest. Then: local mode is OPTED INTO by a
+ * path-looking target (./dir, /abs, sub/dir); a bare word is ALWAYS a registry code — even when a
+ * same-named directory with a manifest sits in the working directory, deploying it must be
+ * explicit (./plausible), never a cwd coincidence. And a path-looking target with no manifest is a
+ * mistake, never a registry code.
  */
 export function deployMode(target: string, hasManifest: (dir: string) => boolean = (d) => existsSync(join(d, MANIFEST_FILE))): DeployMode {
+  const github = parseGitHubTemplateUrl(target)
+  if (github) return { kind: 'github', target: github }
   if (!looksLikePath(target)) return { kind: 'registry', code: target }
   const dir = resolve(process.cwd(), expandHome(target))
   if (!hasManifest(dir)) throw new Error(`no ${MANIFEST_FILE} at ${join(dir, MANIFEST_FILE)}`)
@@ -336,6 +346,7 @@ export type TemplateDeployDeps = {
   project?: ProjectConfig
   ask?: (v: TemplateVar) => Promise<string>
   wait?: (s: number) => Promise<void>
+  fetchGitHub?: (t: GitHubTarget) => Promise<FetchedTemplate>
 }
 
 export async function templateDeploy(target: string, opts: TemplateDeployOpts = {}, deps: TemplateDeployDeps = {}): Promise<void> {
@@ -353,8 +364,19 @@ export async function templateDeploy(target: string, opts: TemplateDeployOpts = 
   const mode = deployMode(target)
 
   let manifest: TemplateManifest | undefined
+  let source: GitHubSource | undefined
   let vars: TemplateVar[]
-  if (mode.kind === 'local') {
+  if (mode.kind === 'github') {
+    const fetched = await (deps.fetchGitHub ?? ((t: GitHubTarget) => fetchGitHubTemplate(t)))(mode.target)
+    manifest = fetched.manifest
+    source = fetched.source
+    vars = collectManifestVariables(manifest)
+    if (!quiet) {
+      // Spec 4.4: exactly one line in front of today's output, then the usual deploying line.
+      info(`fetching template from github.com/${source.repo}@${source.ref}${source.path ? ` (${source.path})` : ''} at ${source.commit.slice(0, 7)}`)
+      info(`deploying template ${manifest.code}@${manifest.version} from github.com/${source.repo}`)
+    }
+  } else if (mode.kind === 'local') {
     manifest = loadTemplateManifest(mode.dir) // parse + local validation (pinned images, described vars)
     vars = collectManifestVariables(manifest)
     if (!quiet) info(`deploying local template ${manifest.code}@${manifest.version}`)
@@ -371,7 +393,7 @@ export async function templateDeploy(target: string, opts: TemplateDeployOpts = 
   const variables = await resolveVariables(vars, given, { tty, ask, onAutoResolved })
 
   // The endpoint takes the branch NAME directly (branchId is its uuid alias) — no lookup needed.
-  const body = { ...(mode.kind === 'local' ? { manifest } : { templateCode: mode.code }), branch: branchName, variables }
+  const body = { ...(mode.kind === 'registry' ? { templateCode: mode.code } : { manifest }), branch: branchName, variables }
   let res
   try {
     res = await api.rawRequest('POST', `/projects/${p.projectId}/template-deployments`, body)
@@ -391,7 +413,7 @@ export async function templateDeploy(target: string, opts: TemplateDeployOpts = 
   const codeLabel = manifest?.code ?? target
   if (!quiet) info(`deploying template ${codeLabel} to branch ${branchName} (${deploymentId})`)
   const dep = await watchDeployment((id) => api.request('GET', `/template-deployments/${id}`), deploymentId, quiet ? () => {} : info, deps.wait)
-  if (opts.json) return printJson(dep)
+  if (opts.json) return printJson(source ? { source, ...dep } : dep)
   info(`template ${codeLabel} deployed to branch ${branchName}`)
   for (const u of deploymentUrls(dep)) info(`  ${u}`)
   // Provider credentials are not in the `insta secrets` bundle — point at the paths that exist.
