@@ -6,7 +6,6 @@ import { mkdtempSync, rmSync, existsSync, realpathSync, statSync } from 'node:fs
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import { loadTemplateManifest, MANIFEST_FILE, type TemplateManifest } from './template-manifest.js'
-import { resolveSpawnable } from './spawn.js'
 
 export type GitHubTarget = { owner: string; repo: string; refAndPath: string }
 
@@ -110,8 +109,12 @@ function releaseChild(child: ReturnType<SpawnFn>): void {
 export function makeGitRunner(spawnFn: SpawnFn = nodeSpawn): GitRunner {
   return (args, opts) =>
     new Promise((resolve) => {
-      const { cmd, args: spawnArgs } = resolveSpawnable('git', args)
-      const child = spawnFn(cmd, spawnArgs, {
+      // Spawned directly, NOT through resolveSpawnable: that wrapper exists for npm-installed
+      // `.cmd` shims, and its cmd.exe hop breaks any executable path containing a space —
+      // `cmd /s /c "C:\Program Files\Git\cmd\git.exe" --version` has its quotes stripped and
+      // dies with `'C:\Program' is not recognized`. git ships a real git.exe, which spawn finds
+      // through PATHEXT by itself; a `.cmd`-only git fails ENOENT, which reads as gitMissingMessage.
+      const child = spawnFn('git', args, {
         env: { ...process.env, ...NON_INTERACTIVE_ENV },
         stdio: ['ignore', 'pipe', 'pipe'],
         // Own process group on POSIX, so killTree can reach git's helpers.
