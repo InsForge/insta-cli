@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -8,7 +8,9 @@ import {
   parseGitHubTemplateUrl, defaultGitRunner, makeGitRunner,
   LS_REMOTE_TIMEOUT_MS, CLONE_TIMEOUT_MS, type SpawnFn,
   parseLsRemote, splitRefAndPath, resolveGitHubRef, repoUrl, type GitRunner,
+  fetchGitHubTemplate, type GitHubSource,
 } from '../src/github-source.js'
+import type { TemplateManifest } from '../src/template-manifest.js'
 
 describe('parseGitHubTemplateUrl', () => {
   it('returns null only for targets that are not URL-shaped', () => {
@@ -307,5 +309,119 @@ describe('resolveGitHubRef', () => {
   it('says git is missing when the binary cannot be spawned', async () => {
     const run: GitRunner = async () => ({ code: -1, stdout: '', stderr: 'spawn git ENOENT', timedOut: false })
     await expect(resolveGitHubRef(TARGET, run)).rejects.toThrow(/git is required to deploy a template from a GitHub URL/)
+  })
+})
+
+const MANIFEST_YAML = 'code: bot\nversion: "1.4.0"\nservices:\n  app:\n    type: worker\n    image: ghcr.io/acme/bot:1.4.0\n'
+const HEAD_COMMIT = '9'.repeat(40)
+
+// A runner that answers ls-remote from the fixture, writes a manifest on clone the way git would,
+// and answers rev-parse with a commit that matches NEITHER ls-remote SHA — so a test can only pass
+// by reading the checkout.
+function cloneRunner(opts: { manifestAt?: string; symlinkTo?: string } = {}) {
+  const calls: string[][] = []
+  const dirs: string[] = []
+  const run: GitRunner = async (args) => {
+    calls.push(args)
+    if (args[0] === 'ls-remote') return { code: 0, stdout: LS_REMOTE_OUT, stderr: '', timedOut: false }
+    if (args[0] === '-C') return { code: 0, stdout: `${HEAD_COMMIT}\n`, stderr: '', timedOut: false }
+    const dest = args[args.length - 1]!
+    dirs.push(dest)
+    if (opts.symlinkTo !== undefined) {
+      mkdirSync(dest, { recursive: true })
+      symlinkSync(opts.symlinkTo, join(dest, 'templates'))
+    } else if (opts.manifestAt !== undefined) {
+      const dir = opts.manifestAt ? join(dest, opts.manifestAt) : dest
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'insta.template.yaml'), MANIFEST_YAML)
+    }
+    return { code: 0, stdout: '', stderr: '', timedOut: false }
+  }
+  return { run, calls, dirs }
+}
+
+describe('fetchGitHubTemplate', () => {
+  it('clones the resolved ref shallowly by short name and returns the manifest with its source', async () => {
+    const { run, calls, dirs } = cloneRunner({ manifestAt: 'templates/bot' })
+    const got = await fetchGitHubTemplate({ owner: 'acme', repo: 'tpl', refAndPath: 'v2/templates/bot' }, run)
+
+    expect(got.manifest.code).toBe('bot')
+    expect(got.source).toEqual<GitHubSource>({ repo: 'acme/tpl', ref: 'v2', path: 'templates/bot', commit: HEAD_COMMIT })
+    const clone = calls.find((c) => c[0] === 'clone')!
+    expect(clone.slice(0, 5)).toEqual(['clone', '--depth', '1', '--quiet', '--branch'])
+    // The SHORT name: `--branch refs/tags/v2` exits 128 against a real remote (spec FAQ 7.14).
+    expect(clone[5]).toBe('v2')
+    expect(clone).not.toContain('refs/tags/v2')
+    expect(clone).toContain('https://github.com/acme/tpl.git')
+    expect(existsSync(dirs[0]!)).toBe(false)
+  })
+
+  // Spec acceptance 11: for an annotated tag the ls-remote SHA is the tag OBJECT. Reporting it
+  // would be reporting something that is not the deployed commit.
+  it('reports the checked-out commit, not any SHA from the ref listing', async () => {
+    const { run } = cloneRunner({ manifestAt: 'templates/bot' })
+    const got = await fetchGitHubTemplate({ owner: 'acme', repo: 'tpl', refAndPath: 'v2/templates/bot' }, run)
+    expect(got.source.commit).toBe(HEAD_COMMIT)
+    expect(got.source.commit).not.toBe(SHA_TAG_OBJECT)
+    expect(got.source.commit).not.toBe(SHA_TAG_COMMIT)
+  })
+
+  it('runs rev-parse inside the clone', async () => {
+    const { run, calls, dirs } = cloneRunner({ manifestAt: '' })
+    await fetchGitHubTemplate({ owner: 'acme', repo: 'tpl', refAndPath: '' }, run)
+    const revParse = calls.find((c) => c[0] === '-C')!
+    expect(revParse).toEqual(['-C', dirs[0]!, 'rev-parse', 'HEAD'])
+  })
+
+  it('reads the repository root when the URL names no directory', async () => {
+    const { run } = cloneRunner({ manifestAt: '' })
+    const got = await fetchGitHubTemplate({ owner: 'acme', repo: 'tpl', refAndPath: '' }, run)
+    expect(got.source).toEqual({ repo: 'acme/tpl', ref: 'main', path: '', commit: HEAD_COMMIT })
+  })
+
+  it('names the repo, ref and directory when the manifest is absent, and still cleans up', async () => {
+    const { run, dirs } = cloneRunner() // clone succeeds, writes nothing
+    await expect(fetchGitHubTemplate({ owner: 'acme', repo: 'tpl', refAndPath: 'v2/templates/bot' }, run))
+      .rejects.toThrow(/no insta\.template\.yaml at acme\/tpl@v2:templates\/bot[\s\S]*Point the URL at the directory/)
+    expect(existsSync(dirs[0]!)).toBe(false)
+  })
+
+  // Spec 4.2 step 5: a committed symlink can point anywhere; following one would read a file the
+  // user never chose and post its contents to the platform.
+  it('refuses a manifest that resolves outside the clone through a symlink', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'insta-outside-'))
+    mkdirSync(join(outside, 'bot'), { recursive: true })
+    writeFileSync(join(outside, 'bot', 'insta.template.yaml'), MANIFEST_YAML)
+    const { run, dirs } = cloneRunner({ symlinkTo: outside })
+    await expect(fetchGitHubTemplate({ owner: 'acme', repo: 'tpl', refAndPath: 'v2/templates/bot' }, run))
+      .rejects.toThrow(/resolves outside the repository — refusing to read it/)
+    expect(existsSync(dirs[0]!)).toBe(false)
+    rmSync(outside, { recursive: true, force: true })
+  })
+
+  it('surfaces a clone failure with the sign-in hint and cleans up', async () => {
+    const run: GitRunner = async (args) =>
+      args[0] === 'ls-remote'
+        ? { code: 0, stdout: LS_REMOTE_OUT, stderr: '', timedOut: false }
+        : { code: 128, stdout: '', stderr: 'remote: Repository not found.', timedOut: false }
+    await expect(fetchGitHubTemplate({ owner: 'acme', repo: 'tpl', refAndPath: '' }, run))
+      .rejects.toThrow(/could not read https:\/\/github\.com\/acme\/tpl[\s\S]*gh auth setup-git/)
+  })
+
+  it('reports a clone timeout with the clone budget', async () => {
+    const run: GitRunner = async (args) =>
+      args[0] === 'ls-remote'
+        ? { code: 0, stdout: LS_REMOTE_OUT, stderr: '', timedOut: false }
+        : { code: -1, stdout: '', stderr: '', timedOut: true }
+    await expect(fetchGitHubTemplate({ owner: 'acme', repo: 'tpl', refAndPath: '' }, run))
+      .rejects.toThrow('timed out after 120s cloning https://github.com/acme/tpl')
+  })
+
+  it('propagates a manifest that fails validation, and still cleans up', async () => {
+    const { run, dirs } = cloneRunner({ manifestAt: '' })
+    const load = () => { throw new Error('insta.template.yaml is not deployable:\n  - services.app: image and build are mutually exclusive') }
+    await expect(fetchGitHubTemplate({ owner: 'acme', repo: 'tpl', refAndPath: '' }, run, load))
+      .rejects.toThrow(/not deployable/)
+    expect(existsSync(dirs[0]!)).toBe(false)
   })
 })

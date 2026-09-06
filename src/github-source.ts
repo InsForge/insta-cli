@@ -2,7 +2,10 @@
 // credentials. Parsing, ref resolution and the shallow clone live here; the deploy path stays in
 // commands/template.ts. See docs/superpowers/specs/2026-09-04-template-deploy-github-url-design.md.
 import { spawn as nodeSpawn } from 'node:child_process'
-import { MANIFEST_FILE } from './template-manifest.js'
+import { mkdtempSync, rmSync, existsSync, realpathSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, sep } from 'node:path'
+import { loadTemplateManifest, MANIFEST_FILE, type TemplateManifest } from './template-manifest.js'
 import { resolveSpawnable } from './spawn.js'
 
 export type GitHubTarget = { owner: string; repo: string; refAndPath: string }
@@ -211,4 +214,69 @@ export async function resolveGitHubRef(t: GitHubTarget, run: GitRunner): Promise
   const split = splitRefAndPath(t.refAndPath, refs)
   if (!split) throw new Error(`no branch or tag ${t.refAndPath} in ${t.owner}/${t.repo}`)
   return split
+}
+
+export type GitHubSource = { repo: string; ref: string; path: string; commit: string }
+export type FetchedTemplate = { source: GitHubSource; manifest: TemplateManifest }
+
+export function missingManifestMessage(t: GitHubTarget, r: ResolvedRef): string {
+  return [
+    `no ${MANIFEST_FILE} at ${t.owner}/${t.repo}@${r.ref}:${r.path || '/'}.`,
+    `Point the URL at the directory that contains it, for example https://github.com/${t.owner}/${t.repo}/tree/${r.ref}/templates/<name>`,
+  ].join(' ')
+}
+
+export function escapedManifestMessage(t: GitHubTarget, r: ResolvedRef): string {
+  return `${MANIFEST_FILE} at ${t.owner}/${t.repo}@${r.ref}:${r.path || '/'} resolves outside the repository — refusing to read it`
+}
+
+// The clone root, symlinks resolved, so containment is compared like with like.
+function containedRealPath(root: string, candidate: string): string | null {
+  const realRoot = realpathSync(root)
+  const real = realpathSync(candidate)
+  if (real !== realRoot && !real.startsWith(realRoot + sep)) return null
+  return real
+}
+
+/** Resolve the ref, shallow-clone it, read the commit that was checked out, prove the manifest
+ *  sits inside the clone, parse it, delete the clone. Nothing on disk outlives this call: not the
+ *  variable prompt, not the POST, not the watcher. */
+export async function fetchGitHubTemplate(
+  target: GitHubTarget,
+  run: GitRunner = defaultGitRunner,
+  load: (dir: string) => TemplateManifest = loadTemplateManifest,
+): Promise<FetchedTemplate> {
+  const resolved = await resolveGitHubRef(target, run)
+  const dir = mkdtempSync(join(tmpdir(), 'insta-tpl-gh-'))
+  try {
+    // The short name, not resolved.qualifiedRef: `--branch` rejects a fully-qualified ref, and
+    // git's own short-name tie-break already agrees with splitRefAndPath (spec FAQ 7.14).
+    const cloned = await run(
+      ['clone', '--depth', '1', '--quiet', '--branch', resolved.ref, repoUrl(target), dir],
+      { timeoutMs: CLONE_TIMEOUT_MS },
+    )
+    if (cloned.timedOut) throw new Error(`timed out after ${CLONE_TIMEOUT_MS / 1000}s cloning https://github.com/${target.owner}/${target.repo}`)
+    if (/\bENOENT\b/.test(cloned.stderr)) throw new Error(gitMissingMessage())
+    if (cloned.code !== 0) throw new Error(unreadableRepoMessage(target, cloned.stderr))
+
+    // The deployed commit is the one in the checkout: an annotated tag's listing entry is its tag
+    // object, and a branch can move between ls-remote and here (spec FAQ 7.10).
+    const head = await run(['-C', dir, 'rev-parse', 'HEAD'], { timeoutMs: LS_REMOTE_TIMEOUT_MS })
+    if (head.code !== 0) throw new Error(unreadableRepoMessage(target, head.stderr))
+    const commit = head.stdout.trim()
+
+    const manifestDir = resolved.path ? join(dir, resolved.path) : dir
+    if (!existsSync(join(manifestDir, MANIFEST_FILE))) throw new Error(missingManifestMessage(target, resolved))
+    // A committed symlink can point anywhere; only the resolved path proves what is being read.
+    const real = containedRealPath(dir, join(manifestDir, MANIFEST_FILE))
+    if (!real || !statSync(real).isFile()) throw new Error(escapedManifestMessage(target, resolved))
+
+    const manifest = load(manifestDir)
+    return {
+      source: { repo: `${target.owner}/${target.repo}`, ref: resolved.ref, path: resolved.path, commit },
+      manifest,
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
