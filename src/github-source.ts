@@ -141,3 +141,74 @@ export function makeGitRunner(spawnFn: SpawnFn = nodeSpawn): GitRunner {
 }
 
 export const defaultGitRunner: GitRunner = makeGitRunner()
+
+export type ResolvedRef = { ref: string; qualifiedRef: string; path: string }
+
+export function repoUrl(t: GitHubTarget): string {
+  return `https://github.com/${t.owner}/${t.repo}.git`
+}
+
+function repoLabel(t: GitHubTarget): string {
+  return `https://github.com/${t.owner}/${t.repo}`
+}
+
+export function unreadableRepoMessage(t: GitHubTarget, stderr: string): string {
+  const tail = stderr.trim().split('\n').slice(-2).join('\n')
+  return [
+    `could not read ${repoLabel(t)}: repository not found or not accessible.`,
+    'If this is a private repository, configure git credentials and retry. With GitHub CLI:',
+    '  gh auth login',
+    '  gh auth setup-git',
+    ...(tail ? [`git said: ${tail}`] : []),
+  ].join('\n')
+}
+
+/** Read `git ls-remote --symref`: the HEAD symref names the default branch, and every other line
+ *  is `<sha>\t<refname>`. Keyed by FULL ref, so refs/heads/x and refs/tags/x stay distinct.
+ *  Peeled entries (`^{}`) are dropped: they name a commit, not a ref anyone can clone. */
+export function parseLsRemote(stdout: string): { head: string | null; refs: Map<string, string> } {
+  let head: string | null = null
+  const refs = new Map<string, string>()
+  for (const line of stdout.split('\n')) {
+    const symref = /^ref:\s+refs\/heads\/(\S+)\s+HEAD$/.exec(line)
+    if (symref) { head = symref[1]!; continue }
+    const m = /^([0-9a-f]{40})\s+(refs\/(?:heads|tags)\/.+)$/.exec(line)
+    if (!m || m[2]!.endsWith('^{}')) continue
+    refs.set(m[2]!, m[1]!)
+  }
+  return { head, refs }
+}
+
+/** Longest-first, because a ref may contain `/` and only the real ref list can say where it ends.
+ *  A branch beats a tag of the same name, which is what `git clone --branch` does with the short
+ *  name; qualifiedRef records that choice for the reader, the clone still gets `ref`. */
+export function splitRefAndPath(refAndPath: string, refs: Map<string, string>): ResolvedRef | null {
+  const segments = refAndPath.split('/')
+  for (let take = segments.length; take > 0; take--) {
+    const ref = segments.slice(0, take).join('/')
+    const qualifiedRef = refs.has(`refs/heads/${ref}`) ? `refs/heads/${ref}`
+      : refs.has(`refs/tags/${ref}`) ? `refs/tags/${ref}`
+        : null
+    if (qualifiedRef) return { ref, qualifiedRef, path: segments.slice(take).join('/') }
+  }
+  return null
+}
+
+/** One round trip answers two questions: the default branch, and where the ref ends. The commit
+ *  is NOT taken from here — an annotated tag lists its tag object, and a branch can move before
+ *  the clone. fetchGitHubTemplate reads it from the checkout instead (spec FAQ 7.10). */
+export async function resolveGitHubRef(t: GitHubTarget, run: GitRunner): Promise<ResolvedRef> {
+  const res = await run(['ls-remote', '--symref', repoUrl(t)], { timeoutMs: LS_REMOTE_TIMEOUT_MS })
+  if (res.timedOut) throw new Error(`timed out after ${LS_REMOTE_TIMEOUT_MS / 1000}s resolving ${repoLabel(t)}`)
+  if (/\bENOENT\b/.test(res.stderr)) throw new Error(gitMissingMessage())
+  if (res.code !== 0) throw new Error(unreadableRepoMessage(t, res.stderr))
+
+  const { head, refs } = parseLsRemote(res.stdout)
+  if (!t.refAndPath) {
+    if (!head) throw new Error(unreadableRepoMessage(t, 'the remote named no default branch'))
+    return { ref: head, qualifiedRef: `refs/heads/${head}`, path: '' }
+  }
+  const split = splitRefAndPath(t.refAndPath, refs)
+  if (!split) throw new Error(`no branch or tag ${t.refAndPath} in ${t.owner}/${t.repo}`)
+  return split
+}

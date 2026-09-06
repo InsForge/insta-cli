@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url'
 import {
   parseGitHubTemplateUrl, defaultGitRunner, makeGitRunner,
   LS_REMOTE_TIMEOUT_MS, CLONE_TIMEOUT_MS, type SpawnFn,
+  parseLsRemote, splitRefAndPath, resolveGitHubRef, repoUrl, type GitRunner,
 } from '../src/github-source.js'
 
 describe('parseGitHubTemplateUrl', () => {
@@ -199,5 +200,112 @@ describe('git runner', () => {
     await makeGitRunner(spySpawn)(['--version'], { timeoutMs: LS_REMOTE_TIMEOUT_MS })
     expect(seenEnv.GIT_TERMINAL_PROMPT).toBe('0')
     expect(seenEnv.GIT_SSH_COMMAND).toContain('BatchMode=yes')
+  })
+})
+
+const SHA_MAIN = 'a'.repeat(40)
+const SHA_TAG_OBJECT = 'b'.repeat(40)
+const SHA_TAG_COMMIT = 'd'.repeat(40) // an annotated tag's peeled commit differs from its tag object
+const SHA_SLASH = 'c'.repeat(40)
+const SHA_DUP_BRANCH = 'e'.repeat(40)
+const SHA_DUP_TAG = 'f'.repeat(40)
+
+// Shaped like real output. v2 is an ANNOTATED tag: the ^{} line carries a different SHA, measured
+// against github.com/git/git where v2.43.0 lists c089584a and its peel lists 564d0252.
+const LS_REMOTE_OUT = [
+  `ref: refs/heads/main\tHEAD`,
+  `${SHA_MAIN}\tHEAD`,
+  `${SHA_MAIN}\trefs/heads/main`,
+  `${SHA_SLASH}\trefs/heads/feature/foo`,
+  `${SHA_DUP_BRANCH}\trefs/heads/dup`,
+  `${SHA_TAG_OBJECT}\trefs/tags/v2`,
+  `${SHA_TAG_COMMIT}\trefs/tags/v2^{}`,
+  `${SHA_DUP_TAG}\trefs/tags/dup`,
+  '',
+].join('\n')
+
+const TARGET = { owner: 'acme', repo: 'tpl', refAndPath: '' }
+const okRunner = (stdout: string): GitRunner => async () => ({ code: 0, stdout, stderr: '', timedOut: false })
+
+describe('parseLsRemote', () => {
+  it('reads the default branch from the HEAD symref', () => {
+    expect(parseLsRemote(LS_REMOTE_OUT).head).toBe('main')
+  })
+  it('keys refs by their FULL name so a branch and a tag can share a short one', () => {
+    const { refs } = parseLsRemote(LS_REMOTE_OUT)
+    expect(refs.get('refs/heads/dup')).toBe(SHA_DUP_BRANCH)
+    expect(refs.get('refs/tags/dup')).toBe(SHA_DUP_TAG)
+    expect(refs.get('refs/heads/feature/foo')).toBe(SHA_SLASH)
+  })
+  // A peeled entry names the commit behind an annotated tag; it is not a ref anyone can clone.
+  it('does not expose peeled tag entries as refs of their own', () => {
+    expect(parseLsRemote(LS_REMOTE_OUT).refs.has('refs/tags/v2^{}')).toBe(false)
+  })
+})
+
+describe('splitRefAndPath', () => {
+  const refs = parseLsRemote(LS_REMOTE_OUT).refs
+  it('splits a tag from its directory and qualifies it', () => {
+    expect(splitRefAndPath('v2/templates/bot', refs)).toEqual({ ref: 'v2', qualifiedRef: 'refs/tags/v2', path: 'templates/bot' })
+  })
+  it('prefers the longest matching ref, so a branch containing a slash wins', () => {
+    expect(splitRefAndPath('feature/foo/templates/bot', refs))
+      .toEqual({ ref: 'feature/foo', qualifiedRef: 'refs/heads/feature/foo', path: 'templates/bot' })
+  })
+  it('handles a ref with no directory', () => {
+    expect(splitRefAndPath('main', refs)).toEqual({ ref: 'main', qualifiedRef: 'refs/heads/main', path: '' })
+  })
+  // Spec FAQ 7.11: git clone --branch resolves an ambiguous name to the branch; so do we, explicitly.
+  it('prefers the branch when a branch and a tag share a name', () => {
+    expect(splitRefAndPath('dup/x', refs)).toEqual({ ref: 'dup', qualifiedRef: 'refs/heads/dup', path: 'x' })
+  })
+  it('returns null when no ref matches', () => {
+    expect(splitRefAndPath('nope/templates/bot', refs)).toBeNull()
+  })
+})
+
+describe('resolveGitHubRef', () => {
+  it('uses the default branch when the URL names no ref', async () => {
+    expect(await resolveGitHubRef(TARGET, okRunner(LS_REMOTE_OUT)))
+      .toEqual({ ref: 'main', qualifiedRef: 'refs/heads/main', path: '' })
+  })
+
+  it('resolves a tag with a directory, and reports no commit of its own', async () => {
+    const r = await resolveGitHubRef({ ...TARGET, refAndPath: 'v2/templates/bot' }, okRunner(LS_REMOTE_OUT))
+    expect(r).toEqual({ ref: 'v2', qualifiedRef: 'refs/tags/v2', path: 'templates/bot' })
+    expect(r).not.toHaveProperty('commit')
+  })
+
+  it('resolves a branch whose name contains a slash', async () => {
+    expect(await resolveGitHubRef({ ...TARGET, refAndPath: 'feature/foo/templates/bot' }, okRunner(LS_REMOTE_OUT)))
+      .toEqual({ ref: 'feature/foo', qualifiedRef: 'refs/heads/feature/foo', path: 'templates/bot' })
+  })
+
+  it('calls ls-remote once, with --symref, on the https repo URL', async () => {
+    const seen: string[][] = []
+    const run: GitRunner = async (args) => { seen.push(args); return { code: 0, stdout: LS_REMOTE_OUT, stderr: '', timedOut: false } }
+    await resolveGitHubRef(TARGET, run)
+    expect(seen).toEqual([['ls-remote', '--symref', 'https://github.com/acme/tpl.git']])
+  })
+
+  it('names the missing ref when nothing matches', async () => {
+    await expect(resolveGitHubRef({ ...TARGET, refAndPath: 'nope/x' }, okRunner(LS_REMOTE_OUT)))
+      .rejects.toThrow('no branch or tag nope/x in acme/tpl')
+  })
+
+  it('tells the user how to sign in when the repository cannot be read', async () => {
+    const run: GitRunner = async () => ({ code: 128, stdout: '', stderr: 'remote: Repository not found.', timedOut: false })
+    await expect(resolveGitHubRef(TARGET, run))
+      .rejects.toThrow(/could not read https:\/\/github\.com\/acme\/tpl[\s\S]*gh auth login[\s\S]*gh auth setup-git/)
+  })
+
+  it('reports a timeout as a timeout, naming the budget', async () => {
+    const run: GitRunner = async () => ({ code: -1, stdout: '', stderr: '', timedOut: true })
+    await expect(resolveGitHubRef(TARGET, run)).rejects.toThrow('timed out after 30s resolving https://github.com/acme/tpl')
+  })
+
+  it('says git is missing when the binary cannot be spawned', async () => {
+    const run: GitRunner = async () => ({ code: -1, stdout: '', stderr: 'spawn git ENOENT', timedOut: false })
+    await expect(resolveGitHubRef(TARGET, run)).rejects.toThrow(/git is required to deploy a template from a GitHub URL/)
   })
 })
