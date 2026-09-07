@@ -52,7 +52,11 @@ export function parseGitHubTemplateUrl(target: string): GitHubTarget | null {
     if (isAddress(target)) throw new Error(unsupportedSourceMessage(target))
     return null
   }
-  const rest = target.replace(GITHUB_HOST, '').replace(/\/+$/, '')
+  // Links copied from GitHub's UI carry ?plain=1, #L1-L5 or ?tab=readme-ov-file, and none of that
+  // names a file. A `?` or `#` in a real path arrives percent-encoded, so a bare one is always the
+  // delimiter. Dropping it silently beats a "directory" called `bot?tab=readme-ov-file`.
+  const clean = target.replace(/[?#][\s\S]*$/, '')
+  const rest = clean.replace(GITHUB_HOST, '').replace(/\/+$/, '')
   const parts = rest.split('/')
   const owner = parts[0] ?? ''
   const repo = (parts[1] ?? '').replace(/\.git$/i, '')

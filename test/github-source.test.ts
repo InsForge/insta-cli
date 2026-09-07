@@ -63,6 +63,24 @@ describe('parseGitHubTemplateUrl', () => {
       .toEqual({ owner: 'acme', repo: 'tpl', refAndPath: 'main' })
   })
 
+  // Links copied out of GitHub's UI carry these. ?tab=readme-ov-file is what the repo page's copy
+  // button produces today, and before this was handled a tree URL kept it as part of the directory
+  // name and failed later with a confusing missing-manifest error instead of here.
+  it('drops a query string and a fragment', () => {
+    const bot = { owner: 'o', repo: 'r', refAndPath: 'main/templates/bot' }
+    expect(parseGitHubTemplateUrl('https://github.com/o/r/blob/main/templates/bot/insta.template.yaml?plain=1')).toEqual(bot)
+    expect(parseGitHubTemplateUrl('https://github.com/o/r/blob/main/templates/bot/insta.template.yaml#L1-L5')).toEqual(bot)
+    expect(parseGitHubTemplateUrl('https://github.com/o/r/tree/main/templates/bot?tab=readme-ov-file')).toEqual(bot)
+    expect(parseGitHubTemplateUrl('https://github.com/o/r?tab=readme-ov-file')).toEqual({ owner: 'o', repo: 'r', refAndPath: '' })
+  })
+
+  // A `?` or `#` inside a real path arrives percent-encoded, so stripping the bare form cannot
+  // truncate a legitimate directory name.
+  it('keeps a percent-encoded question mark or hash inside a path segment', () => {
+    expect(parseGitHubTemplateUrl('https://github.com/o/r/tree/main/we%23ird'))
+      .toEqual({ owner: 'o', repo: 'r', refAndPath: 'main/we#ird' })
+  })
+
   it('rejects a /blob/ link to any other file', () => {
     expect(() => parseGitHubTemplateUrl('https://github.com/acme/tpl/blob/main/README.md'))
       .toThrow(/unsupported template source/)
