@@ -371,10 +371,11 @@ export async function templateDeploy(target: string, opts: TemplateDeployOpts = 
     manifest = fetched.manifest
     source = fetched.source
     vars = collectManifestVariables(manifest)
+    // Spec 4.4: exactly ONE line in front of today's output. A second "deploying template …" line
+    // would read as a duplicate of the "deploying template <code> to branch <branch>" line below,
+    // so the manifest's code@version rides on this one instead.
     if (!quiet) {
-      // Spec 4.4: exactly one line in front of today's output, then the usual deploying line.
-      info(`fetching template from github.com/${source.repo}@${source.ref}${source.path ? ` (${source.path})` : ''} at ${source.commit.slice(0, 7)}`)
-      info(`deploying template ${manifest.code}@${manifest.version} from github.com/${source.repo}`)
+      info(`fetching template ${manifest.code}@${manifest.version} from github.com/${source.repo}@${source.ref}${source.path ? ` (${source.path})` : ''} at ${source.commit.slice(0, 7)}`)
     }
   } else if (mode.kind === 'local') {
     manifest = loadTemplateManifest(mode.dir) // parse + local validation (pinned images, described vars)

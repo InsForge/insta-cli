@@ -550,8 +550,11 @@ describe('templateDeploy', () => {
     expect(posts[0].manifest.code).toBe('bot')
     expect(posts[0].templateCode).toBeUndefined()
     const out = stdout.join('')
-    expect(out).toContain('fetching template from github.com/acme/tpl@v2 (templates/bot) at 9999999')
-    expect(out).toContain('deploying template bot@1.4.0 from github.com/acme/tpl')
+    expect(out).toContain('fetching template bot@1.4.0 from github.com/acme/tpl@v2 (templates/bot) at 9999999')
+    // Exactly one line goes in front of today's output, and it must not read as a second copy of
+    // the "deploying template bot to branch main" line that follows.
+    expect(out.match(/^deploying template /gm) ?? []).toHaveLength(1)
+    expect(out).toContain('deploying template bot to branch main')
   })
 
   it('--json carries the source in front of the deployment document', async () => {

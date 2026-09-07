@@ -67,8 +67,15 @@ describe('fetchGitHubTemplate against a real repository', () => {
   // First, because everything below is unreadable if the harness itself cannot run git: this one
   // failing means the runner's spawn is wrong, not that a ref or a manifest is missing.
   it('reaches the fixture repository over file://', async () => {
-    const r = await localRunner(['ls-remote', '--symref', 'https://github.com/acme/tpl.git'], { timeoutMs: 30_000 })
-    expect(`code=${r.code} timedOut=${r.timedOut} stdout=${r.stdout} stderr=${r.stderr}`).toContain('refs/heads/main')
+    // The PRODUCTION argv, refspecs included, so this also proves the filtered form still
+    // advertises the HEAD symref (it does not when HEAD is left out of the list).
+    const r = await localRunner(
+      ['ls-remote', '--symref', 'https://github.com/acme/tpl.git', 'HEAD', 'refs/heads/*', 'refs/tags/*'],
+      { timeoutMs: 30_000 },
+    )
+    const seen = `code=${r.code} timedOut=${r.timedOut} stdout=${r.stdout} stderr=${r.stderr}`
+    expect(seen).toContain('refs/heads/main')
+    expect(seen).toContain('ref: refs/heads/main\tHEAD')
   })
 
   it('clones the default branch and reads the root manifest', async () => {

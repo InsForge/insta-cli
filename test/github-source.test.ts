@@ -13,22 +13,29 @@ import {
 import type { TemplateManifest } from '../src/template-manifest.js'
 
 describe('parseGitHubTemplateUrl', () => {
-  it('returns null only for targets that are not URL-shaped', () => {
+  it('returns null for targets that are not addresses', () => {
     expect(parseGitHubTemplateUrl('plausible')).toBeNull()
     expect(parseGitHubTemplateUrl('sub/dir')).toBeNull()
-    // A dotted FIRST segment is a hostname; a dot later in a plain path is not.
     expect(parseGitHubTemplateUrl('templates/my.app')).toBeNull()
     expect(parseGitHubTemplateUrl('my.app')).toBeNull()
   })
 
-  // `./x` and `../x` DO match the dotted-host shape, so the local-path prefix must be checked
-  // first. Without that check every relative path would throw "unsupported template source".
   it('lets relative and absolute paths through to local mode, dots and all', () => {
     expect(parseGitHubTemplateUrl('./tpl')).toBeNull()
     expect(parseGitHubTemplateUrl('../tpl')).toBeNull()
     expect(parseGitHubTemplateUrl('./a.b/tpl')).toBeNull()
     expect(parseGitHubTemplateUrl('/abs/tpl')).toBeNull()
     expect(parseGitHubTemplateUrl('~/tpl')).toBeNull()
+  })
+
+  // The regression this classifier caused once: a dotted FIRST segment was read as a hostname, so
+  // ordinary relative directories became hard errors with no way to disambiguate. On main every
+  // target containing `/` reached local mode, and these must keep doing so.
+  it('reads a dotted first segment as a directory, not a host', () => {
+    expect(parseGitHubTemplateUrl('my.app/templates')).toBeNull()
+    expect(parseGitHubTemplateUrl('v1.0/templates')).toBeNull()
+    expect(parseGitHubTemplateUrl('app.io/bot')).toBeNull()
+    expect(parseGitHubTemplateUrl('2026.09/tpl')).toBeNull()
   })
 
   it('parses a bare repository URL', () => {
@@ -70,9 +77,22 @@ describe('parseGitHubTemplateUrl', () => {
       'https://bitbucket.org/a/b',
       'git@github.com:acme/tpl.git',
       'ssh://git@github.com/acme/tpl.git',
+      // Any scheme at all is an address, even one we have never heard of.
+      'https://git.internal.example/a/b',
+      'ftp://example.com/a/b',
     ]) {
       expect(() => parseGitHubTemplateUrl(bad)).toThrow(/unsupported template source/)
     }
+  })
+
+  // Scheme-less host names are recognised from a list, not from punctuation, which is what keeps
+  // `v1.0/templates` a directory. The cost is that a scheme-less unknown host reads as a path;
+  // adding https:// gets the accurate error.
+  it('recognises scheme-less known git hosts, and only those', () => {
+    for (const bad of ['gitlab.com/a/b', 'bitbucket.org/a/b', 'gist.github.com/acme/x', 'codeberg.org/a/b']) {
+      expect(() => parseGitHubTemplateUrl(bad)).toThrow(/unsupported template source/)
+    }
+    expect(parseGitHubTemplateUrl('git.internal.example/a/b')).toBeNull()
   })
 
   it('rejects GitHub URLs that are not repository trees', () => {
@@ -309,7 +329,9 @@ describe('resolveGitHubRef', () => {
     const seen: string[][] = []
     const run: GitRunner = async (args) => { seen.push(args); return { code: 0, stdout: LS_REMOTE_OUT, stderr: '', timedOut: false } }
     await resolveGitHubRef(TARGET, run)
-    expect(seen).toEqual([['ls-remote', '--symref', 'https://github.com/acme/tpl.git']])
+    // HEAD is named explicitly: with only the two wildcards the symref line is not advertised,
+    // and the default branch becomes unresolvable.
+    expect(seen).toEqual([['ls-remote', '--symref', 'https://github.com/acme/tpl.git', 'HEAD', 'refs/heads/*', 'refs/tags/*']])
   })
 
   it('names the missing ref when nothing matches', async () => {

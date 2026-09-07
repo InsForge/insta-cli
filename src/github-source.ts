@@ -10,11 +10,24 @@ import { loadTemplateManifest, MANIFEST_FILE, type TemplateManifest } from './te
 export type GitHubTarget = { owner: string; repo: string; refAndPath: string }
 
 const GITHUB_HOST = /^(?:https?:\/\/)?(?:www\.)?github\.com\//i
-// Checked FIRST: `./x` and `../x` would otherwise read as a dotted host followed by a slash.
-const LOCAL_PREFIX = /^[.~/\\]/
-// A scheme, an scp-style address, or a dotted first segment: all of these are addresses, not paths.
-const URL_SHAPED = /^[a-z][a-z0-9+.-]*:\/\/|^[^/\\]+@[^/\\]+:|^[^/\\]*\.[^/\\]*\//i
+// An explicit address: a scheme, or an scp-style user@host:path. Never a local path.
+const EXPLICIT_ADDRESS = /^[a-z][a-z0-9+.-]*:\/\/|^[^/\\]+@[^/\\]+:/i
+// Scheme-less first segments we still read as a host. A bare `<name>/<path>` is otherwise a LOCAL
+// PATH: `v1.0/templates` and `my.app/bot` are directories, and reading every dotted first segment
+// as a host broke them. Only names that unambiguously host code belong here.
+const KNOWN_GIT_HOSTS = new Set([
+  'gitlab.com', 'www.gitlab.com', 'bitbucket.org', 'www.bitbucket.org', 'gist.github.com',
+  'codeberg.org', 'git.sr.ht', 'dev.azure.com', 'ssh.dev.azure.com', 'gitea.com', 'sourceforge.net',
+])
 const SEGMENT = /^[A-Za-z0-9_.-]+$/
+
+/** Is this an address rather than a path? Only an explicit scheme/scp form, or a first segment
+ *  naming a host we recognise. A scheme-less name is far likelier to be someone's directory than
+ *  a git host, so everything else falls through to local and registry modes. */
+function isAddress(target: string): boolean {
+  if (EXPLICIT_ADDRESS.test(target)) return true
+  return KNOWN_GIT_HOSTS.has((target.split(/[/\\]/, 1)[0] ?? '').toLowerCase())
+}
 
 export function unsupportedSourceMessage(target: string): string {
   return `unsupported template source: ${target}. Use a registry code, a local directory, or https://github.com/<owner>/<repo>[/tree/<ref>[/<dir>]]`
@@ -35,8 +48,8 @@ function decodedSegments(parts: string[], target: string): string[] {
  *  A URL-shaped target that is not a github.com repository URL throws (spec 4.1). */
 export function parseGitHubTemplateUrl(target: string): GitHubTarget | null {
   if (!GITHUB_HOST.test(target)) {
-    // A path is never an address, whatever dots it carries: `./x` must reach local mode, not throw.
-    if (!LOCAL_PREFIX.test(target) && URL_SHAPED.test(target)) throw new Error(unsupportedSourceMessage(target))
+    // Name a non-GitHub address for what it is; let everything else reach local/registry mode.
+    if (isAddress(target)) throw new Error(unsupportedSourceMessage(target))
     return null
   }
   const rest = target.replace(GITHUB_HOST, '').replace(/\/+$/, '')
@@ -209,7 +222,13 @@ export function splitRefAndPath(refAndPath: string, refs: Map<string, string>): 
  *  is NOT taken from here — an annotated tag lists its tag object, and a branch can move before
  *  the clone. fetchGitHubTemplate reads it from the checkout instead (spec FAQ 7.10). */
 export async function resolveGitHubRef(t: GitHubTarget, run: GitRunner): Promise<ResolvedRef> {
-  const res = await run(['ls-remote', '--symref', repoUrl(t)], { timeoutMs: LS_REMOTE_TIMEOUT_MS })
+  // HEAD is listed EXPLICITLY: adding refspecs otherwise drops the symref line that names the
+  // default branch (measured on this repo: 375 refs unfiltered, 188 with the filter, and no
+  // `ref: refs/heads/... HEAD` unless HEAD is asked for by name).
+  const res = await run(
+    ['ls-remote', '--symref', repoUrl(t), 'HEAD', 'refs/heads/*', 'refs/tags/*'],
+    { timeoutMs: LS_REMOTE_TIMEOUT_MS },
+  )
   if (res.timedOut) throw new Error(`timed out after ${LS_REMOTE_TIMEOUT_MS / 1000}s resolving ${repoLabel(t)}`)
   if (/\bENOENT\b/.test(res.stderr)) throw new Error(gitMissingMessage())
   if (res.code !== 0) throw new Error(unreadableRepoMessage(t, res.stderr))
@@ -270,6 +289,10 @@ export async function fetchGitHubTemplate(
     // The deployed commit is the one in the checkout: an annotated tag's listing entry is its tag
     // object, and a branch can move between ls-remote and here (spec FAQ 7.10).
     const head = await run(['-C', dir, 'rev-parse', 'HEAD'], { timeoutMs: LS_REMOTE_TIMEOUT_MS })
+    // Same three outcomes the other two calls distinguish, so a timeout or a missing git here is
+    // not reported as an unreadable repository.
+    if (head.timedOut) throw new Error(`timed out after ${LS_REMOTE_TIMEOUT_MS / 1000}s reading the clone of ${repoLabel(target)}`)
+    if (/\bENOENT\b/.test(head.stderr)) throw new Error(gitMissingMessage())
     if (head.code !== 0) throw new Error(unreadableRepoMessage(target, head.stderr))
     const commit = head.stdout.trim()
 
