@@ -353,7 +353,7 @@ program.command('events').description('Show the audit + agent-event timeline').o
 // ---- approvals ----
 const ap = program.command('approvals').description('Governance approvals (HITL)')
 ap.command('list').option('--status <s>', 'pending|granted|denied|consumed').option('--json').action(guard((o) => govern.approvalsList(o)))
-ap.command('approve <id>').option('--always', 'also set the policy to allow').option('--json').action(guard((id, o) => govern.approvalsApprove(id, o)))
+ap.command('approve <id>').option('--json').action(guard((id, o) => govern.approvalsApprove(id, o)))
 ap.command('deny <id>').option('--json').action(guard((id, o) => govern.approvalsDeny(id, o)))
 
 // ---- observe (local credential audit) ----
@@ -364,7 +364,7 @@ ob.command('report').description('Render the local credential audit').option('--
 ob.command('sync').description('Upload findings into the project timeline').action(guard(() => observe.observeSync()))
 
 // ---- policy ----
-const agentPol = program.command('agent-policy').description('Project agent access policy (separate from human governance)')
+const agentPol = program.command('agent-policy').description('Project agent access policy')
 agentPol.command('get').option('--json').action(guard((o) => agentPolicy.get(o)))
 agentPol.command('set <mode>').description('full-access | read-only | branch-developer')
   .option('--json').action(guard((mode, o) => agentPolicy.set(mode, o)))
@@ -374,9 +374,6 @@ agentPol.command('rule').command('set <action> <decision>').description('Set an 
   .option('--json').action(guard((action, decision, o) => agentPolicy.rule(action, decision, o)))
 agentPol.command('revoke-sessions').description('Revoke ALL CLI agent sessions for this project')
   .option('--json').action(guard((o) => agentPolicy.revoke(o)))
-const pol = program.command('policy').description('Governance policy')
-pol.command('get').option('--json').action(guard((o) => govern.policyGet(o)))
-pol.command('set <action> <decision>').description('action: secrets.read|secrets.write|deploy|project.delete|branch.delete|service.add|service.remove|service.scale|service.upgrade|service.setAccess|storage.read|storage.write|storage.delete; decision: allow|deny|approve').option('--json').action(guard((a, d, o) => govern.policySet(a, d, o)))
 
 // ---- feedback (agent + human hurdle reports → the InstaCloud team) ----
 program.command('feedback')

@@ -46,7 +46,7 @@ const SAFE_ARGS: Record<string, Record<number, Check>> = {
   'compute always-on': { 0: ON_OFF }, 'db always-on': { 0: ON_OFF }, metrics: { 0: TARGET }, logs: { 0: TARGET },
   'template info': { 0: SLUG }, 'billing upgrade': { 0: oneOf(['pro', 'team']) },
   'approvals approve': { 0: ID }, 'approvals deny': { 0: ID },
-  'policy set': { 0: POLICY_ACTION, 1: oneOf(['allow', 'deny', 'approve']) }, autoupdate: { 0: ON_OFF },
+  'agent-policy rule set': { 0: POLICY_ACTION, 1: oneOf(['allow', 'deny', 'approve']) }, autoupdate: { 0: ON_OFF },
 }
 const SAFE_OPTIONS: Record<string, Check> = {
   org: ID, project: ID, region: REGION, env: ENV, oauth: oneOf(['github', 'google']),

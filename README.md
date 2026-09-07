@@ -121,10 +121,11 @@ only. Provider-minted service credentials (`DATABASE_URL`, `BUCKET_NAME`,
 
 ### Destructive actions can require approval
 
-Reading secrets, deploying, deleting a project or branch, and changing services are
-governed by a per-project policy. Where the policy says `approve`, the command stops and
-prints an approval id for an admin to grant with `insta approvals approve <id>`. Run
-`insta policy get` for the live policy.
+Agent requests are governed by the project's `agent-policy`; human requests use normal RBAC.
+Where the agent policy says `approve`, the command stops and prints an approval id for a human
+admin to grant with `insta approvals approve <id>`. The agent then retries the unchanged request.
+Run `insta --agent agent-policy get` for the live policy. The old `policy` command and approval
+`--always` option have been removed.
 
 ### Agents get the same surface
 
@@ -213,7 +214,7 @@ build never reaches a production installer.
 | `insta metrics` · `logs` · `events` | Service metrics; runtime logs (`--deploy` for deploy events); audit timeline |
 | `insta usage` · `billing` | Usage by billing dimension; `billing upgrade` · `billing portal` |
 | `insta approvals` | `list` · `approve` · `deny` |
-| `insta policy` | `get` · `set <action> <decision>` |
+| `insta agent-policy` | `get` · `set <mode>` · `protect-branch` · `unprotect-branch` · `rule set <action> <decision>` · `revoke-sessions` |
 | `insta observe` | `install` · `uninstall` · `report` · `sync` — local credential audit |
 | `insta feedback` | Report an InstaCloud-side hurdle (bug / feature-request / friction) to the team — never for the app you are building; works logged-out |
 | `insta upgrade` · `autoupdate` | Update the CLI; show or set auto-update |
