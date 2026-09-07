@@ -6,12 +6,26 @@ async function current() {
   const project = await requireProject()
   const path = `/projects/${project.projectId}/agent-policy`
   const out = await api.request('GET', path)
-  return { api, project, path, ...out }
+  return { api, project, path, policy: out.policy, out }
+}
+export function displayPolicy(out: Record<string, any>, opts: { json?: boolean }, output = { info, printJson }) {
+  const { info, printJson } = output
+  const { policy, agentSessionEpoch } = out
+  if (opts.json) return printJson(out)
+  info(`agent policy: ${policy.mode}\nprotected branches: ${policy.protectedBranchIds.join(', ') || '(none)'}\nsession epoch: ${agentSessionEpoch}`)
+  if (out.effectiveRules) {
+    for (const [scope, rules] of Object.entries(out.effectiveRules)) {
+      info(`\n${scope}:`)
+      for (const [action, decision] of Object.entries(rules as Record<string, string>)) info(`  ${action}: ${decision}`)
+    }
+    info(`\nbootstrap: project.create = ${out.bootstrapRules?.['project.create'] ?? '(not reported)'}`)
+    for (const note of out.ruleNotes ?? []) info(note)
+  } else info('This Platform does not expose resolved rules; upgrade Platform to inspect defaults.')
 }
 export async function get(opts: { json?: boolean }) {
-  const { policy, agentSessionEpoch, actions } = await current()
-  if (opts.json) return printJson({ policy, agentSessionEpoch, actions })
-  info(`agent policy: ${policy.mode}\nprotected branches: ${policy.protectedBranchIds.join(', ') || '(none)'}\nsession epoch: ${agentSessionEpoch}`)
+  const { out } = await current()
+  // Forward the public response, never the internal API client (which holds credentials).
+  displayPolicy(out, opts)
 }
 async function update(change: (policy: any, state: Awaited<ReturnType<typeof current>>) => Promise<void> | void, opts: { json?: boolean }) {
   const state = await current()

@@ -124,7 +124,11 @@ only. Provider-minted service credentials (`DATABASE_URL`, `BUCKET_NAME`,
 Agent requests are governed by the project's `agent-policy`; human requests use normal RBAC.
 Where the agent policy says `approve`, the command stops and prints an approval id for a human
 admin to grant with `insta approvals approve <id>`. The agent then retries the unchanged request.
-Run `insta --agent agent-policy get` for the live policy. The old `policy` command and approval
+Run `insta --agent agent-policy get --json` for stored overrides, `defaultRules`, `effectiveRules`,
+`bootstrapRules` and `ruleNotes`. Rules distinguish no affected branches (`project`), unprotected
+branches and protected branches. They describe policy, not authorization: RBAC, session checks,
+actual affected resources and compound actions still apply. An empty override object does not
+mean rules are unavailable. Text output also lists effective rules. The old `policy` command and approval
 `--always` option have been removed.
 
 ### Agents get the same surface
