@@ -2,10 +2,10 @@
 // credentials. Parsing, ref resolution and the shallow clone live here; the deploy path stays in
 // commands/template.ts. See docs/superpowers/specs/2026-09-04-template-deploy-github-url-design.md.
 import { spawn as nodeSpawn } from 'node:child_process'
-import { mkdtempSync, rmSync, existsSync, realpathSync, statSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, realpathSync, statSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
-import { loadTemplateManifest, MANIFEST_FILE, type TemplateManifest } from './template-manifest.js'
+import { parseManifestYaml, MANIFEST_FILE, type TemplateManifest } from './template-manifest.js'
 
 export type GitHubTarget = { owner: string; repo: string; refAndPath: string }
 
@@ -250,6 +250,12 @@ export async function resolveGitHubRef(t: GitHubTarget, run: GitRunner): Promise
 export type GitHubSource = { repo: string; ref: string; path: string; commit: string }
 export type FetchedTemplate = { source: GitHubSource; manifest: TemplateManifest }
 
+/** What to call the manifest in a message: where the user pointed, never the temporary clone that
+ *  is deleted before they read it. */
+export function manifestLabel(t: GitHubTarget, r: ResolvedRef): string {
+  return `${t.owner}/${t.repo}@${r.ref}:${r.path ? `${r.path}/` : ''}${MANIFEST_FILE}`
+}
+
 export function missingManifestMessage(t: GitHubTarget, r: ResolvedRef): string {
   return [
     `no ${MANIFEST_FILE} at ${t.owner}/${t.repo}@${r.ref}:${r.path || '/'}.`,
@@ -275,7 +281,7 @@ function containedRealPath(root: string, candidate: string): string | null {
 export async function fetchGitHubTemplate(
   target: GitHubTarget,
   run: GitRunner = defaultGitRunner,
-  load: (dir: string) => TemplateManifest = loadTemplateManifest,
+  parse: (text: string, source: string) => TemplateManifest = parseManifestYaml,
 ): Promise<FetchedTemplate> {
   const resolved = await resolveGitHubRef(target, run)
   const dir = mkdtempSync(join(tmpdir(), 'insta-tpl-gh-'))
@@ -306,7 +312,9 @@ export async function fetchGitHubTemplate(
     const real = containedRealPath(dir, join(manifestDir, MANIFEST_FILE))
     if (!real || !statSync(real).isFile()) throw new Error(escapedManifestMessage(target, resolved))
 
-    const manifest = load(manifestDir)
+    // Read and parse separately so a validation failure names where the user pointed. Handing the
+    // loader a directory makes it report the temp path, which is gone by the time they see it.
+    const manifest = parse(readFileSync(real, 'utf8'), manifestLabel(target, resolved))
     return {
       source: { repo: `${target.owner}/${target.repo}`, ref: resolved.ref, path: resolved.path, commit },
       manifest,

@@ -375,6 +375,11 @@ describe('resolveGitHubRef', () => {
 })
 
 const MANIFEST_YAML = 'code: bot\nversion: "1.4.0"\nservices:\n  app:\n    type: worker\n    image: ghcr.io/acme/bot:1.4.0\n'
+// What an injected parser hands back when the test cares about its arguments, not its output.
+const STUB_MANIFEST: TemplateManifest = {
+  code: 'bot', version: '1.4.0',
+  services: { app: { type: 'worker', image: 'ghcr.io/acme/bot:1.4.0' } },
+}
 const HEAD_COMMIT = '9'.repeat(40)
 
 // A runner that answers ls-remote from the fixture, writes a manifest on clone the way git would,
@@ -481,9 +486,36 @@ describe('fetchGitHubTemplate', () => {
 
   it('propagates a manifest that fails validation, and still cleans up', async () => {
     const { run, dirs } = cloneRunner({ manifestAt: '' })
-    const load = () => { throw new Error('insta.template.yaml is not deployable:\n  - services.app: image and build are mutually exclusive') }
-    await expect(fetchGitHubTemplate({ owner: 'acme', repo: 'tpl', refAndPath: '' }, run, load))
+    const parse = () => { throw new Error('insta.template.yaml is not deployable:\n  - services.app: image and build are mutually exclusive') }
+    await expect(fetchGitHubTemplate({ owner: 'acme', repo: 'tpl', refAndPath: '' }, run, parse))
       .rejects.toThrow(/not deployable/)
     expect(existsSync(dirs[0]!)).toBe(false)
+  })
+
+  // A validation failure has to name where the user pointed. The clone is deleted before they read
+  // the message, so a temp path sends them looking at a directory that no longer exists.
+  it('labels the manifest by its GitHub source, not by the temporary clone path', async () => {
+    const { run } = cloneRunner({ manifestAt: 'templates/bot' })
+    const seen: string[] = []
+    const parse = (_text: string, source: string) => { seen.push(source); return STUB_MANIFEST }
+    await fetchGitHubTemplate({ owner: 'acme', repo: 'tpl', refAndPath: 'v2/templates/bot' }, run, parse)
+    expect(seen).toEqual(['acme/tpl@v2:templates/bot/insta.template.yaml'])
+    expect(seen[0]).not.toMatch(/insta-tpl-gh-|[/\\]var[/\\]|tmp/)
+  })
+
+  it('labels a root manifest without a stray slash', async () => {
+    const { run } = cloneRunner({ manifestAt: '' })
+    const seen: string[] = []
+    const parse = (_text: string, source: string) => { seen.push(source); return STUB_MANIFEST }
+    await fetchGitHubTemplate({ owner: 'acme', repo: 'tpl', refAndPath: '' }, run, parse)
+    expect(seen).toEqual(['acme/tpl@main:insta.template.yaml'])
+  })
+
+  it('hands the parser the real file contents', async () => {
+    const { run } = cloneRunner({ manifestAt: '' })
+    const seen: string[] = []
+    const parse = (text: string) => { seen.push(text); return STUB_MANIFEST }
+    await fetchGitHubTemplate({ owner: 'acme', repo: 'tpl', refAndPath: '' }, run, parse)
+    expect(seen[0]).toBe(MANIFEST_YAML)
   })
 })
