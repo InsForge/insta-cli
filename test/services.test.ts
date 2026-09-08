@@ -154,7 +154,12 @@ describe('servicesAdd validation (throws before any network/config access)', () 
     await expect(servicesAdd('postgres', 'db', { port: '3000' })).rejects.toThrow(/--port is only valid for compute services/)
   })
   it('rejects --always-on for a non-compute type, pointing at the db command instead', async () => {
-    await expect(servicesAdd('postgres', 'db', { alwaysOn: true })).rejects.toThrow(/--always-on is only valid for compute services/)
+    await expect(servicesAdd('postgres', 'db', { alwaysOn: true })).rejects.toThrow(/--always-on \/ --no-always-on is only valid for compute services/)
+  })
+  it('rejects --no-always-on for a non-compute type too: an explicit false is just as compute-only', async () => {
+    // Presence check, not truthiness: a truthiness check would let `postgres db --no-always-on`
+    // reach the platform with alwaysOn:false instead of failing before config/network access.
+    await expect(servicesAdd('postgres', 'db', { alwaysOn: false })).rejects.toThrow(/--always-on \/ --no-always-on is only valid for compute services/)
   })
   it('rejects --public for a non-storage type', async () => {
     await expect(servicesAdd('compute', 'api', { public: true })).rejects.toThrow(/--public is only valid for storage services/)
