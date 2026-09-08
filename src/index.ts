@@ -94,6 +94,8 @@ envCmd.command('use <name>').description(`Switch environment (${ENV_NAMES.join('
 // ---- run (per-request secret injection — nothing written to disk) ----
 program.command('run <cmd> [args...]').description('Run a command with the branch credential bundle injected into its environment (no .env written)')
   .option('--branch <b>', 'branch bundle to inject (default: linked branch)')
+  .option('--service <type/name>', "inject exactly what one compute service receives, e.g. compute/api — the unambiguous read when several services define the same name")
+  .option('--ignore-collisions', 'run even when several services define the same name; every such name is REMOVED from the child environment (never inherited from your shell)')
   .passThroughOptions().allowUnknownOption()
   .action(guard((cmd, args, o) => runCmd.run([cmd, ...(args ?? [])], o)))
 
@@ -173,14 +175,18 @@ svc.command('secrets <type> <name>').description("List a service's secret names"
 
 // ---- secrets (seam) ----
 const sec = program.command('secrets').description('Fetch the credential bundle (secret seam) into .env')
-  .option('--branch <branch>').option('-o, --output <file>', 'output file (default .env)').option('--print', 'print instead of writing').option('--json')
+  .option('--branch <branch>')
+  .option('--service <type/name>', "read one compute service's own env instead of the branch-wide bundle, e.g. compute/api")
+  .option('-o, --output <file>', 'output file (default .env)').option('--print', 'print instead of writing').option('--json')
   .action(guard((o) => secretsCmd.secrets(o)))
 sec.command('list').description('List secret names, grouped by service').option('--branch <branch>').option('--json').action(guard((o) => secretsCmd.secretsList(o)))
 sec.command('set <name> [value]').description('Set a user secret (project-wide; value from stdin if omitted)')
   .option('--branch <branch>', 'scope to one branch').option('--service <type/name>', 'bind to a branch service (implies current branch)')
   .option('--json').action(guard((n, v, o) => secretsCmd.secretsSet(n, v, o)))
 sec.command('unset <name>').description('Remove a user secret')
-  .option('--branch <branch>', 'scope to one branch').option('--json').action(guard((n, o) => secretsCmd.secretsUnset(n, o)))
+  .option('--branch <branch>', 'scope to one branch')
+  .option('--service <type/name>', "remove only that service's copy, e.g. compute/api")
+  .option('--json').action(guard((n, o) => secretsCmd.secretsUnset(n, o)))
 sec.command('bind <env-name> <source>').description('Bind a service credential into a compute env var')
   .option('--branch <branch>', 'branch (default: current)')
   .option('--to <compute-service>', 'target compute service, e.g. compute/api')

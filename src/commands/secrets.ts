@@ -4,23 +4,82 @@ import { join } from 'node:path'
 import { ApiClient, requireProject } from '../api.js'
 import { info, printJson, serializeEnv, handleApproval, die } from '../util.js'
 
-function q(branch?: string): string {
-  return branch ? `?branch=${encodeURIComponent(branch)}` : ''
-}
+// One env name that several services each define. The bundle is a flat map, so it cannot carry
+// three values for one name — the platform reports the ambiguity here instead of picking a winner
+// (which it used to do implicitly: newest row wins, so a hand-set value read back as another
+// service's). `services` are "<type>/<name>" strings.
+export type Collision = { name: string; services: string[] }
 
-// Fetch the credential bundle (the secret seam) and write it to .env (or print).
-export async function secrets(opts: { branch?: string; output?: string; print?: boolean; json?: boolean }): Promise<void> {
+/** The bundle read, exactly as the platform answers it. */
+export type SecretBundle = { secrets: Record<string, string>; collisions: Collision[] }
+
+// Just enough of ApiClient to read/write secrets — so the command cores are testable with a stub.
+export type SecretsApi = { rawRequest: (m: string, p: string, body?: unknown) => Promise<{ status: number; body: any }> }
+export type SecretsDeps = { api: SecretsApi; projectId: string; linkedBranch?: string }
+
+async function loadDeps(): Promise<SecretsDeps> {
   const api = await ApiClient.load()
   const p = await requireProject()
-  const branch = opts.branch ?? p.branch
-  const res = await api.rawRequest('GET', `/projects/${p.projectId}/secrets${q(branch)}`)
-  if (handleApproval(res, opts.json)) return
-  const bundle: Record<string, string> = res.body.secrets
-  if (opts.json) return printJson(bundle)
+  return { api, projectId: p.projectId, linkedBranch: p.branch }
+}
+
+/** Query for a bundle read. `--service` asks for the env ONE compute service actually receives
+ *  (unambiguous by construction, so no collision can arise); a general read asks the platform to
+ *  WITHHOLD any name several services define rather than silently returning one of the values. */
+export function bundleQuery(opts: { branch?: string; service?: string }): string {
+  const parts: string[] = []
+  if (opts.branch) parts.push(`branch=${encodeURIComponent(opts.branch)}`)
+  // A bare/empty --service is a 400 on the platform; the flag is only ever sent with a value.
+  if (opts.service) parts.push(`service=${encodeURIComponent(opts.service)}`)
+  else parts.push('on_collision=withhold')
+  return `?${parts.join('&')}`
+}
+
+/** GET the bundle. Returns null when the platform gated the read (202). An older platform that
+ *  doesn't know `collisions` reads back as none — the field is a report, not a requirement. */
+export async function fetchSecretBundle(
+  api: SecretsApi,
+  projectId: string,
+  opts: { branch?: string; service?: string; json?: boolean },
+): Promise<SecretBundle | null> {
+  const res = await api.rawRequest('GET', `/projects/${projectId}/secrets${bundleQuery(opts)}`)
+  if (handleApproval(res, opts.json)) return null
+  return { secrets: res.body.secrets as Record<string, string>, collisions: (res.body.collisions ?? []) as Collision[] }
+}
+
+/** Pure: the report for each withheld name — who defines it, and how to read one of them. */
+export function collisionLines(collisions: Collision[]): string[] {
+  return collisions.flatMap((c) => [
+    `${c.name} omitted — ${c.services.length} services define it:`,
+    `  ${c.services.join(', ')}`,
+    `  read one with: insta secrets --service ${c.services[0] ?? '<type>/<name>'}`,
+  ])
+}
+
+// STDERR, always: `secrets --print` writes the env to stdout and `insta run`'s stdout belongs to
+// the child command, so a collision report on stdout would corrupt both.
+export function warnCollisions(collisions: Collision[]): void {
+  for (const line of collisionLines(collisions)) process.stderr.write(line + '\n')
+}
+
+// Fetch the credential bundle (the secret seam) and write it to .env (or print). --service reads
+// one compute service's own env instead of the branch-wide merge.
+export async function secrets(
+  opts: { branch?: string; service?: string; output?: string; print?: boolean; json?: boolean },
+  deps?: SecretsDeps,
+): Promise<void> {
+  const d = deps ?? (await loadDeps())
+  const branch = opts.branch ?? d.linkedBranch
+  const b = await fetchSecretBundle(d.api, d.projectId, { branch, service: opts.service, json: opts.json })
+  if (!b) return
+  const bundle = b.secrets
+  if (opts.json) return printJson({ secrets: bundle, collisions: b.collisions })
+  warnCollisions(b.collisions)
   if (opts.print) { process.stdout.write(serializeEnv(bundle)); return }
   const out = opts.output ?? '.env'
   await writeFile(out, serializeEnv(bundle))
-  info(`wrote ${Object.keys(bundle).length} secrets to ${out} (branch ${branch})`)
+  const scope = opts.service ? `${opts.service}, branch ${branch}` : `branch ${branch}`
+  info(`wrote ${Object.keys(bundle).length} secrets to ${out} (${scope})`)
   if (ensureIgnored(process.cwd(), out)) info(`  .gitignore += ${out} (credentials must never be committed)`)
   info('  tip: `insta run -- <cmd>` injects these per-run with nothing written to disk')
 }
@@ -86,14 +145,23 @@ export async function secretsSet(name: string, value: string | undefined, opts: 
   info(`set ${name}${opts.service ? ` → ${opts.service}` : ''} (${branch ? `branch ${branch}` : 'project-wide'})`)
 }
 
-export async function secretsUnset(name: string, opts: { branch?: string; json?: boolean }): Promise<void> {
-  const api = await ApiClient.load()
-  const p = await requireProject()
-  const qs = opts.branch ? `?branch=${encodeURIComponent(opts.branch)}` : ''
-  const res = await api.rawRequest('DELETE', `/projects/${p.projectId}/secrets/${encodeURIComponent(name)}${qs}`)
+// Remove a user secret. --service removes only THAT service's copy (the platform has always
+// honoured ?service= here; without the flag a name several services define stays defined).
+export async function secretsUnset(
+  name: string,
+  opts: { branch?: string; service?: string; json?: boolean },
+  deps?: SecretsDeps,
+): Promise<void> {
+  const d = deps ?? (await loadDeps())
+  const parts: string[] = []
+  if (opts.branch) parts.push(`branch=${encodeURIComponent(opts.branch)}`)
+  if (opts.service) parts.push(`service=${encodeURIComponent(opts.service)}`)
+  const qs = parts.length ? `?${parts.join('&')}` : ''
+  const res = await d.api.rawRequest('DELETE', `/projects/${d.projectId}/secrets/${encodeURIComponent(name)}${qs}`)
   if (handleApproval(res, opts.json)) return
-  if (opts.json) return printJson({ ok: true, name, branch: opts.branch ?? null })
-  info(`unset ${name} (${opts.branch ? `branch ${opts.branch}` : 'project-wide'})`)
+  if (opts.json) return printJson({ ok: true, name, branch: opts.branch ?? null, service: opts.service ?? null })
+  const scope = opts.service ? `${opts.service}${opts.branch ? `, branch ${opts.branch}` : ''}` : opts.branch ? `branch ${opts.branch}` : 'project-wide'
+  info(`unset ${name} (${scope})`)
 }
 
 export async function secretsBind(envName: string, source: string, opts: { branch?: string; to?: string; sourceName?: string; json?: boolean }): Promise<void> {
