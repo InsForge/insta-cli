@@ -4,11 +4,15 @@ import { readGlobal, writeGlobal, readProject, writeProject, type GlobalConfig, 
 import { autoResolveProject, promptChoice, type ProjectItem } from './resolve-project.js'
 import { die } from './util.js'
 import { USER_AGENT } from './version.js'
+import { agentHeaders, agentMode } from './agent.js'
 
 export class ApiError extends Error {
   // body carries the parsed error payload for callers that branch on machine-readable errors
   // (e.g. template deploy's missing_variables); the message stays the human line.
   constructor(public status: number, msg: string, public body?: any) { super(msg); this.name = 'ApiError' }
+}
+export class AgentApprovalRequired extends Error {
+  constructor(public body: any) { super(body.message ?? `approval required: ${body.approvalId}`) }
 }
 
 // Store a durable insta_ key as the credential: set it as the bearer and drop any refresh token (an insta_ key never rotates; a stale one would leak to /auth/refresh on a 401).
@@ -52,6 +56,7 @@ export class ApiClient {
   // Returns parsed body for status < 400 (incl. 202); throws ApiError otherwise.
   async request<T = any>(method: string, path: string, body?: unknown, opts: { auth?: boolean } = {}): Promise<T> {
     const res = await this.raw(method, path, body, opts.auth ?? true)
+    if (agentMode() && res.status === 202 && res.body?.status === 'approval_required') throw new AgentApprovalRequired(res.body)
     if (res.status >= 400) throw new ApiError(res.status, res.body?.error ?? `HTTP ${res.status}`, res.body)
     return res.body as T
   }
@@ -74,6 +79,7 @@ export class ApiClient {
   private async fetch(method: string, path: string, body: unknown, auth: boolean): Promise<RawResult> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Insta-Hints': '1', 'User-Agent': USER_AGENT }
     if (auth && this.cfg.accessToken) headers.Authorization = `Bearer ${this.cfg.accessToken}`
+    if (auth) Object.assign(headers, await agentHeaders(this, method, path, body === undefined ? '' : JSON.stringify(body)))
     const res = await this.fetchImpl(this.apiUrl + path, {
       method,
       headers,
@@ -106,6 +112,7 @@ export async function linkedProject(): Promise<ProjectConfig | null> { return re
 export async function requireProject(): Promise<ProjectConfig> {
   const p = await readProject()
   if (p) return p
+  if (agentMode()) die('agent mode requires a linked project — run `insta setup agent --project <id>`')
   // One command, just works: unlinked ≠ error. Resolve the project (auto when there's one,
   // one-keystroke picker when several) and persist the choice so this happens once per dir.
   const api = await ApiClient.load()

@@ -101,7 +101,7 @@ describe('redaction', () => {
   it('keeps positionals only where the command declares an id or enum', () => {
     expect(redactArgs('services add', ['postgres', 'main'])).toEqual(['postgres', '[REDACTED]'])
     expect(redactArgs('services scale', ['compute', 'api', '3', 'us-east'])).toEqual(['compute', '[REDACTED]', '3', 'us-east'])
-    expect(redactArgs('policy set', ['deploy', 'approve'])).toEqual(['deploy', 'approve'])
+    expect(redactArgs('agent-policy rule set', ['deploy', 'approve'])).toEqual(['deploy', 'approve'])
     expect(redactArgs('run', ['/Users/jane/bin/dev.sh', 'x'])).toEqual(['[REDACTED]', '[REDACTED]'])
     expect(redactArgs('branch create', ['feat/acme-pilot'])).toEqual(['[REDACTED]'])
     expect(redactArgs('secrets set', ['DB_PASSWORD', 's3cret'])).toEqual(['[REDACTED]', '[REDACTED]'])

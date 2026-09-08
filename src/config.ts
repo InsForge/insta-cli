@@ -2,6 +2,7 @@
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { ensureGitignore } from './gitignore.js'
 import { DEFAULT_ENV, ENVS, envForApiUrl, envFromEnvVar, normalizeUrl, type EnvName } from './env.js'
 
 const GLOBAL_DIR = join(homedir(), '.insta')
@@ -143,5 +144,6 @@ export async function readProject(cwd = process.cwd()): Promise<ProjectConfig | 
 export async function writeProject(c: ProjectConfig, cwd = process.cwd()): Promise<void> {
   const target = (await findProjectRoot(cwd)) ?? cwd
   await mkdir(join(target, PROJECT_DIR), { recursive: true })
+  ensureGitignore(target, ['.insta/agent-session.json'], '# Local agent credentials')
   await writeFile(join(target, PROJECT_DIR, PROJECT_FILE), JSON.stringify(c, null, 2))
 }
