@@ -137,10 +137,31 @@ describe('secrets', () => {
     expect(err).toContain('read one with: insta secrets --service compute/hermes')
   })
 
-  it('carries collisions in --json alongside the secrets', async () => {
+  // --json's stdout is a documented agent-facing surface: the BARE map. Collisions must not
+  // wrap it in an envelope — a consumer passing none of the new flags parses what it always did.
+  it('--json keeps stdout the bare map, with no envelope keys on top', async () => {
     const d = deps(BODY)
     const { out } = await capture(() => secrets({ json: true }, d))
-    expect(JSON.parse(out)).toEqual({ secrets: { DATABASE_URL: 'pg://x' }, collisions: COLLISION })
+    const doc = JSON.parse(out)
+    expect(doc).toEqual({ DATABASE_URL: 'pg://x' })
+    expect(Object.keys(doc)).not.toContain('secrets')
+    expect(Object.keys(doc)).not.toContain('collisions')
+  })
+
+  it('--json reports collisions as one parseable JSON line on stderr', async () => {
+    const d = deps(BODY)
+    const { out, err } = await capture(() => secrets({ json: true }, d))
+    expect(JSON.parse(err)).toEqual({ collisions: COLLISION })
+    expect(JSON.parse(out)).toEqual({ DATABASE_URL: 'pg://x' }) // stdout still parses alone
+  })
+
+  // A quiet stream is the signal that there was nothing to choose between; `[]` would make every
+  // caller inspect a field that says nothing.
+  it('--json says nothing at all on stderr when there are no collisions', async () => {
+    const d = deps({ secrets: { DATABASE_URL: 'pg://x' }, collisions: [] })
+    const { out, err } = await capture(() => secrets({ json: true }, d))
+    expect(err).toBe('')
+    expect(JSON.parse(out)).toEqual({ DATABASE_URL: 'pg://x' })
   })
 
   it('--service scopes the read to that one service', async () => {

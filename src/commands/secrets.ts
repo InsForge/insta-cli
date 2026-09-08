@@ -69,6 +69,13 @@ export function warnCollisions(collisions: Collision[]): void {
   for (const line of collisionLines(collisions)) process.stderr.write(line + '\n')
 }
 
+// The same report for a machine reader, on stderr for the same reason: stdout carries the payload,
+// which under --json is the bare `{NAME: value}` map every existing consumer parses. Nothing is
+// written when there is nothing to choose between — a quiet stream is the signal, not `[]`.
+export function warnCollisionsJson(collisions: Collision[]): void {
+  if (collisions.length) process.stderr.write(JSON.stringify({ collisions }) + '\n')
+}
+
 // Fetch the credential bundle (the secret seam) and write it to .env (or print). --service reads
 // one compute service's own env instead of the branch-wide merge.
 export async function secrets(
@@ -81,7 +88,9 @@ export async function secrets(
   const b = await fetchSecretBundle(d.api, d.projectId, { branch, service: opts.service, json: opts.json })
   if (!b) return
   const bundle = b.secrets
-  if (opts.json) return printJson({ secrets: bundle, collisions: b.collisions })
+  // --json's stdout stays the bare map it has always been; the collisions ride stderr as one JSON
+  // line, so a consumer that passes none of the new flags parses exactly what it parsed before.
+  if (opts.json) { warnCollisionsJson(b.collisions); return printJson(bundle) }
   warnCollisions(b.collisions)
   if (opts.print) { process.stdout.write(serializeEnv(bundle)); return }
   const out = opts.output ?? '.env'
