@@ -135,7 +135,8 @@ svc.command('add [type] [name]').description('Provision a service on demand (ass
   .option('--public', 'storage only: serve the bucket with anonymous public-read (default private)')
   .option('--image <url>', 'compute only: run this container image at creation')
   .option('--port <n>', 'compute only: port the image listens on (default 8080)')
-  .option('--always-on', 'compute only: create as always-on — never scales to zero (all plans; billing is actual usage either way)')
+  .option('--always-on', 'compute only: create as always-on — never scales to zero (the default for new compute services; all plans; billing is actual usage either way)')
+  .option('--no-always-on', 'compute only: create as scale-to-zero — idle machines suspend and wake on the next request')
   .option('--volume <gi>', 'compute only: attach a persistent /data volume of this many whole Gi (also attachable later: `insta compute volume <name> --size <gi>`; any plan may attach at the default 10 (the free cap, on every plan); larger sizes are paid and plan-capped). Volume services keep 1 machine and stop (cold wake) instead of suspend when idle')
   .option('--json')
   .action(guard(async (type, name, o) => {
@@ -236,7 +237,7 @@ compute.command('status [service]').description("Show a compute service's desire
 compute.command('limits [service]').description("Show or set a compute service's resource ceiling (any plan within the free cap; raising above it needs a paid plan). --memory is the dial; cpu derives from it unless --cpu is given. Billing is actual usage — the ceiling caps what the app may burn, it is not a price")
   .option('--memory <size>', 'memory ceiling, e.g. 512mb or 1gb').option('--cpu <n>', 'vCPU ceiling override (provider sizes: 1, 2, 4, 6, 8)')
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => computeCmd.computeLimits(service, o)))
-compute.command('always-on <mode> [service]').description('Set a compute service always-on (mode: on|off). on = machines never scale to zero; off = default scale-to-zero. All plans; billing is actual usage either way')
+compute.command('always-on <mode> [service]').description('Set a compute service always-on (mode: on|off). on = machines never scale to zero (the default for new compute services); off = scale-to-zero. All plans; billing is actual usage either way')
   .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((mode, service, o) => computeCmd.computeAlwaysOn(mode, service, o)))
 const execCmd = compute.command('exec [service]').description("Run a one-shot command inside a compute service's machine (`insta compute exec [service] -- <command> [args…]`) — no interactive shell/PTY: `command` is argv, no shell is invoked (use [\"sh\", \"-c\", \"...\"] for shell features). Wakes the machine first if it's scaled to zero — expect a few seconds of latency, billed as uptime, not an error. Exits with the remote command's own exit code (agents rely on this)")
   .action(guard((service, o) => computeCmd.computeExec(service, execCommand, o, { windowsFallback: execWindowsFallback })))
