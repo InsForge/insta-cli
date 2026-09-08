@@ -22,7 +22,7 @@ export type ManifestEnv = {
 }
 
 export type ManifestService = {
-  type?: string // web | worker
+  type?: string // web | worker | postgres (postgres is declared bare: no image, port, volume or env)
   image?: string
   build?: string
   port?: number
@@ -117,7 +117,31 @@ export function validateManifest(m: TemplateManifest): string[] {
   for (const name of names) {
     const svc = services[name] ?? {}
     const where = `services.${name}`
-    if (svc.type !== 'web' && svc.type !== 'worker') problems.push(`${where}.type must be web or worker`)
+    if (svc.type !== 'web' && svc.type !== 'worker' && svc.type !== 'postgres') {
+      problems.push(`${where}.type must be web, worker or postgres`)
+    }
+    // A managed postgres service is BARE: the platform owns its image, port, sizing, credentials
+    // and env, so every other rule below would be asking about fields it must not carry. Mirrors
+    // the platform's own check (provisioning/templateManifest.ts) so an author hears it here.
+    if (svc.type === 'postgres') {
+      const bare = svc as Record<string, unknown>
+      for (const field of ['image', 'build', 'port', 'healthcheck', 'volume', 'volumeGib', 'spec', 'alwaysOn']) {
+        if (bare[field] !== undefined) {
+          problems.push(`${where}.${field}: a postgres service is platform-managed and carries no ${field} — declare it bare ({ type: postgres })`)
+        }
+      }
+      const groups = ['fixed', 'generated', 'platform', 'required', 'optional']
+      const envShell = bare.env
+      if (envShell !== undefined) {
+        const emptyShell = !!envShell && typeof envShell === 'object' && !Array.isArray(envShell)
+          && Object.entries(envShell as Record<string, unknown>).every(([g, v]) =>
+            groups.includes(g) && !!v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v as object).length === 0)
+        if (!emptyShell) {
+          problems.push(`${where}.env: a postgres service is platform-managed and carries no env — declare it bare ({ type: postgres })`)
+        }
+      }
+      continue
+    }
     if (svc.image && svc.build) problems.push(`${where}: image and build are mutually exclusive`)
     if (!svc.image && !svc.build) problems.push(`${where}: one of image or build is required`)
     // A parsed YAML document holds whatever the author typed, so both scalars are type-checked the

@@ -84,12 +84,54 @@ describe('validateManifest', () => {
     expect(validateManifest(m).join('\n')).toMatch(/not a pin/)
   })
   // The platform's service model (templateManifest.ts): type is web|worker, image XOR build.
-  it('requires a web|worker type and exactly one of image/build', () => {
-    const m: TemplateManifest = { code: 'x', version: '1', services: { a: { type: 'postgres' as any, image: 'a:1', build: 'b' }, b: {} } }
+  it('requires a known type and exactly one of image/build', () => {
+    const m: TemplateManifest = { code: 'x', version: '1', services: { a: { type: 'redis' as any, image: 'a:1', build: 'b' }, b: {} } }
     const problems = validateManifest(m)
-    expect(problems).toContain('services.a.type must be web or worker')
+    expect(problems).toContain('services.a.type must be web, worker or postgres')
     expect(problems).toContain('services.a: image and build are mutually exclusive')
     expect(problems).toContain('services.b: one of image or build is required')
+  })
+
+  // The platform accepts a managed postgres (provisioning/templateManifest.ts). This validator
+  // used to reject it, so a template pairing an app with a database could not be deployed from a
+  // local directory or a GitHub URL at all, though the registry lane took it happily.
+  it('accepts a bare managed postgres service', () => {
+    const m: TemplateManifest = {
+      code: 'x', version: '1',
+      services: { db: { type: 'postgres' }, web: { type: 'web', image: 'a:1', healthcheck: '/' } },
+    }
+    expect(validateManifest(m)).toEqual([])
+  })
+
+  // Bare means bare: the platform owns the image, port, sizing, credentials and env, and silently
+  // ignores anything a manifest sets. Naming the field here beats being ignored server-side.
+  it('refuses a postgres service that tries to configure itself', () => {
+    const m: TemplateManifest = {
+      code: 'x', version: '1',
+      services: { db: { type: 'postgres', image: 'postgres:16', port: 5432, volume: true } },
+    }
+    const problems = validateManifest(m).join('\n')
+    expect(problems).toMatch(/services\.db\.image: a postgres service is platform-managed and carries no image/)
+    expect(problems).toMatch(/services\.db\.port: .* carries no port/)
+    expect(problems).toMatch(/services\.db\.volume: .* carries no volume/)
+    // The bare branch returns before the image/build rules, so it must not also demand an image.
+    expect(problems).not.toMatch(/one of image or build is required/)
+  })
+
+  it('refuses env on a postgres service, but tolerates an empty shell', () => {
+    const withEnv: TemplateManifest = {
+      code: 'x', version: '1',
+      services: { db: { type: 'postgres', env: { fixed: { A: '1' } } } },
+    }
+    expect(validateManifest(withEnv).join('\n')).toMatch(/services\.db\.env: a postgres service is platform-managed and carries no env/)
+
+    // A normalized manifest round-trips through the platform carrying empty groups; accepting the
+    // shell means a published manifest can be re-validated locally without edits.
+    const shell: TemplateManifest = {
+      code: 'x', version: '1',
+      services: { db: { type: 'postgres', env: { fixed: {}, generated: {}, required: {}, optional: {} } } },
+    }
+    expect(validateManifest(shell)).toEqual([])
   })
   it('requires web services to declare an absolute healthcheck path', () => {
     const m: TemplateManifest = { code: 'x', version: '1', services: { a: { type: 'web', image: 'a:1' }, b: { type: 'web', image: 'b:1', healthcheck: 'health' } } }
