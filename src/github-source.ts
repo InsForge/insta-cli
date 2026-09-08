@@ -11,7 +11,11 @@ export type GitHubTarget = { owner: string; repo: string; refAndPath: string }
 
 const GITHUB_HOST = /^(?:https?:\/\/)?(?:www\.)?github\.com\//i
 // An explicit address: a scheme, or an scp-style user@host:path. Never a local path.
-const EXPLICIT_ADDRESS = /^[a-z][a-z0-9+.-]*:\/\/|^[^/\\]+@[^/\\]+:/i
+// A scheme (with or without its slashes) or an scp-style user@host:path. The slashes are optional
+// because `https:/github.com/o/r`, a URL that lost one, must be named as a bad address rather than
+// resolved as a directory called `https:`. Two or more scheme characters are required so a Windows
+// drive letter (`C:\src`, `C:/src`) stays a path.
+const EXPLICIT_ADDRESS = /^[a-z][a-z0-9+.-]+:|^[^/\\]+@[^/\\]+:/i
 // Scheme-less first segments we still read as a host. A bare `<name>/<path>` is otherwise a LOCAL
 // PATH: `v1.0/templates` and `my.app/bot` are directories, and reading every dotted first segment
 // as a host broke them. Only names that unambiguously host code belong here.
