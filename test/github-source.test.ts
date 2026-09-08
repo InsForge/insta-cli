@@ -106,6 +106,21 @@ describe('parseGitHubTemplateUrl', () => {
   // Scheme-less host names are recognised from a list, not from punctuation, which is what keeps
   // `v1.0/templates` a directory. The cost is that a scheme-less unknown host reads as a path;
   // adding https:// gets the accurate error.
+  // A URL that lost a slash used to fall through to local mode and report a directory called
+  // `https:` under the cwd, which names neither the typo nor the fix.
+  it('names a scheme that lost its slashes instead of resolving it as a directory', () => {
+    for (const bad of ['https:/github.com/acme/tpl', 'http:/github.com/acme/tpl', 'ftp:/example.com/x']) {
+      expect(() => parseGitHubTemplateUrl(bad)).toThrow(/unsupported template source/)
+    }
+  })
+
+  // The scheme rule needs two or more leading characters, or every Windows path starts with one.
+  it('leaves a Windows drive letter as a path', () => {
+    expect(parseGitHubTemplateUrl('C:\\src\\templates')).toBeNull()
+    expect(parseGitHubTemplateUrl('C:/src/templates')).toBeNull()
+    expect(parseGitHubTemplateUrl('d:/work/tpl')).toBeNull()
+  })
+
   it('recognises scheme-less known git hosts, and only those', () => {
     for (const bad of ['gitlab.com/a/b', 'bitbucket.org/a/b', 'gist.github.com/acme/x', 'codeberg.org/a/b']) {
       expect(() => parseGitHubTemplateUrl(bad)).toThrow(/unsupported template source/)
