@@ -95,7 +95,10 @@ export function servicesAddRequestBody(type: string, name: string, branch: strin
     type, name, ...(branch ? { branch } : {}), public: !!opts.public,
     ...(opts.image ? { image: opts.image } : {}), ...(opts.port ? { port: parsePort(opts.port) } : {}),
     ...(opts.region ? { region: opts.region } : {}),
-    ...(opts.alwaysOn ? { alwaysOn: true } : {}),
+    // Sent whenever the flag was given, false included: compute is born always-on by default
+    // (insta-platform #385, 2026-09-07), so `--no-always-on` must reach the API as an explicit
+    // false. Omitted means the platform default.
+    ...(opts.alwaysOn !== undefined ? { alwaysOn: opts.alwaysOn } : {}),
     ...(opts.volume !== undefined ? { volumeGib: parseVolumeGib(opts.volume) } : {}),
   }
 }
@@ -109,7 +112,8 @@ export async function servicesAdd(type: string, name: string, opts: ServicesAddO
     if (type !== 'compute') throw new Error('--port is only valid for compute services')
     parsePort(opts.port) // junk fails here, before any config/network access
   }
-  if (opts.alwaysOn && type !== 'compute') throw new Error('--always-on is only valid for compute services (for postgres, use `insta db always-on on` after creation)')
+  // Presence, not truthiness: `--no-always-on` is an explicit false and is just as compute-only.
+  if (opts.alwaysOn !== undefined && type !== 'compute') throw new Error('--always-on / --no-always-on is only valid for compute services (for postgres, use `insta db always-on on|off` after creation)')
   if (opts.volume !== undefined) {
     if (type !== 'compute') throw new Error('--volume is only valid for compute services (postgres has one by default — grow it with `insta db volume --size`)')
     parseVolumeGib(opts.volume) // junk fails here, before any config/network access

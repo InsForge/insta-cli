@@ -600,7 +600,7 @@ export async function computeAlwaysOn(mode: string, serviceName: string | undefi
   if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson(res.body)
   const on = res.body.service?.always_on
-  info(`compute ${res.body.service?.name ?? id}: always-on ${on ? 'ENABLED — machines stay warm (no cold starts; idle RAM bills at actual usage)' : 'disabled — scales to zero when idle (default)'}`)
+  info(`compute ${res.body.service?.name ?? id}: always-on ${on ? 'ENABLED — machines stay warm (no cold starts; idle RAM bills at actual usage)' : 'disabled — scales to zero when idle'}`)
 }
 
 // ---- limits (the resource ceiling; paid plans) ----

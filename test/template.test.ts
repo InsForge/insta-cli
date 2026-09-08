@@ -84,12 +84,54 @@ describe('validateManifest', () => {
     expect(validateManifest(m).join('\n')).toMatch(/not a pin/)
   })
   // The platform's service model (templateManifest.ts): type is web|worker, image XOR build.
-  it('requires a web|worker type and exactly one of image/build', () => {
-    const m: TemplateManifest = { code: 'x', version: '1', services: { a: { type: 'postgres' as any, image: 'a:1', build: 'b' }, b: {} } }
+  it('requires a known type and exactly one of image/build', () => {
+    const m: TemplateManifest = { code: 'x', version: '1', services: { a: { type: 'redis' as any, image: 'a:1', build: 'b' }, b: {} } }
     const problems = validateManifest(m)
-    expect(problems).toContain('services.a.type must be web or worker')
+    expect(problems).toContain('services.a.type must be web, worker or postgres')
     expect(problems).toContain('services.a: image and build are mutually exclusive')
     expect(problems).toContain('services.b: one of image or build is required')
+  })
+
+  // The platform accepts a managed postgres (provisioning/templateManifest.ts). This validator
+  // used to reject it, so a template pairing an app with a database could not be deployed from a
+  // local directory or a GitHub URL at all, though the registry lane took it happily.
+  it('accepts a bare managed postgres service', () => {
+    const m: TemplateManifest = {
+      code: 'x', version: '1',
+      services: { db: { type: 'postgres' }, web: { type: 'web', image: 'a:1', healthcheck: '/' } },
+    }
+    expect(validateManifest(m)).toEqual([])
+  })
+
+  // Bare means bare: the platform owns the image, port, sizing, credentials and env, and silently
+  // ignores anything a manifest sets. Naming the field here beats being ignored server-side.
+  it('refuses a postgres service that tries to configure itself', () => {
+    const m: TemplateManifest = {
+      code: 'x', version: '1',
+      services: { db: { type: 'postgres', image: 'postgres:16', port: 5432, volume: true } },
+    }
+    const problems = validateManifest(m).join('\n')
+    expect(problems).toMatch(/services\.db\.image: a postgres service is platform-managed and carries no image/)
+    expect(problems).toMatch(/services\.db\.port: .* carries no port/)
+    expect(problems).toMatch(/services\.db\.volume: .* carries no volume/)
+    // The bare branch returns before the image/build rules, so it must not also demand an image.
+    expect(problems).not.toMatch(/one of image or build is required/)
+  })
+
+  it('refuses env on a postgres service, but tolerates an empty shell', () => {
+    const withEnv: TemplateManifest = {
+      code: 'x', version: '1',
+      services: { db: { type: 'postgres', env: { fixed: { A: '1' } } } },
+    }
+    expect(validateManifest(withEnv).join('\n')).toMatch(/services\.db\.env: a postgres service is platform-managed and carries no env/)
+
+    // A normalized manifest round-trips through the platform carrying empty groups; accepting the
+    // shell means a published manifest can be re-validated locally without edits.
+    const shell: TemplateManifest = {
+      code: 'x', version: '1',
+      services: { db: { type: 'postgres', env: { fixed: {}, generated: {}, required: {}, optional: {} } } },
+    }
+    expect(validateManifest(shell)).toEqual([])
   })
   it('requires web services to declare an absolute healthcheck path', () => {
     const m: TemplateManifest = { code: 'x', version: '1', services: { a: { type: 'web', image: 'a:1' }, b: { type: 'web', image: 'b:1', healthcheck: 'health' } } }
@@ -373,6 +415,21 @@ describe('deployMode', () => {
     expect(() => deployMode(join(root, 'absent'))).toThrow(/no insta\.template\.yaml at/)
   })
 
+  // A URL contains `/`, so the GitHub branch must win before looksLikePath claims it as a directory.
+  it('reads a GitHub URL as a github target, not a local directory', () => {
+    expect(deployMode('https://github.com/acme/tpl/tree/v2/templates/bot', () => false)).toEqual({
+      kind: 'github',
+      target: { owner: 'acme', repo: 'tpl', refAndPath: 'v2/templates/bot' },
+    })
+  })
+  it('still rejects a malformed github.com URL instead of treating it as a path', () => {
+    expect(() => deployMode('https://github.com/acme/tpl/pull/3', () => false)).toThrow(/unsupported template source/)
+  })
+  // A non-GitHub URL must not end up as "no insta.template.yaml at <cwd>/https:/gitlab.com/a/b".
+  it('rejects a non-GitHub URL by name rather than as a missing manifest', () => {
+    expect(() => deployMode('https://gitlab.com/a/b', () => false)).toThrow(/unsupported template source/)
+  })
+
   // looksLikePath advertises `~` as a local path, so it has to actually resolve: path.resolve()
   // never expands it, and a quoted target never reaches the shell that would.
   describe('~ expansion', () => {
@@ -517,6 +574,78 @@ describe('templateDeploy', () => {
       templateDeploy('plausible', { json: true }, { api, project: PROJECT, wait: NO_WAIT, ask: async () => 'prompted!' }),
     ).rejects.toThrow(/missing required template variables:[\s\S]*BASE_URL\s+public URL[\s\S]*--set NAME=value/)
     expect(stdout.join('')).toBe('')
+    expect(posts).toEqual([])
+  })
+
+  const GH_SOURCE = { repo: 'acme/tpl', ref: 'v2', path: 'templates/bot', commit: '9'.repeat(40) }
+  const GH_MANIFEST: TemplateManifest = {
+    code: 'bot', version: '1.4.0',
+    services: { app: { type: 'worker', image: 'ghcr.io/acme/bot:1.4.0' } },
+  }
+  const fetchGitHub = async () => ({ source: GH_SOURCE, manifest: GH_MANIFEST })
+
+  it('sends the fetched manifest inline and prints the source with its commit', async () => {
+    const { api, posts } = fakeApi()
+    await templateDeploy('https://github.com/acme/tpl/tree/v2/templates/bot', {}, {
+      api, project: PROJECT, wait: NO_WAIT, fetchGitHub,
+    })
+    expect(posts[0].manifest.code).toBe('bot')
+    expect(posts[0].templateCode).toBeUndefined()
+    const out = stdout.join('')
+    expect(out).toContain('fetching template bot@1.4.0 from github.com/acme/tpl@v2 (templates/bot) at 9999999')
+    // Exactly one line goes in front of today's output, and it must not read as a second copy of
+    // the "deploying template bot to branch main" line that follows.
+    expect(out.match(/^deploying template /gm) ?? []).toHaveLength(1)
+    expect(out).toContain('deploying template bot to branch main')
+  })
+
+  it('--json carries the source in front of the deployment document', async () => {
+    const dep = { status: 'succeeded', services: [{ name: 'app', state: 'healthy', url: 'https://app.example' }] }
+    const { api } = fakeApi(dep)
+    await templateDeploy('https://github.com/acme/tpl/tree/v2/templates/bot', { json: true }, {
+      api, project: PROJECT, wait: NO_WAIT, fetchGitHub,
+    })
+    const text = stdout.join('')
+    expect(JSON.parse(text)).toEqual({ source: GH_SOURCE, ...dep })
+    expect(text).not.toMatch(/fetching template/)
+  })
+
+  it('leaves registry and local --json output without a source field', async () => {
+    const dep = { status: 'succeeded', services: [] }
+    const { api } = fakeApi(dep)
+    await templateDeploy('plausible', { json: true }, { api, project: PROJECT, wait: NO_WAIT })
+    expect(JSON.parse(stdout.join('')).source).toBeUndefined()
+  })
+
+  it('fails before any platform call when the fetch fails', async () => {
+    const { api, posts } = fakeApi()
+    await expect(templateDeploy('https://github.com/acme/tpl', {}, {
+      api, project: PROJECT, wait: NO_WAIT,
+      fetchGitHub: async () => { throw new Error('could not read https://github.com/acme/tpl: repository not found or not accessible.') },
+    })).rejects.toThrow(/could not read/)
+    expect(posts).toEqual([])
+  })
+
+  // Spec acceptance 9: the fetch has already deleted its clone by the time variables are resolved,
+  // so a -y failure cannot strand a temp directory.
+  it('-y with an unanswered required variable fails with the --set list, after the clone is gone', async () => {
+    const NEEDS_VAR: TemplateManifest = {
+      code: 'bot', version: '1.4.0',
+      services: {
+        app: {
+          type: 'worker', image: 'ghcr.io/acme/bot:1.4.0',
+          env: { required: { ADMIN_PASSWORD: { description: 'admin login password' } } },
+        },
+      },
+    }
+    let fetched = false
+    const { api, posts } = fakeApi()
+    await expect(templateDeploy('https://github.com/acme/tpl', { yes: true }, {
+      api, project: PROJECT, wait: NO_WAIT,
+      fetchGitHub: async () => { fetched = true; return { source: GH_SOURCE, manifest: NEEDS_VAR } },
+      ask: async () => 'prompted!',
+    })).rejects.toThrow(/missing required template variables:[\s\S]*ADMIN_PASSWORD\s+admin login password[\s\S]*--set NAME=value/)
+    expect(fetched).toBe(true)
     expect(posts).toEqual([])
   })
 })

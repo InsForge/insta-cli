@@ -68,6 +68,7 @@ npx tsx src/index.ts --help   # run the CLI from source
 | `npm error code EOTP` | Publish needs `--otp=<fresh 2FA code>` |
 | `npm publish` ENOENT package.json | Ran outside the repo root |
 | `npx insta@latest` behind the GH release | `publish-npm` job failed (OIDC trust/config?) — see step 4 |
+| `'C:\Program' is not recognized` from a spawned tool (win CI only) | `resolveSpawnable`'s cmd.exe hop strips the quotes around a spaced executable path (`C:\Program Files\…`). It exists for npm-installed `.cmd` shims — a real `.exe` (git, …) must be spawned directly, which finds it through PATHEXT anyway |
 | CLI hits the wrong server in tests | Persisted `~/.insta/config.json` apiUrl; set `INSTA_API_URL` (≥0.0.7) or move the config aside |
 
 ## agents.instacloud.com

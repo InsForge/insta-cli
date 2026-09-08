@@ -136,8 +136,12 @@ describe('servicesAddRequestBody', () => {
     expect(servicesAddRequestBody('postgres', 'db', 'main', { region: 'us-east' })).toMatchObject({ region: 'us-east' })
     expect(servicesAddRequestBody('postgres', 'db', 'main', {})).not.toHaveProperty('region')
   })
-  it('sends alwaysOn only when the flag is set (absent means the scale-to-zero default)', () => {
+  it('sends alwaysOn in BOTH states when the flag is given, omits it when absent (absent = the platform default, always-on for compute)', () => {
     expect(servicesAddRequestBody('compute', 'api', 'main', { alwaysOn: true })).toMatchObject({ alwaysOn: true })
+    // --no-always-on must reach the API as an explicit false: an omitted key is reinterpreted as
+    // the always-on default by the platform (insta-platform #385), so dropping false would create
+    // exactly the always-on, idle-billed service the user opted out of.
+    expect(servicesAddRequestBody('compute', 'api', 'main', { alwaysOn: false })).toMatchObject({ alwaysOn: false })
     expect(servicesAddRequestBody('compute', 'api', 'main', {})).not.toHaveProperty('alwaysOn')
   })
 })
@@ -150,7 +154,12 @@ describe('servicesAdd validation (throws before any network/config access)', () 
     await expect(servicesAdd('postgres', 'db', { port: '3000' })).rejects.toThrow(/--port is only valid for compute services/)
   })
   it('rejects --always-on for a non-compute type, pointing at the db command instead', async () => {
-    await expect(servicesAdd('postgres', 'db', { alwaysOn: true })).rejects.toThrow(/--always-on is only valid for compute services/)
+    await expect(servicesAdd('postgres', 'db', { alwaysOn: true })).rejects.toThrow(/--always-on \/ --no-always-on is only valid for compute services/)
+  })
+  it('rejects --no-always-on for a non-compute type too: an explicit false is just as compute-only', async () => {
+    // Presence check, not truthiness: a truthiness check would let `postgres db --no-always-on`
+    // reach the platform with alwaysOn:false instead of failing before config/network access.
+    await expect(servicesAdd('postgres', 'db', { alwaysOn: false })).rejects.toThrow(/--always-on \/ --no-always-on is only valid for compute services/)
   })
   it('rejects --public for a non-storage type', async () => {
     await expect(servicesAdd('compute', 'api', { public: true })).rejects.toThrow(/--public is only valid for storage services/)
