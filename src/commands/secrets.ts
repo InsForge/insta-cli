@@ -23,6 +23,13 @@ async function loadDeps(): Promise<SecretsDeps> {
   return { api, projectId: p.projectId, linkedBranch: p.branch }
 }
 
+/** A `--service` that arrived empty (`--service ""`, or an unset variable in a script) is a typo,
+ *  not a request: the platform 400s it, and silently falling back to the branch-wide read would
+ *  answer a different question than the one asked. Fail locally, naming the shape. */
+export function assertServiceRef(service?: string): void {
+  if (service !== undefined && service.trim() === '') die('--service requires <type>/<name>, e.g. compute/api')
+}
+
 /** Query for a bundle read. `--service` asks for the env ONE compute service actually receives
  *  (unambiguous by construction, so no collision can arise); a general read asks the platform to
  *  WITHHOLD any name several services define rather than silently returning one of the values. */
@@ -68,6 +75,7 @@ export async function secrets(
   opts: { branch?: string; service?: string; output?: string; print?: boolean; json?: boolean },
   deps?: SecretsDeps,
 ): Promise<void> {
+  assertServiceRef(opts.service)
   const d = deps ?? (await loadDeps())
   const branch = opts.branch ?? d.linkedBranch
   const b = await fetchSecretBundle(d.api, d.projectId, { branch, service: opts.service, json: opts.json })
@@ -152,6 +160,7 @@ export async function secretsUnset(
   opts: { branch?: string; service?: string; json?: boolean },
   deps?: SecretsDeps,
 ): Promise<void> {
+  assertServiceRef(opts.service)
   const d = deps ?? (await loadDeps())
   const parts: string[] = []
   if (opts.branch) parts.push(`branch=${encodeURIComponent(opts.branch)}`)

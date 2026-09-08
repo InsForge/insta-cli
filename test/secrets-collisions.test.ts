@@ -10,7 +10,7 @@
 import { EventEmitter } from 'node:events'
 import { describe, it, expect } from 'vitest'
 import {
-  bundleQuery, collisionLines, fetchSecretBundle, secrets, secretsUnset, type Collision,
+  assertServiceRef, bundleQuery, collisionLines, fetchSecretBundle, secrets, secretsUnset, type Collision,
 } from '../src/commands/secrets.js'
 import { bundleFetcher, childEnv, refusalLines, runWithSecrets } from '../src/commands/run.js'
 import { CliExit } from '../src/util.js'
@@ -52,6 +52,24 @@ describe('bundleQuery', () => {
 
   it('still withholds when no branch is known', () => {
     expect(bundleQuery({})).toBe('?on_collision=withhold')
+  })
+})
+
+describe('assertServiceRef', () => {
+  // The platform 400s an empty service; falling back to the branch-wide read would quietly answer
+  // a different question (`--service "$SVC"` with SVC unset is the way this happens for real).
+  it('rejects an empty or blank --service instead of reading the whole branch', async () => {
+    try {
+      const { err } = await capture(async () => {
+        for (const raw of ['', '   ']) expect(() => assertServiceRef(raw), JSON.stringify(raw)).toThrow(CliExit)
+      })
+      expect(err).toContain('--service requires <type>/<name>')
+    } finally { process.exitCode = 0 }
+  })
+
+  it('accepts a service ref, and no flag at all', () => {
+    expect(() => assertServiceRef('compute/hermes')).not.toThrow()
+    expect(() => assertServiceRef(undefined)).not.toThrow()
   })
 })
 

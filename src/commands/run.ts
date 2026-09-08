@@ -5,7 +5,7 @@
 import { spawn } from 'node:child_process'
 import { ApiClient, requireProject } from '../api.js'
 import { CliExit, die, refuse, relayExitCode } from '../util.js'
-import { collisionLines, fetchSecretBundle, type Collision, type SecretBundle, type SecretsApi } from './secrets.js'
+import { assertServiceRef, collisionLines, fetchSecretBundle, type Collision, type SecretBundle, type SecretsApi } from './secrets.js'
 
 export type RunDeps = {
   fetchBundle: () => Promise<SecretBundle>
@@ -84,6 +84,7 @@ export async function run(
 ): Promise<void> {
   const [cmd, ...rest] = cmdAndArgs
   if (!cmd) die('usage: insta run [--branch <b>] [--service <type/name>] -- <command> [args…]')
+  assertServiceRef(opts.service)
   const api = await ApiClient.load()
   const p = await requireProject()
   const branch = opts.branch ?? p.branch
