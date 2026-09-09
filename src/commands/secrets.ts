@@ -42,8 +42,15 @@ export function bundleQuery(opts: { branch?: string; service?: string }): string
   return `?${parts.join('&')}`
 }
 
-/** GET the bundle. Returns null when the platform gated the read (202). An older platform that
- *  doesn't know `collisions` reads back as none — the field is a report, not a requirement. */
+/** GET the bundle. Returns null when the platform gated the read (202). A platform that doesn't
+ *  know `collisions` reads back as none.
+ *
+ *  That fallback FAILS OPEN and is deliberate: such a platform also ignores `on_collision`, so it
+ *  answers a colliding name with a merged value and no report, and `insta run` would spawn against
+ *  it believing nothing was withheld. It is safe only by shipping order — insta-platform#388 merges
+ *  before this CLI is released, so no released build ever talks to a platform without the field
+ *  (repo owner's call). Do not read the `?? []` as unconditionally safe: if that ordering ever
+ *  changes, this is where capability detection belongs. */
 export async function fetchSecretBundle(
   api: SecretsApi,
   projectId: string,
@@ -54,19 +61,26 @@ export async function fetchSecretBundle(
   return { secrets: res.body.secrets as Record<string, string>, collisions: (res.body.collisions ?? []) as Collision[] }
 }
 
+/** The branch a remediation hint has to name: the one that was actually read, whenever that is not
+ *  the linked branch. A hint that silently dropped an explicit `--branch feat-x` would send the
+ *  user to read the linked branch instead — a different set of secrets, and no sign of the swap. */
+export function branchHint(read: string | undefined, linked: string | undefined): string | undefined {
+  return read && read !== linked ? read : undefined
+}
+
 /** Pure: the report for each withheld name — who defines it, and how to read one of them. */
-export function collisionLines(collisions: Collision[]): string[] {
+export function collisionLines(collisions: Collision[], hintBranch?: string): string[] {
   return collisions.flatMap((c) => [
     `${c.name} omitted — ${c.services.length} services define it:`,
     `  ${c.services.join(', ')}`,
-    `  read one with: insta secrets --service ${c.services[0] ?? '<type>/<name>'}`,
+    `  read one with: insta secrets --service ${c.services[0] ?? '<type>/<name>'}${hintBranch ? ` --branch ${hintBranch}` : ''}`,
   ])
 }
 
 // STDERR, always: `secrets --print` writes the env to stdout and `insta run`'s stdout belongs to
 // the child command, so a collision report on stdout would corrupt both.
-export function warnCollisions(collisions: Collision[]): void {
-  for (const line of collisionLines(collisions)) process.stderr.write(line + '\n')
+export function warnCollisions(collisions: Collision[], hintBranch?: string): void {
+  for (const line of collisionLines(collisions, hintBranch)) process.stderr.write(line + '\n')
 }
 
 // The same report for a machine reader, on stderr for the same reason: stdout carries the payload,
@@ -91,7 +105,7 @@ export async function secrets(
   // --json's stdout stays the bare map it has always been; the collisions ride stderr as one JSON
   // line, so a consumer that passes none of the new flags parses exactly what it parsed before.
   if (opts.json) { warnCollisionsJson(b.collisions); return printJson(bundle) }
-  warnCollisions(b.collisions)
+  warnCollisions(b.collisions, branchHint(branch, d.linkedBranch))
   if (opts.print) { process.stdout.write(serializeEnv(bundle)); return }
   const out = opts.output ?? '.env'
   await writeFile(out, serializeEnv(bundle))
@@ -171,14 +185,19 @@ export async function secretsUnset(
 ): Promise<void> {
   assertServiceRef(opts.service)
   const d = deps ?? (await loadDeps())
+  // Service scoping REQUIRES a branch (a service exists on a branch, so the platform rejects the
+  // pair without one) — so --service defaults to the linked branch, exactly as `secrets set` does.
+  const branch = opts.service ? (opts.branch ?? d.linkedBranch) : opts.branch
   const parts: string[] = []
-  if (opts.branch) parts.push(`branch=${encodeURIComponent(opts.branch)}`)
+  if (branch) parts.push(`branch=${encodeURIComponent(branch)}`)
   if (opts.service) parts.push(`service=${encodeURIComponent(opts.service)}`)
   const qs = parts.length ? `?${parts.join('&')}` : ''
   const res = await d.api.rawRequest('DELETE', `/projects/${d.projectId}/secrets/${encodeURIComponent(name)}${qs}`)
   if (handleApproval(res, opts.json)) return
-  if (opts.json) return printJson({ ok: true, name, branch: opts.branch ?? null, service: opts.service ?? null })
-  const scope = opts.service ? `${opts.service}${opts.branch ? `, branch ${opts.branch}` : ''}` : opts.branch ? `branch ${opts.branch}` : 'project-wide'
+  // The EFFECTIVE branch, not the flag: with --service and no --branch the scope that was deleted
+  // is the linked branch's, and the output has to say which scope it actually touched.
+  if (opts.json) return printJson({ ok: true, name, branch: branch ?? null, service: opts.service ?? null })
+  const scope = opts.service ? `${opts.service}, branch ${branch}` : branch ? `branch ${branch}` : 'project-wide'
   info(`unset ${name} (${scope})`)
 }
 

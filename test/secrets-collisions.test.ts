@@ -10,7 +10,7 @@
 import { EventEmitter } from 'node:events'
 import { describe, it, expect } from 'vitest'
 import {
-  assertServiceRef, bundleQuery, collisionLines, fetchSecretBundle, secrets, secretsUnset, type Collision,
+  assertServiceRef, branchHint, bundleQuery, collisionLines, fetchSecretBundle, secrets, secretsUnset, type Collision,
 } from '../src/commands/secrets.js'
 import { bundleFetcher, childEnv, refusalLines, runWithSecrets } from '../src/commands/run.js'
 import { CliExit } from '../src/util.js'
@@ -82,11 +82,26 @@ describe('collisionLines', () => {
     ])
   })
 
+  // Following a hint that dropped an explicit --branch reads the LINKED branch — different
+  // secrets, and nothing on screen saying the scope changed.
+  it('carries an explicit branch into the suggested command', () => {
+    expect(collisionLines(COLLISION, 'feat-x')[2])
+      .toBe('  read one with: insta secrets --service compute/hermes --branch feat-x')
+  })
+
   it('renders every entry, and nothing at all when there are none', () => {
     const two = [...COLLISION, { name: 'ADMIN_USERNAME', services: ['compute/hermes', 'compute/codex'] }]
     expect(collisionLines(two)).toHaveLength(6)
     expect(collisionLines(two)[3]).toBe('ADMIN_USERNAME omitted — 2 services define it:')
     expect(collisionLines([])).toEqual([])
+  })
+})
+
+describe('branchHint', () => {
+  it('names the branch only when it is not the linked one', () => {
+    expect(branchHint('feat-x', 'main')).toBe('feat-x')
+    expect(branchHint('main', 'main')).toBeUndefined()
+    expect(branchHint(undefined, 'main')).toBeUndefined()
   })
 })
 
@@ -135,6 +150,14 @@ describe('secrets', () => {
     expect(out).not.toContain('omitted')
     expect(err).toContain('ADMIN_PASSWORD omitted — 3 services define it:')
     expect(err).toContain('read one with: insta secrets --service compute/hermes')
+    expect(err).not.toContain('--branch') // the read WAS the linked branch: no flag to repeat
+  })
+
+  it('repeats an explicit --branch in the hint, so following it reads the same branch', async () => {
+    const d = deps(BODY)
+    const { err } = await capture(() => secrets({ print: true, branch: 'feat-x' }, d))
+    expect(d.api.calls).toEqual(['GET /projects/p1/secrets?branch=feat-x&on_collision=withhold'])
+    expect(err).toContain('read one with: insta secrets --service compute/hermes --branch feat-x')
   })
 
   // --json's stdout is a documented agent-facing surface: the BARE map. Collisions must not
@@ -179,9 +202,26 @@ describe('secrets unset --service', () => {
     expect(api.calls).toEqual(['DELETE /projects/p1/secrets/ADMIN_PASSWORD?branch=dev&service=compute%2Fhermes'])
   })
 
-  it('still deletes project-wide with no flags', async () => {
+  // A service exists ON a branch, so the platform rejects service+no-branch. `secrets set` has
+  // always defaulted to the linked branch here; unset sent no branch at all and 400d.
+  it('defaults to the linked branch, and says which scope it deleted', async () => {
     const api = stubApi({ ok: true })
-    await capture(() => secretsUnset('X', {}, { api, projectId: 'p1' }))
+    const { out } = await capture(() =>
+      secretsUnset('ADMIN_PASSWORD', { service: 'compute/hermes' }, { api, projectId: 'p1', linkedBranch: 'dev' }))
+    expect(api.calls).toEqual(['DELETE /projects/p1/secrets/ADMIN_PASSWORD?branch=dev&service=compute%2Fhermes'])
+    expect(out).toBe('unset ADMIN_PASSWORD (compute/hermes, branch dev)\n')
+  })
+
+  it('reports the effective branch under --json too', async () => {
+    const api = stubApi({ ok: true })
+    const { out } = await capture(() =>
+      secretsUnset('ADMIN_PASSWORD', { service: 'compute/hermes', json: true }, { api, projectId: 'p1', linkedBranch: 'dev' }))
+    expect(JSON.parse(out)).toEqual({ ok: true, name: 'ADMIN_PASSWORD', branch: 'dev', service: 'compute/hermes' })
+  })
+
+  it('still deletes project-wide with no flags — no branch invented without --service', async () => {
+    const api = stubApi({ ok: true })
+    await capture(() => secretsUnset('X', {}, { api, projectId: 'p1', linkedBranch: 'dev' }))
     expect(api.calls).toEqual(['DELETE /projects/p1/secrets/X'])
   })
 })
@@ -202,10 +242,30 @@ function recordingSpawn(): { calls: Array<{ cmd: string; env: NodeJS.ProcessEnv 
 
 describe('childEnv', () => {
   it('drops every colliding name so the parent’s stale export cannot stand in for it', () => {
-    const env = childEnv({ ADMIN_PASSWORD: 'stale-codex-value', PATH: '/bin' }, { DATABASE_URL: 'pg://x' }, COLLISION)
+    const env = childEnv({ ADMIN_PASSWORD: 'stale-codex-value', PATH: '/bin' }, { DATABASE_URL: 'pg://x' }, COLLISION, 'linux')
     expect(env.ADMIN_PASSWORD).toBeUndefined()
     expect(env.DATABASE_URL).toBe('pg://x')
     expect(env.PATH).toBe('/bin')
+  })
+
+  // Windows env names are case-insensitive, but the spread that builds this object is not: an
+  // exact-key delete leaves `Admin_Password` for the child to read under ADMIN_PASSWORD, which is
+  // the inheritance hole all over again. The platform is a PARAMETER so both branches run on every
+  // CI host — a test that only executes on Windows is a test that mostly does not run.
+  it('deletes case-insensitively on win32, where a differently cased export is the same variable', () => {
+    const parent = { Admin_Password: 'stale-codex-value', admin_password: 'also-stale', Path: 'C:\\bin' }
+    const env = childEnv(parent, { DATABASE_URL: 'pg://x' }, COLLISION, 'win32')
+    expect(Object.keys(env).filter((k) => k.toLowerCase() === 'admin_password')).toEqual([])
+    expect(env.DATABASE_URL).toBe('pg://x')
+    expect(env.Path).toBe('C:\\bin') // untouched: only the colliding name is removed
+  })
+
+  // The mirror image: on POSIX, Admin_Password is a DIFFERENT variable and deleting it would be
+  // us clobbering something that was never withheld.
+  it('leaves a differently cased variable alone off win32', () => {
+    const env = childEnv({ Admin_Password: 'mine', ADMIN_PASSWORD: 'stale' }, {}, COLLISION, 'linux')
+    expect(env.Admin_Password).toBe('mine')
+    expect(env.ADMIN_PASSWORD).toBeUndefined()
   })
 })
 
@@ -229,8 +289,32 @@ describe('run with a collision', () => {
 
   it('refusalLines say how to proceed both ways', () => {
     const lines = refusalLines(COLLISION).join('\n')
-    expect(lines).toContain('insta run --service compute/hermes')
-    expect(lines).toContain('insta run --ignore-collisions')
+    expect(lines).toContain('insta run --service compute/hermes -- <cmd>')
+    expect(lines).toContain('insta run --ignore-collisions -- <cmd>')
+    expect(lines).not.toContain('--branch')
+  })
+
+  // Both ways forward have to stay on the branch that was actually read.
+  it('refusalLines repeat an explicit branch in both suggestions', () => {
+    const lines = refusalLines(COLLISION, 'feat-x').join('\n')
+    expect(lines).toContain('insta run --service compute/hermes --branch feat-x -- <cmd>')
+    expect(lines).toContain('insta run --ignore-collisions --branch feat-x -- <cmd>')
+    expect(lines).toContain('insta secrets --service compute/hermes --branch feat-x')
+  })
+
+  it('the refusal printed by run carries the branch hint it was given', async () => {
+    const { calls, impl } = recordingSpawn()
+    try {
+      const { err } = await capture(async () => {
+        await expect(runWithSecrets('echo', ['hi'], {
+          fetchBundle: async () => ({ secrets: {}, collisions: COLLISION }),
+          spawnImpl: impl,
+          branchHint: 'feat-x',
+        })).rejects.toBeInstanceOf(CliExit)
+      })
+      expect(calls).toEqual([])
+      expect(err).toContain('--branch feat-x')
+    } finally { process.exitCode = 0 }
   })
 
   // The regression that motivated the refusal: a withheld name is simply MISSING from the
