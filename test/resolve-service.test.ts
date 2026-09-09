@@ -155,6 +155,16 @@ test('an invalid --port fails before any prompt', async () => {
     .rejects.toThrow(/between 1 and 65535/)
 })
 
+// `--port 0` is the worker shape, not a typo: the pre-flight check must let it reach the command,
+// and it counts as an answer, so the port question is not asked again.
+test('--port 0 passes the pre-flight check and is not asked for again', async () => {
+  const r = await resolveServiceArgs(undefined, undefined, deps({
+    selectKind: async () => kind('image'),
+    askName: async (_k, suggested) => suggested,
+  }), { image: 'ghcr.io/acme/worker:1', port: '0' })
+  expect(r).toEqual({ type: 'compute', name: 'worker', image: 'ghcr.io/acme/worker:1', port: '0' })
+})
+
 // --json promises parseable stdout; a prompt would corrupt it and hang an agent that owns a TTY.
 test('--json opts out of the prompts even on a terminal', () => {
   const io = [process.stdin, process.stdout] as Array<{ isTTY?: boolean }>

@@ -38,14 +38,28 @@ describe('parsePort', () => {
     expect(parsePort('1')).toBe(1)
     expect(parsePort('65535')).toBe(65535)
   })
+  // 0 is the worker shape (no HTTP endpoint), which the platform and `insta deploy --port 0`
+  // already accept. Rejecting it here left `services add` unable to create a service the rest of
+  // the product supports, so workers had to be created at some other port and converged to 0 by
+  // the first deploy.
+  it('accepts 0, the worker shape, rather than reading it as an out-of-range port', () => {
+    expect(parsePort('0')).toBe(0)
+    expect(parsePort('  0  ')).toBe(0)
+  })
   // Junk used to reach the API as NaN, which serializes to null.
   it('rejects out-of-range and non-integer ports', () => {
-    expect(() => parsePort('0')).toThrow(/between 1 and 65535/)
     expect(() => parsePort('65536')).toThrow(/between 1 and 65535/)
     expect(() => parsePort('8080.5')).toThrow(/between 1 and 65535/)
     expect(() => parsePort('abc')).toThrow(/between 1 and 65535/)
+    expect(() => parsePort('-1')).toThrow(/between 1 and 65535/)
   })
-  // Number() would read these as 8080 and 1000 — a port in hex is a typo, not a port.
+  // Widening the range must not blunt the message a real typo gets. The error names 0 explicitly
+  // and keeps the offending value, so the reader learns both accepted shapes at the point of error.
+  it('names 0 and the rejected value in the error', () => {
+    expect(() => parsePort('99999')).toThrow(/port must be 0 \(worker: no HTTP endpoint\) or an integer between 1 and 65535, got: 99999/)
+  })
+  // Number() would read these as 8080 and 1000 — a port in hex is a typo, not a port. `0x1f90` and
+  // `0o17620` start with a 0 the widened range must not swallow: they are still junk, not workers.
   it('rejects non-decimal spellings Number() would have accepted', () => {
     expect(() => parsePort('0x1f90')).toThrow(/between 1 and 65535/)
     expect(() => parsePort('1e3')).toThrow(/between 1 and 65535/)
@@ -126,6 +140,14 @@ describe('servicesAddRequestBody', () => {
     expect(b).toMatchObject({ image: 'ghcr.io/acme/api:latest', port: 3000 })
     expect(b.port).toBe(3000) // Number, not the raw string
   })
+  // The worker shape has to survive the mapping. A truthiness test on the raw option would drop
+  // "0" here and create a default-port HTTP service instead of the shape that was asked for, which
+  // is the same class of bug --no-always-on hit (an explicit value read as "not given").
+  it('sends port 0, the worker shape, rather than dropping it as a falsy value', () => {
+    const b = servicesAddRequestBody('compute', 'wk', 'main', { port: '0' })
+    expect(b).toEqual({ type: 'compute', name: 'wk', branch: 'main', public: false, port: 0 })
+    expect(b.port).toBe(0)
+  })
   it('omits branch when undefined', () => {
     expect(servicesAddRequestBody('postgres', 'db', undefined, {})).toEqual({ type: 'postgres', name: 'db', public: false })
   })
@@ -152,6 +174,12 @@ describe('servicesAdd validation (throws before any network/config access)', () 
   })
   it('rejects --port for a non-compute type', async () => {
     await expect(servicesAdd('postgres', 'db', { port: '3000' })).rejects.toThrow(/--port is only valid for compute services/)
+  })
+  // Presence, not truthiness, here too: `--port 0` on a postgres service is just as wrong as
+  // `--port 3000`, and must fail before any config or network access rather than slip through as
+  // "no port given" and provision the service anyway.
+  it('rejects --port 0 for a non-compute type as well', async () => {
+    await expect(servicesAdd('postgres', 'db', { port: '0' })).rejects.toThrow(/--port is only valid for compute services/)
   })
   it('rejects --always-on for a non-compute type, pointing at the db command instead', async () => {
     await expect(servicesAdd('postgres', 'db', { alwaysOn: true })).rejects.toThrow(/--always-on \/ --no-always-on is only valid for compute services/)
