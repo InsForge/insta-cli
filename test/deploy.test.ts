@@ -6,17 +6,17 @@ import { deployRequestBody, noDockerfileMessage } from '../src/commands/deploy.j
 
 describe('deployRequestBody', () => {
   it('omits websocket for a normal deploy', () => {
-    const b = deployRequestBody('img', 'main', { port: '3000' })
+    const b = deployRequestBody({ image: 'img' }, 'main', { port: '3000' })
     expect(b.websocket).toBeUndefined()
     expect(b).toMatchObject({ image: 'img', branch: 'main', port: 3000 })
   })
   it('sends websocket:true when --websocket is set', () => {
-    expect(deployRequestBody('img', 'main', { websocket: true }).websocket).toBe(true)
-    expect(deployRequestBody('img', 'main', { replaceSource: true }).replaceSource).toBe(true)
-    expect(deployRequestBody('img', 'main', {})).not.toHaveProperty('replaceSource', true)
+    expect(deployRequestBody({ image: 'img' }, 'main', { websocket: true }).websocket).toBe(true)
+    expect(deployRequestBody({ image: 'img' }, 'main', { replaceSource: true }).replaceSource).toBe(true)
+    expect(deployRequestBody({ image: 'img' }, 'main', {})).not.toHaveProperty('replaceSource', true)
   })
   it('leaves port undefined when not provided', () => {
-    expect(deployRequestBody('img', 'main', {}).port).toBeUndefined()
+    expect(deployRequestBody({ image: 'img' }, 'main', {}).port).toBeUndefined()
   })
 })
 

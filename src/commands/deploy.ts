@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { ApiClient, ApiError, requireProject } from '../api.js'
 import { info, die, printJson, handleApproval, renderNextActions, CliExit } from '../util.js'
 import { flyctlBuildAndPush, ensureFlyctl, defaultBuildRunner, stderrBuildRunner, type BuildRunner } from '../flyctl-build.js'
+import { packDirectory, type ArchiveLimits } from '../pack.js'
+import { uploadArchive, type ArchiveRef, type Uploader } from '../deploy-archive.js'
 
 type DeployOpts = { image?: string; branch?: string; group?: string; port?: string; websocket?: boolean; replaceSource?: boolean; json?: boolean }
 
@@ -11,16 +13,65 @@ type DeployOpts = { image?: string; branch?: string; group?: string; port?: stri
 const note = (opts: DeployOpts) => (opts.json ? (m: string) => void process.stderr.write(m + '\n') : info)
 
 // Map CLI options to the platform deploy request body. Pure, so it's unit-tested. --websocket is only
-// sent when set (plain deploys unchanged).
-export function deployRequestBody(image: string, branch: string, opts: DeployOpts): Record<string, unknown> {
+// sent when set (plain deploys unchanged). Exactly one of image | archive rides along.
+export function deployRequestBody(source: DeploySource, branch: string, opts: DeployOpts): Record<string, unknown> {
   return {
-    image,
+    ...('image' in source ? { image: source.image } : { archive: source.archive }),
     branch,
     group: opts.group,
     port: opts.port ? Number(opts.port) : undefined,
     websocket: opts.websocket ? true : undefined,
     replaceSource: opts.replaceSource ? true : undefined,
   }
+}
+
+// What a source directory resolved to: a built image (flyctl or local docker) or an uploaded
+// archive the gateway will build.
+export type DeploySource = { image: string } | { archive: ArchiveRef }
+
+type Lane =
+  | { lane: 'flyctl' }
+  | { lane: 'local-docker' }
+  | { lane: 'archive'; limits: ArchiveLimits }
+  | { lane: 'none'; reason: string }
+  | { lane: 'legacy' }
+
+// Ask the platform which lane serves this target, so the CLI stops knowing which provider backs
+// its service. A 404 means the platform predates the contract — and because this is a GET, it
+// 404s the same way for a human and an agent, which a POST would not.
+async function discoverLane(api: Pick<ApiClient, 'rawRequest'>, projectId: string, branch: string, opts: DeployOpts): Promise<Lane> {
+  const q = new URLSearchParams({ branch, ...(opts.group ? { group: opts.group } : {}) })
+  try {
+    const res = await api.rawRequest('GET', `/projects/${projectId}/source-build?${q}`)
+    return res.body as Lane
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return { lane: 'legacy' }
+    throw e
+  }
+}
+
+// Turn a source directory into something deployable. Returns null when an approval is pending.
+export async function prepareSource(
+  api: Pick<ApiClient, 'rawRequest'>,
+  projectId: string,
+  dir: string,
+  branch: string,
+  opts: DeployOpts,
+  run: BuildRunner = opts.json ? stderrBuildRunner : defaultBuildRunner,
+  upload?: Uploader,
+): Promise<DeploySource | null> {
+  const lane = await discoverLane(api, projectId, branch, opts)
+  if (lane.lane === 'none') die(lane.reason)
+  if (lane.lane !== 'archive') {
+    // flyctl, local-docker and legacy all end in an image, and all three need a Dockerfile.
+    return { image: await buildFromSource(api, projectId, dir, branch, opts, run) }
+  }
+  const log = note(opts)
+  const absDir = resolve(process.cwd(), dir)
+  const packed = packDirectory(absDir, lane.limits)
+  log(`packed ${dir}: ${packed.files} files, ${packed.archive.length} bytes`)
+  const ref = await uploadArchive(api, projectId, packed, branch, opts, upload)
+  return ref && { archive: ref }
 }
 
 // A port mismatch is the #1 deploy mistake: the app boots "successfully" but the proxy routes to
@@ -77,11 +128,13 @@ export async function deploy(dir: string | undefined, opts: DeployOpts): Promise
   }
 
   const effOpts = { ...opts, port: port?.toString() }
-  const image = dir ? await buildFromSource(api, p.projectId, dir, branch, effOpts) : opts.image!
-  const res = await api.rawRequest('POST', `/projects/${p.projectId}/deploy`, deployRequestBody(image, branch, effOpts))
+  const source = dir ? await prepareSource(api, p.projectId, dir, branch, effOpts) : { image: opts.image! }
+  if (!source) return // an approval is pending; the user approves and re-runs
+  const res = await api.rawRequest('POST', `/projects/${p.projectId}/deploy`, deployRequestBody(source, branch, effOpts))
   if (handleApproval(res, opts.json)) return
-  if (opts.json) return printJson({ image, ...res.body })
-  info(`deployed ${image} -> ${res.body.url} (branch ${res.body.branch}, group ${res.body.group})`)
+  const what = 'image' in source ? source.image : `archive ${source.archive.sha256.slice(0, 12)} (${source.archive.build.type})`
+  if (opts.json) return printJson({ ...('image' in source ? { image: source.image } : { archive: source.archive }), ...res.body })
+  info(`deployed ${what} -> ${res.body.url} (branch ${res.body.branch}, group ${res.body.group})`)
   renderNextActions(res.body.nextActions)
 }
 
