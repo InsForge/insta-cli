@@ -1,0 +1,198 @@
+import { readdirSync, readFileSync, lstatSync, readlinkSync, existsSync } from 'node:fs'
+import { join, sep } from 'node:path'
+import { createHash } from 'node:crypto'
+import { gzipSync } from 'node:zlib'
+import { compileIgnore, type Ignore, type IgnoreFile, type Flavour } from './pack-ignore.js'
+
+// Packs a source directory into the tar.gz the build gateway fetches as source.archive.
+
+// What the build worker enforces; discovery returns the server's own figures, which override these.
+export type ArchiveLimits = { maxArchiveBytes: number; maxExtractedBytes: number; maxFiles: number }
+
+export const ARCHIVE_LIMITS: ArchiveLimits = {
+  maxArchiveBytes: 256 * 1024 * 1024,
+  maxExtractedBytes: 1024 * 1024 * 1024,
+  maxFiles: 10000,
+}
+
+export type PackResult = {
+  archive: Buffer
+  sha256: string
+  files: number
+  // Total entries incl. directories: the worker counts every header, so the cap applies to this.
+  entries: number
+  extractedBytes: number
+  // Selects the build type: the gateway does not fall back to nixpacks when it finds no Dockerfile.
+  hasDockerfile: boolean
+}
+
+const BLOCK = 512
+const PAD = Buffer.alloc(BLOCK, 0)
+
+// Only the exec bit matters: normalising to 0644 breaks entrypoints, raw mode leaks the umask.
+const fileMode = (mode: number): number => (mode & 0o111 ? 0o755 : 0o644)
+
+const octal = (n: number, width: number): string => n.toString(8).padStart(width - 1, '0') + '\0'
+
+// ustar splits a long path across prefix(155) + name(100); refuse by name rather than truncate.
+function splitName(path: string): { name: string; prefix: string } {
+  if (Buffer.byteLength(path) <= 100) return { name: path, prefix: '' }
+  for (let i = path.indexOf('/'); i !== -1; i = path.indexOf('/', i + 1)) {
+    const prefix = path.slice(0, i)
+    const name = path.slice(i + 1)
+    if (Buffer.byteLength(prefix) <= 155 && Buffer.byteLength(name) <= 100) return { name, prefix }
+  }
+  throw new Error(`path too long for a tar archive: ${path}`)
+}
+
+function header(path: string, mode: number, size: number, type: '0' | '5'): Buffer {
+  const h = Buffer.alloc(BLOCK, 0)
+  const { name, prefix } = splitName(path)
+  h.write(name, 0, 100, 'utf8')
+  h.write(octal(mode, 8), 100, 8, 'ascii')
+  h.write(octal(0, 8), 108, 8, 'ascii') // uid, pinned
+  h.write(octal(0, 8), 116, 8, 'ascii') // gid, pinned
+  h.write(octal(size, 12), 124, 12, 'ascii')
+  h.write(octal(0, 12), 136, 12, 'ascii') // mtime, pinned
+  h.write('        ', 148, 8, 'ascii') // checksum is summed as spaces, then overwritten
+  h.write(type, 156, 1, 'ascii')
+  h.write('ustar\0', 257, 6, 'ascii')
+  h.write('00', 263, 2, 'ascii')
+  h.write(prefix, 345, 155, 'utf8')
+
+  let sum = 0
+  for (const b of h) sum += b
+  h.write(octal(sum, 7) + ' ', 148, 8, 'ascii')
+  return h
+}
+
+type Found = { path: string; mode: number; size: number; dir: boolean }
+
+// The builder fails the whole build on a symlink entry; hardlinks are fine, we only write type '0'.
+function linkError(links: { path: string; target: string }[]): Error {
+  const shown = links.slice(0, 5).map((l) => `  ${l.path} -> ${l.target}`)
+  const more = links.length > shown.length ? [`  … and ${links.length - shown.length} more`] : []
+  return new Error(
+    [
+      'a deploy archive cannot contain symlinks — the build gateway rejects them:',
+      ...shown,
+      ...more,
+      'replace them with real files, or exclude them (.dockerignore, or .gitignore when there is no .dockerignore)',
+    ].join('\n'),
+  )
+}
+
+// .git blows the 10k entry cap on its own; .insta is CLI state. A deliberate departure from docker.
+const ALWAYS_SKIP = new Set(['.git', '.insta'])
+
+// docker keeps these whatever the ignore file says; avoids a remote-only "Dockerfile not found".
+const KEPT_AT_ROOT = new Set(['Dockerfile', '.dockerignore'])
+
+// One global sort emits a parent before its children, since a dir name prefixes everything inside.
+function walk(
+  root: string,
+  rel: string,
+  out: Found[],
+  links: { path: string; target: string }[],
+  ig: Ignore,
+  files: IgnoreFile[],
+  flavour: Flavour,
+): void {
+  const dirAbs = join(root, rel === '' ? '.' : rel.split('/').join(sep))
+  const names = readdirSync(dirAbs).sort()
+
+  // A nested .gitignore extends its own subtree; recompiled only where one exists. docker has none.
+  if (flavour === 'git' && rel !== '' && names.includes('.gitignore')) {
+    files = [...files, { base: rel, text: readFileSync(join(dirAbs, '.gitignore'), 'utf8') }]
+    ig = compileIgnore(files, 'git')
+  }
+
+  for (const name of names) {
+    if (ALWAYS_SKIP.has(name)) continue
+    const relPath = rel === '' ? name : `${rel}/${name}`
+    const keep = rel === '' && KEPT_AT_ROOT.has(name)
+    const abs = join(root, relPath.split('/').join(sep))
+    const st = lstatSync(abs)
+
+    if (st.isSymbolicLink()) {
+      // An ignored symlink is not the user's problem to solve.
+      if (!keep && ig.excludes(relPath, false)) continue
+      links.push({ path: relPath, target: readlinkSync(abs) })
+    } else if (st.isDirectory()) {
+      if (ig.excludes(relPath, true) && ig.canPrune(relPath)) continue
+      // Emitted whenever we descend, so a re-included child has its parent.
+      out.push({ path: `${relPath}/`, mode: 0o755, size: 0, dir: true })
+      walk(root, relPath, out, links, ig, files, flavour)
+    } else if (st.isFile()) {
+      if (!keep && ig.excludes(relPath, false)) continue
+      out.push({ path: relPath, mode: fileMode(st.mode), size: st.size, dir: false })
+    }
+  }
+}
+
+// A root .dockerignore wins outright; merging would drop artefacts the image needs.
+function rootIgnore(absDir: string): { ig: Ignore; files: IgnoreFile[]; flavour: Flavour } {
+  const read = (name: string) => readFileSync(join(absDir, name), 'utf8')
+  if (existsSync(join(absDir, '.dockerignore'))) {
+    const files = [{ base: '', text: read('.dockerignore') }]
+    return { ig: compileIgnore(files, 'docker'), files, flavour: 'docker' }
+  }
+  const files = existsSync(join(absDir, '.gitignore')) ? [{ base: '', text: read('.gitignore') }] : []
+  return { ig: compileIgnore(files, 'git'), files, flavour: 'git' }
+}
+
+const mib = (n: number): string => `${(n / (1024 * 1024)).toFixed(1)} MiB`
+
+export function packDirectory(absDir: string, limits: Partial<ArchiveLimits> = {}): PackResult {
+  const cap = { ...ARCHIVE_LIMITS, ...limits }
+  const found: Found[] = []
+  const links: { path: string; target: string }[] = []
+  const { ig, files, flavour } = rootIgnore(absDir)
+  walk(absDir, '', found, links, ig, files, flavour)
+  if (links.length) throw linkError(links)
+  found.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+
+  // Known from the walk alone, so both fail before a byte is read or compressed.
+  const extractedBytes = found.reduce((n, e) => n + e.size, 0)
+  if (found.length > cap.maxFiles) {
+    throw new Error(
+      `archive has too many files: ${found.length} > ${cap.maxFiles} (directories count) — exclude what the build does not need`,
+    )
+  }
+  if (extractedBytes > cap.maxExtractedBytes) {
+    throw new Error(
+      `archive would extract to ${mib(extractedBytes)}, over the ${mib(cap.maxExtractedBytes)} limit — exclude what the build does not need`,
+    )
+  }
+
+  const chunks: Buffer[] = []
+  for (const e of found) {
+    if (e.dir) {
+      chunks.push(header(e.path, e.mode, 0, '5'))
+      continue
+    }
+    const data = readFileSync(join(absDir, e.path.split('/').join(sep)))
+    chunks.push(header(e.path, e.mode, data.length, '0'), data)
+    const rem = data.length % BLOCK
+    if (rem) chunks.push(PAD.subarray(0, BLOCK - rem))
+  }
+  chunks.push(PAD, PAD) // two zero blocks close a tar
+
+  const archive = gzipSync(Buffer.concat(chunks), { level: 9 })
+  // gzip carries its own mtime (4-7) and OS byte (9), both filled from the environment.
+  archive.writeUInt32LE(0, 4)
+  archive[9] = 255
+
+  if (archive.length > cap.maxArchiveBytes) {
+    throw new Error(`archive is too large: ${mib(archive.length)} > ${mib(cap.maxArchiveBytes)} — exclude what the build does not need`)
+  }
+
+  return {
+    archive,
+    sha256: createHash('sha256').update(archive).digest('hex'),
+    files: found.filter((e) => !e.dir).length,
+    entries: found.length,
+    extractedBytes,
+    hasDockerfile: found.some((e) => e.path === 'Dockerfile'),
+  }
+}
