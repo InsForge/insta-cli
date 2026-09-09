@@ -22,6 +22,7 @@ import * as secretsCmd from './commands/secrets.js'
 import { deploy } from './commands/deploy.js'
 import { build } from './commands/build.js'
 import * as computeCmd from './commands/compute.js'
+import * as githubCmd from './commands/github.js'
 import * as dbCmd from './commands/db.js'
 import * as dbQueryCmd from './commands/db-query.js'
 import * as storageCmd from './commands/storage.js'
@@ -214,6 +215,7 @@ program.command('build [dir]').description('Verify a source directory would buil
 program.command('deploy [dir]').description('Deploy a source directory (built remotely on Fly) or a prebuilt --image to a branch compute group')
   .option('--image <url>', 'prebuilt container image to deploy (instead of a source dir)').option('--branch <b>').option('--group <g>').option('--port <p>')
   .option('--websocket', 'run a WebSocket app (larger guest + connection-based concurrency)')
+  .option('--replace-source', 'the service deploys from a connected GitHub repo: switch it to this image and remove the repo connection (admin); without it such a deploy is refused')
   .option('--json', 'print the deploy result as JSON (build progress goes to stderr)')
   .action(guard((dir, o) => deploy(dir, o)))
 
@@ -254,6 +256,18 @@ const execCmd = compute.command('exec [service]').description("Run a one-shot co
 // Declared from the same list splitExecArgs uses to find where the CLI's own arguments stop, so a
 // new option cannot reach the CLI surface while the split still reads it as part of the command.
 for (const [flags, description] of computeCmd.EXEC_OPTIONS) execCmd.option(flags, description)
+compute.command('repo [service]').description('Show what a compute service deploys from: the image it runs, or the GitHub repository — owner/repo, the branch it builds, root directory, and whether pushes redeploy it')
+  .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => githubCmd.computeRepo(service, o)))
+compute.command('connect-repo <owner/repo> [service]').description("Connect a GitHub repository to an EXISTING compute service: the repo is built (its Dockerfile, or nixpacks when there is none) and deployed into that service, and every later push to the tracked repository branch redeploys it. The repo must be reachable through the org's GitHub App installation — connect GitHub in the console first (Add Service → GitHub Repo) — or be public. Build and start commands come from detection and cannot be set. Connecting again replaces the service's current source")
+  .option('--public', 'the repo is public and no GitHub App installation is needed (deploys are manual; pushes cannot redeploy)')
+  .option('--root-dir <dir>', 'the directory of the repo to build (a monorepo with several deployable directories lists them and exits 1 without it)')
+  .option('--repo-branch <name>', "the repository branch to build (default: the repo's default branch)")
+  .option('--no-auto-deploy', 'do not rebuild on pushes; redeploy by connecting again or from the console')
+  .option('--port <n>', 'port the app listens on (default: detected)')
+  .option('--branch <branch>', 'branch (default: current) — the environment the service is on')
+  .option('--json').action(guard((ref, service, o) => githubCmd.computeConnectRepo(ref, service, o)))
+compute.command('disconnect-repo [service]').description('Disconnect the GitHub repository from a compute service. The service keeps running its current image; pushes no longer deploy it, and its build history stays')
+  .option('--json').option('--branch <branch>', 'branch (default: current)').action(guard((service, o) => githubCmd.computeDisconnectRepo(service, o)))
 compute.command('volume [service]').description("Show, attach, grow, or delete a compute service's persistent /data volume. No flag: print size, mount path, and the plan cap (any plan). --size on a volumeless service ATTACHES one (any plan at the default 10Gi, the free cap; larger is paid and plan-capped; the disk mounts at /data on the next deploy); on a volume-bearing one it grows (paid plans; grow-only — a provisioned disk cannot shrink). --delete DESTROYS the disk and ALL its data immediately (no detach, no undo; billing stops now, and suspend fast-wake + scale-out return). Billing is actual data stored — the size is a cap, not a price")
   .option('--size <gi>', 'new size in whole Gi, e.g. 10 (must be ≥ the current size)')
   .option('--delete', 'destroy the volume and ALL its data (irreversible; download anything you need first)')
