@@ -303,6 +303,22 @@ describe('childEnv', () => {
 
   // A platform that reports a collision while still merging its value: the name is withheld, so it
   // must not be written back from the bundle either — in any casing.
+  // A key of `__proto__` would set the prototype rather than create an entry with `env[k] = v`,
+  // and the secret would vanish with no error. The platform's name rule makes it unreachable, but
+  // this CLI points at whatever INSTA_API_URL names, so it does not rely on that.
+  it('injects a name that would otherwise hit Object.prototype', () => {
+    for (const platform of ['win32', 'linux'] as const) {
+      // JSON.parse, not a literal: `{ __proto__: 'v' }` is the prototype-setting syntax and would
+      // not create a key at all (and with a string value the spec ignores it outright), so the
+      // literal form silently tests nothing.
+      const bundle = JSON.parse('{"__proto__":"v"}') as Record<string, string>
+      const env = childEnv({ PATH: '/bin' }, bundle, [], platform)
+      expect(Object.prototype.hasOwnProperty.call(env, '__proto__'), platform).toBe(true)
+      expect(Object.getOwnPropertyDescriptor(env, '__proto__')?.value, platform).toBe('v')
+      expect(Object.getPrototypeOf(env), platform).toBe(Object.prototype)
+    }
+  })
+
   it('never re-adds a withheld name on win32, even one the bundle carried', () => {
     const env = childEnv({ Admin_Password: 'stale' }, { ADMIN_PASSWORD: 'merged-value', OK: '1' }, COLLISION, 'win32')
     expect(Object.keys(env).filter((k) => k.toLowerCase() === 'admin_password')).toEqual([])

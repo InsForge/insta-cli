@@ -61,7 +61,20 @@ export function childEnv(
     for (const key of Object.keys(env)) if (claimed.has(key.toLowerCase())) delete env[key]
     // A withheld name stays gone in every casing — including one the bundle itself carried, which
     // is a platform that answered `collisions` while still merging the values.
-    for (const [k, v] of Object.entries(bundle)) if (!withheld.has(k.toLowerCase())) env[k] = v
+    //
+    // defineProperty, not `env[k] = v`: a key of `__proto__` would otherwise set the prototype
+    // instead of creating an entry, and the secret would vanish silently. The platform's name rule
+    // (`^[A-Z][A-Z0-9_]{0,63}$`) makes that unreachable today — and that is exactly why it is worth
+    // one call rather than a trusted invariant: this CLI points at whatever `INSTA_API_URL` names,
+    // including a self-hosted insta-oss daemon whose validation is not this repo's to guarantee.
+    //
+    // The same rule is what makes two bundle keys differing ONLY by case impossible (case-differing
+    // needs a lowercase letter, which the rule forbids). If it ever loosens, this loop is where it
+    // bites: both variants would be written and Windows would resolve one of them arbitrarily.
+    for (const [k, v] of Object.entries(bundle)) {
+      if (withheld.has(k.toLowerCase())) continue
+      Object.defineProperty(env, k, { value: v, enumerable: true, configurable: true, writable: true })
+    }
     return env
   }
   const env: NodeJS.ProcessEnv = { ...parent, ...bundle }
