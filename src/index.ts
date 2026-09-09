@@ -94,7 +94,7 @@ envCmd.command('use <name>').description(`Switch environment (${ENV_NAMES.join('
 // ---- run (per-request secret injection — nothing written to disk) ----
 program.command('run <cmd> [args...]').description('Run a command with the branch credential bundle injected into its environment (no .env written)')
   .option('--branch <b>', 'branch bundle to inject (default: linked branch)')
-  .option('--service <type/name>', "inject exactly what one compute service receives, e.g. compute/api — the unambiguous read when several services define the same name")
+  .option('--service <type/name>', "inject one compute service's own slice of the branch bundle, e.g. compute/api — the unambiguous read when several services define the same name (NOT the container's env: it also carries the branch's provider credentials, which a container gets only where bound)")
   .option('--ignore-collisions', 'run even when several services define the same name; every such name is REMOVED from the child environment (never inherited from your shell)')
   .passThroughOptions().allowUnknownOption()
   .action(guard((cmd, args, o) => runCmd.run([cmd, ...(args ?? [])], o)))
@@ -176,7 +176,7 @@ svc.command('secrets <type> <name>').description("List a service's secret names"
 // ---- secrets (seam) ----
 const sec = program.command('secrets').description('Fetch the credential bundle (secret seam) into .env')
   .option('--branch <branch>')
-  .option('--service <type/name>', "read one compute service's own env instead of the branch-wide bundle, e.g. compute/api")
+  .option('--service <type/name>', "read one compute service's own slice of the bundle instead of the branch-wide merge, e.g. compute/api")
   .option('-o, --output <file>', 'output file (default .env)').option('--print', 'print instead of writing').option('--json')
   .action(guard((o) => secretsCmd.secrets(o)))
 sec.command('list').description('List secret names, grouped by service').option('--branch <branch>').option('--json').action(guard((o) => secretsCmd.secretsList(o)))

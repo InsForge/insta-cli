@@ -10,7 +10,7 @@
 import { EventEmitter } from 'node:events'
 import { describe, it, expect } from 'vitest'
 import {
-  assertServiceRef, branchHint, bundleQuery, collisionLines, fetchSecretBundle, secrets, secretsUnset, type Collision,
+  assertServiceRef, branchHint, bundleQuery, collisionLines, fetchSecretBundle, secrets, secretsSet, secretsUnset, type Collision,
 } from '../src/commands/secrets.js'
 import { bundleFetcher, childEnv, refusalLines, runWithSecrets } from '../src/commands/run.js'
 import { CliExit } from '../src/util.js'
@@ -64,6 +64,17 @@ describe('assertServiceRef', () => {
         for (const raw of ['', '   ']) expect(() => assertServiceRef(raw), JSON.stringify(raw)).toThrow(CliExit)
       })
       expect(err).toContain('--service requires <type>/<name>')
+    } finally { process.exitCode = 0 }
+  })
+
+  // The WRITE path guards it too, and the stakes there are higher: falling through would have put
+  // the secret PROJECT-WIDE, visible to every service on the branch, when the caller asked to
+  // narrow it to one service. Asserted through secretsSet, not the helper, so the wiring is pinned.
+  it('guards the write path, where falling through would widen the scope', async () => {
+    try {
+      for (const raw of ['', '   ']) {
+        await expect(secretsSet('K', 'v', { service: raw }), JSON.stringify(raw)).rejects.toThrow(CliExit)
+      }
     } finally { process.exitCode = 0 }
   })
 

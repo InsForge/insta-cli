@@ -164,6 +164,10 @@ async function readStdin(): Promise<string> {
 // it to a branch service instead, which implies the current branch (binding requires one). Value
 // comes from the argument, or stdin when omitted (keeps secret values out of shell history).
 export async function secretsSet(name: string, value: string | undefined, opts: { branch?: string; service?: string; json?: boolean }): Promise<void> {
+  // An empty --service must not fall through to a project-wide WRITE. The scoping test below is a
+  // truthiness check, so `--service ''` (a client interpolating an absent variable) would have put
+  // the secret at a WIDER scope than the caller asked for, visible to every service on the branch.
+  assertServiceRef(opts.service)
   const api = await ApiClient.load()
   const p = await requireProject()
   const v = value ?? (await readStdin())
