@@ -32,13 +32,22 @@ export function parseCount(raw: string): number {
   return n
 }
 
-// Parse a TCP port. Junk fails here rather than reaching the API as NaN (the parseCpu lesson).
-// Decimal digits only, as parseVolumeGib: `Number()` alone would quietly read 0x1f90 as 8080 and
-// 1e3 as 1000, and a port written in hex is a typo worth reporting, not one worth honouring.
+// Parse a compute service port. 0 is a service SHAPE, not an out-of-range port: it is the worker
+// shape, a long-running process with no HTTP endpoint (queue consumers, background agents), which
+// the compute plane gives no PORT env and no ClusterIP. The platform accepts it and `insta deploy
+// --port 0` already creates it (that deploy reports an empty url, correctly), so the one command
+// whose job is "create a service of this shape" has to be able to express it too.
+//
+// Junk still fails here rather than reaching the API as NaN (the parseCpu lesson). Decimal digits
+// only, as parseVolumeGib: `Number()` alone would quietly read 0x1f90 as 8080 and 1e3 as 1000, and
+// a port written in hex is a typo worth reporting, not one worth honouring. The message names 0
+// rather than quietly widening the range, so a genuine typo still reads as one.
 export function parsePort(raw: string): number {
   const m = /^\s*(\d+)\s*$/.exec(raw)
   const n = m ? Number(m[1]) : NaN
-  if (!Number.isInteger(n) || n < 1 || n > 65535) throw new Error(`port must be an integer between 1 and 65535, got: ${raw}`)
+  if (!Number.isInteger(n) || n < 0 || n > 65535) {
+    throw new Error(`port must be 0 (worker: no HTTP endpoint) or an integer between 1 and 65535, got: ${raw}`)
+  }
   return n
 }
 
@@ -93,7 +102,10 @@ export type ServicesAddOpts = { branch?: string; public?: boolean; image?: strin
 export function servicesAddRequestBody(type: string, name: string, branch: string | undefined, opts: ServicesAddOpts): Record<string, unknown> {
   return {
     type, name, ...(branch ? { branch } : {}), public: !!opts.public,
-    ...(opts.image ? { image: opts.image } : {}), ...(opts.port ? { port: parsePort(opts.port) } : {}),
+    ...(opts.image ? { image: opts.image } : {}),
+    // Presence, not truthiness: "0" is the worker port and a truthy test would silently drop it,
+    // creating a default-port HTTP service instead of the shape that was asked for.
+    ...(opts.port !== undefined ? { port: parsePort(opts.port) } : {}),
     ...(opts.region ? { region: opts.region } : {}),
     // Sent whenever the flag was given, false included: compute is born always-on by default
     // (insta-platform #385, 2026-09-07), so `--no-always-on` must reach the API as an explicit
@@ -108,7 +120,7 @@ export async function servicesAdd(type: string, name: string, opts: ServicesAddO
   if (opts.public && type !== 'storage') throw new Error('--public is only valid for storage services')
   if (opts.region && type === 'storage') throw new Error('--region is not valid for storage services')
   if (opts.image && type !== 'compute') throw new Error('--image is only valid for compute services')
-  if (opts.port) {
+  if (opts.port !== undefined) {
     if (type !== 'compute') throw new Error('--port is only valid for compute services')
     parsePort(opts.port) // junk fails here, before any config/network access
   }

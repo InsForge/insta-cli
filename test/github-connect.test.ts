@@ -55,6 +55,11 @@ describe('sourceBody', () => {
     expect(sourceBody(app, cand(), { port: '8080' }).port).toBe(8080)
     expect(() => sourceBody(app, cand(), { port: '0x1f90' })).toThrow(/port must be/)
   })
+  // A repo-backed worker is the same shape as an image-backed one: `--port 0` must override the
+  // detected HTTP port rather than being rejected or falling back to it.
+  it('--port 0 connects the repo as a worker, overriding the detected port', () => {
+    expect(sourceBody(app, cand({ port: 3000 }), { port: '0' }).port).toBe(0)
+  })
 })
 
 describe('findInstalledRepo', () => {

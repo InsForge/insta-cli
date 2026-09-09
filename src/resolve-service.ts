@@ -29,7 +29,8 @@ export const SERVICE_KINDS: readonly ServiceKind[] = [
   { id: 'compute', label: 'Empty Service', type: 'compute', hint: 'an app to deploy code to (empty until `insta deploy`)', defaultName: 'compute' },
 ]
 
-// The platform's own default; the dialog prefills the same number.
+// The platform's own default; the dialog prefills the same number. `0` is accepted here too, and
+// means the worker shape (see parsePort) rather than a port.
 export const DEFAULT_IMAGE_PORT = '8080'
 
 export type ResolvedServiceArgs = { type: string; name: string; image?: string; port?: string }
@@ -158,7 +159,7 @@ export async function promptServiceName(kind: ServiceKind, suggested: string): P
 
 export async function promptPort(fallback: string): Promise<string> {
   const answer = await clack.text({
-    message: 'Port the image listens on:',
+    message: 'Port the image listens on (0 for a worker with no HTTP endpoint):',
     initialValue: fallback,
     // The rule the command enforces, so the prompt and a --port can never disagree.
     validate: (v) => {
