@@ -38,24 +38,33 @@ export function bundleFetcher(
  *  spread would let the parent's own export stand in for it — the developer who once exported
  *  codex's password would run hermes' command against it, with no sign anything was withheld.
  *
- *  The delete is case-INSENSITIVE on Windows, where env names are: the spread copies process.env
- *  into a plain object, which loses that (`Admin_Password` and `ADMIN_PASSWORD` become two ordinary
- *  keys), but CreateProcess does not — so an exact-key delete would leave the parent's differently
- *  cased export for the child to read, reopening exactly the hole above. Elsewhere the match stays
- *  exact, because POSIX env names really are case-sensitive and `Admin_Password` is then a
- *  different variable that is none of our business. */
+ *  Windows needs more than an exact-key delete, for both halves. Env names there are
+ *  case-insensitive; a plain JS object's keys are not, so this object can hold `Database_Url` from
+ *  the shell and `DATABASE_URL` from the bundle as two keys for one variable — and CreateProcess,
+ *  which does collapse them, picks. That makes a stale shell export able to beat the injected
+ *  credential, which is the whole point of `insta run`, not just a hazard for a colliding name.
+ *  So on win32 every name we DECIDE — injected or withheld — wins over whatever casings the parent
+ *  had: the parent's are removed, then the bundle's own casing is written back. Off win32 nothing
+ *  changes: POSIX names really are case-sensitive, so `Database_Url` there is a different variable
+ *  that is none of our business, and collapsing the two would itself be the bug. */
 export function childEnv(
   parent: NodeJS.ProcessEnv,
   bundle: Record<string, string>,
   collisions: Collision[],
   platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...parent, ...bundle }
+  const withheld = new Set(collisions.map((c) => c.name.toLowerCase()))
   if (platform === 'win32') {
-    const withheld = new Set(collisions.map((c) => c.name.toLowerCase()))
-    for (const key of Object.keys(env)) if (withheld.has(key.toLowerCase())) delete env[key]
+    const env: NodeJS.ProcessEnv = { ...parent }
+    // Every name this run decides, whether it ends up injected or withheld.
+    const claimed = new Set([...Object.keys(bundle), ...collisions.map((c) => c.name)].map((n) => n.toLowerCase()))
+    for (const key of Object.keys(env)) if (claimed.has(key.toLowerCase())) delete env[key]
+    // A withheld name stays gone in every casing — including one the bundle itself carried, which
+    // is a platform that answered `collisions` while still merging the values.
+    for (const [k, v] of Object.entries(bundle)) if (!withheld.has(k.toLowerCase())) env[k] = v
     return env
   }
+  const env: NodeJS.ProcessEnv = { ...parent, ...bundle }
   for (const c of collisions) delete env[c.name]
   return env
 }

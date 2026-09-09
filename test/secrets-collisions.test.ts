@@ -257,7 +257,7 @@ describe('childEnv', () => {
     const env = childEnv(parent, { DATABASE_URL: 'pg://x' }, COLLISION, 'win32')
     expect(Object.keys(env).filter((k) => k.toLowerCase() === 'admin_password')).toEqual([])
     expect(env.DATABASE_URL).toBe('pg://x')
-    expect(env.Path).toBe('C:\\bin') // untouched: only the colliding name is removed
+    expect(env.Path).toBe('C:\\bin') // untouched: only the names this run decides are removed
   })
 
   // The mirror image: on POSIX, Admin_Password is a DIFFERENT variable and deleting it would be
@@ -266,6 +266,36 @@ describe('childEnv', () => {
     const env = childEnv({ Admin_Password: 'mine', ADMIN_PASSWORD: 'stale' }, {}, COLLISION, 'linux')
     expect(env.Admin_Password).toBe('mine')
     expect(env.ADMIN_PASSWORD).toBeUndefined()
+  })
+
+  // The other half, and the more consequential one: injecting credentials is what `insta run` is
+  // FOR, so a stale `Database_Url` in the shell winning over the bundle's `DATABASE_URL` would make
+  // the command unreliable for every variable, not just a colliding one.
+  it('lets an injected name win over every parent casing on win32', () => {
+    const parent = { Database_Url: 'pg://stale', DATABASE_url: 'pg://also-stale', Path: 'C:\\bin' }
+    const env = childEnv(parent, { DATABASE_URL: 'pg://fresh' }, [], 'win32')
+    // Exactly one key for that variable, in OUR casing, with OUR value — no second key for
+    // CreateProcess to choose between.
+    expect(Object.keys(env).filter((k) => k.toLowerCase() === 'database_url')).toEqual(['DATABASE_URL'])
+    expect(env.DATABASE_URL).toBe('pg://fresh')
+    expect(env.Path).toBe('C:\\bin') // the deletion loop must not over-reach past claimed names
+  })
+
+  it('keeps both casings as separate variables off win32', () => {
+    const parent = { Database_Url: 'pg://stale', Path: '/bin' }
+    const env = childEnv(parent, { DATABASE_URL: 'pg://fresh' }, [], 'linux')
+    expect(Object.keys(env).filter((k) => k.toLowerCase() === 'database_url').sort())
+      .toEqual(['DATABASE_URL', 'Database_Url'])
+    expect(env.Database_Url).toBe('pg://stale')
+    expect(env.DATABASE_URL).toBe('pg://fresh')
+  })
+
+  // A platform that reports a collision while still merging its value: the name is withheld, so it
+  // must not be written back from the bundle either — in any casing.
+  it('never re-adds a withheld name on win32, even one the bundle carried', () => {
+    const env = childEnv({ Admin_Password: 'stale' }, { ADMIN_PASSWORD: 'merged-value', OK: '1' }, COLLISION, 'win32')
+    expect(Object.keys(env).filter((k) => k.toLowerCase() === 'admin_password')).toEqual([])
+    expect(env.OK).toBe('1')
   })
 })
 
