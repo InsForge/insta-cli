@@ -4,7 +4,7 @@ import { ApiClient, ApiError, requireProject } from '../api.js'
 import { info, die, printJson, handleApproval, renderNextActions, CliExit } from '../util.js'
 import { flyctlBuildAndPush, ensureFlyctl, defaultBuildRunner, stderrBuildRunner, type BuildRunner } from '../flyctl-build.js'
 
-type DeployOpts = { image?: string; branch?: string; group?: string; port?: string; websocket?: boolean; json?: boolean }
+type DeployOpts = { image?: string; branch?: string; group?: string; port?: string; websocket?: boolean; replaceSource?: boolean; json?: boolean }
 
 // With --json, stdout must carry exactly one JSON document (the deploy result), so every progress
 // line moves to stderr.
@@ -19,6 +19,7 @@ export function deployRequestBody(image: string, branch: string, opts: DeployOpt
     group: opts.group,
     port: opts.port ? Number(opts.port) : undefined,
     websocket: opts.websocket ? true : undefined,
+    replaceSource: opts.replaceSource ? true : undefined,
   }
 }
 
@@ -50,7 +51,7 @@ export function noDockerfileMessage(absDir: string): string {
     'Options:',
     `  - add a Dockerfile to ${absDir} (\`insta build ${absDir}\` prints the install/start commands nixpacks detected, as a starting point)`,
     '  - deploy a prebuilt image instead: `insta deploy --image <url>`',
-    "  - connect the app's GitHub repo in the console — that lane builds Dockerfile-less repos with nixpacks server-side",
+    '  - connect the GitHub repo to the service (`insta compute connect-repo <owner/repo>`) — that lane builds Dockerfile-less repos with nixpacks server-side',
   ].join('\n')
 }
 

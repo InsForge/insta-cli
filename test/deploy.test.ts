@@ -12,6 +12,8 @@ describe('deployRequestBody', () => {
   })
   it('sends websocket:true when --websocket is set', () => {
     expect(deployRequestBody('img', 'main', { websocket: true }).websocket).toBe(true)
+    expect(deployRequestBody('img', 'main', { replaceSource: true }).replaceSource).toBe(true)
+    expect(deployRequestBody('img', 'main', {})).not.toHaveProperty('replaceSource', true)
   })
   it('leaves port undefined when not provided', () => {
     expect(deployRequestBody('img', 'main', {}).port).toBeUndefined()

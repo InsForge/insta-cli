@@ -187,7 +187,7 @@ export async function buildReport(
           // NOT "save the generated Dockerfile here": it is not standalone (it COPYs the
           // .nixpacks/nixpkgs-<hash>.nix support files nixpacks writes beside it, which this
           // directory does not have). The detected commands above are the reusable part.
-          nextAction: `to deploy this directory, write a Dockerfile at ${userDockerfilePath} — the detected install/start commands above are the starting point; or connect the repo on GitHub to use the nixpacks lane`,
+          nextAction: `to deploy this directory, write a Dockerfile at ${userDockerfilePath} — the detected install/start commands above are the starting point; or connect the GitHub repo to the service (\`insta compute connect-repo <owner/repo>\`) to use the nixpacks lane`,
         }
       : {
           id: 'dockerfile',
@@ -249,7 +249,7 @@ export function renderReport(r: BuildReport, explain: boolean): string[] {
   lines.push(`plan for ${r.dir}:`)
   // The builder line is the first thing read (and the thing an agent scrapes), so it carries the
   // lane caveat too — "builder: nixpacks" on its own reads as a promise `insta deploy <dir>` breaks.
-  const lane = r.plan.builder === 'nixpacks' ? ' — GitHub lane only; `insta deploy <dir>` needs a Dockerfile' : ''
+  const lane = r.plan.builder === 'nixpacks' ? ' — GitHub lane only (`insta compute connect-repo`); `insta deploy <dir>` needs a Dockerfile' : ''
   lines.push(`  builder: ${r.plan.builder ?? 'none'}${r.plan.providers.length ? ` (providers: ${r.plan.providers.join(', ')})` : ''}${lane}`)
   if (r.plan.installCommand) lines.push(`  install: ${r.plan.installCommand}`)
   if (r.plan.buildCommand) lines.push(`  build:   ${r.plan.buildCommand}`)
