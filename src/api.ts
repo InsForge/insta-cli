@@ -4,7 +4,7 @@ import { readGlobal, writeGlobal, readProject, writeProject, type GlobalConfig, 
 import { autoResolveProject, promptChoice, type ProjectItem } from './resolve-project.js'
 import { die } from './util.js'
 import { USER_AGENT } from './version.js'
-import { agentHeaders, agentMode } from './agent.js'
+import { agentHeaders, agentMode, type AgentScope } from './agent.js'
 
 export class ApiError extends Error {
   // body carries the parsed error payload for callers that branch on machine-readable errors
@@ -23,6 +23,9 @@ export function storeApiKeyCredential(cfg: GlobalConfig, token: string, user?: G
 }
 
 type RawResult = { status: number; body: any }
+// projectId: the project this request acts on when the path does not carry /projects/:id, so agent
+// mode signs with that project's session instead of a projectless bootstrap one (see agentHeaders).
+type RequestOpts = { auth?: boolean } & AgentScope
 
 export class ApiClient {
   constructor(private cfg: GlobalConfig, private readonly fetchImpl: typeof fetch = fetch) {}
@@ -54,32 +57,32 @@ export class ApiClient {
   }
 
   // Returns parsed body for status < 400 (incl. 202); throws ApiError otherwise.
-  async request<T = any>(method: string, path: string, body?: unknown, opts: { auth?: boolean } = {}): Promise<T> {
-    const res = await this.raw(method, path, body, opts.auth ?? true)
+  async request<T = any>(method: string, path: string, body?: unknown, opts: RequestOpts = {}): Promise<T> {
+    const res = await this.raw(method, path, body, opts.auth ?? true, opts)
     if (agentMode() && res.status === 202 && res.body?.status === 'approval_required') throw new AgentApprovalRequired(res.body)
     if (res.status >= 400) throw new ApiError(res.status, res.body?.error ?? `HTTP ${res.status}`, res.body)
     return res.body as T
   }
 
   // Like request but returns {status, body} so callers can branch on 202 (approval_required).
-  async rawRequest(method: string, path: string, body?: unknown, opts: { auth?: boolean } = {}): Promise<RawResult> {
-    const res = await this.raw(method, path, body, opts.auth ?? true)
+  async rawRequest(method: string, path: string, body?: unknown, opts: RequestOpts = {}): Promise<RawResult> {
+    const res = await this.raw(method, path, body, opts.auth ?? true, opts)
     if (res.status >= 400) throw new ApiError(res.status, res.body?.error ?? `HTTP ${res.status}`, res.body)
     return res
   }
 
-  private async raw(method: string, path: string, body: unknown, auth: boolean): Promise<RawResult> {
-    let r = await this.fetch(method, path, body, auth)
+  private async raw(method: string, path: string, body: unknown, auth: boolean, scope: AgentScope = {}): Promise<RawResult> {
+    let r = await this.fetch(method, path, body, auth, scope)
     if (r.status === 401 && auth && this.cfg.refreshToken) {
-      if (await this.refresh()) r = await this.fetch(method, path, body, auth)
+      if (await this.refresh()) r = await this.fetch(method, path, body, auth, scope)
     }
     return r
   }
 
-  private async fetch(method: string, path: string, body: unknown, auth: boolean): Promise<RawResult> {
+  private async fetch(method: string, path: string, body: unknown, auth: boolean, scope: AgentScope = {}): Promise<RawResult> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Insta-Hints': '1', 'User-Agent': USER_AGENT }
     if (auth && this.cfg.accessToken) headers.Authorization = `Bearer ${this.cfg.accessToken}`
-    if (auth) Object.assign(headers, await agentHeaders(this, method, path, body === undefined ? '' : JSON.stringify(body)))
+    if (auth) Object.assign(headers, await agentHeaders(this, method, path, body === undefined ? '' : JSON.stringify(body), scope))
     const res = await this.fetchImpl(this.apiUrl + path, {
       method,
       headers,

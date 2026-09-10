@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, lstatSync, readlinkSync, existsSync } from 'node:fs'
+import { readdirSync, readFileSync, lstatSync, readlinkSync, existsSync, openSync, closeSync, fstatSync, constants } from 'node:fs'
 import { join, sep } from 'node:path'
 import { createHash } from 'node:crypto'
 // Not node:zlib. The digest of this archive IS its identity: the id the object is stored under,
@@ -75,7 +75,8 @@ function header(path: string, mode: number, size: number, type: '0' | '5'): Buff
   return h
 }
 
-type Found = { path: string; mode: number; size: number; dir: boolean }
+// ino/dev ride along from the walk's own lstat so the read can prove it opened the SAME file.
+export type Found = { path: string; mode: number; size: number; dir: boolean; ino?: bigint | number; dev?: bigint | number }
 
 // The builder fails the whole build on a symlink entry; hardlinks are fine, we only write type '0'.
 function linkError(links: { path: string; target: string }[]): Error {
@@ -134,8 +135,46 @@ function walk(
       walk(root, relPath, out, links, ig, files, flavour)
     } else if (st.isFile()) {
       if (!keep && ig.excludes(relPath, false)) continue
-      out.push({ path: relPath, mode: fileMode(st.mode), size: st.size, dir: false })
+      out.push({ path: relPath, mode: fileMode(st.mode), size: st.size, dir: false, ino: st.ino, dev: st.dev })
     }
+  }
+}
+
+// The walk classifies with lstat and the read happens later, so a plain readFileSync would
+// FOLLOW a symlink that replaced the file in between and put a file from outside the directory
+// into an archive that promises none. Two guards, and neither is a full one on its own:
+//
+//   O_NOFOLLOW refuses when the final component is a symlink AT OPEN TIME, closing the swap the
+//   walk cannot see. Undefined on Windows, where it degrades to the check below.
+//
+//   fstat on the OPEN HANDLE must still describe the file the walk measured: same inode, same
+//   device, same size. That catches a swap O_NOFOLLOW allows (a hard link, or a plain file
+//   replaced by another plain file) and also catches a file rewritten mid-pack, which would
+//   otherwise produce a tar whose header length disagrees with its payload.
+//
+// What neither closes: an ANCESTOR directory swapped for a symlink. Node exposes no openat, so
+// resolving each component against a directory handle is not available here. Saying so is better
+// than implying the boundary is airtight -- an attacker who can rewrite directories inside the
+// tree being packed can already put any bytes they like into it by writing them.
+export function readEntry(abs: string, e: Found): Buffer {
+  const noFollow = (constants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0
+  let fd: number
+  try {
+    fd = openSync(abs, constants.O_RDONLY | noFollow)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ELOOP') {
+      throw new Error(`${e.path} became a symlink while packing — re-run the deploy`)
+    }
+    throw err
+  }
+  try {
+    const st = fstatSync(fd)
+    const same = st.isFile() && st.size === e.size
+      && (e.ino === undefined || st.ino === e.ino) && (e.dev === undefined || st.dev === e.dev)
+    if (!same) throw new Error(`${e.path} changed while packing — re-run the deploy`)
+    return readFileSync(fd)
+  } finally {
+    closeSync(fd)
   }
 }
 
@@ -187,7 +226,7 @@ export function packDirectory(absDir: string, limits: Partial<ArchiveLimits> = {
       chunks.push(header(e.path, e.mode, 0, '5'))
       continue
     }
-    const data = readFileSync(join(absDir, e.path.split('/').join(sep)))
+    const data = readEntry(join(absDir, e.path.split('/').join(sep)), e)
     chunks.push(header(e.path, e.mode, data.length, '0'), data)
     const rem = data.length % BLOCK
     if (rem) chunks.push(PAD.subarray(0, BLOCK - rem))

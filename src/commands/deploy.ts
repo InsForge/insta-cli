@@ -44,7 +44,16 @@ async function discoverLane(api: Pick<ApiClient, 'rawRequest'>, projectId: strin
   const q = new URLSearchParams({ branch, ...(opts.group ? { group: opts.group } : {}) })
   try {
     const res = await api.rawRequest('GET', `/projects/${projectId}/source-build?${q}`)
-    return res.body as Lane
+    // Validated, not cast. Every value other than the four we know silently fell through to the
+    // flyctl path below, so a server that grew a fifth lane would send this CLI down the wrong
+    // one and fail somewhere unrelated. An unknown answer is the server being ahead of us, and
+    // saying that is more useful than guessing.
+    const lane = (res.body ?? {}) as Lane
+    const known = ['flyctl', 'local-docker', 'archive', 'none']
+    if (!known.includes((lane as { lane?: string }).lane ?? '')) {
+      die(`this platform answered with a source-build lane this CLI does not know (${JSON.stringify((lane as { lane?: string }).lane)}) — upgrade with \`insta upgrade\``)
+    }
+    return lane
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) return { lane: 'legacy' }
     throw e

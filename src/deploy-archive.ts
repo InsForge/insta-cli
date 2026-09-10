@@ -63,7 +63,11 @@ export async function uploadArchive(
   })
   if (handleApproval(minted, opts.json)) return null
 
-  await upload(minted.body.uploadUrl, packed.archive)
+  // The mint's whole product is this URL. An absent one would be PUT to as the string
+  // "undefined" and the failure would surface two steps later as a missing object.
+  const uploadUrl = minted.body?.uploadUrl
+  if (typeof uploadUrl !== 'string' || !uploadUrl) throw new Error('the platform minted an upload with no URL — re-run the deploy')
+  await upload(uploadUrl, packed.archive)
 
   // Never let the deploy call be the thing that discovers a failed upload: its grant is spent in
   // the governance preHandler, so a retry would need a NEW approval.
@@ -100,7 +104,8 @@ export async function buildArchive(
     archive: ref,
   })
   if (handleApproval(started, opts.json)) return null
-  const buildId: string = started.body.buildId
+  const buildId = started.body?.buildId
+  if (typeof buildId !== 'string' || !buildId) throw new Error('the platform started a build but returned no id — re-run the deploy')
 
   const deadline = now() + BUILD_DEADLINE_MS
   for (;;) {
@@ -109,7 +114,13 @@ export async function buildArchive(
     // A failed build is an ANSWER, not a transport error: the poll worked and the gateway is
     // telling us why the tree did not build, which is the one sentence worth surfacing verbatim.
     if (state === 'failed') return { failed: res.body.message || 'the build failed' }
-    if (state === 'succeeded') return { image: res.body.imageRef }
+    if (state === 'succeeded') {
+      // A succeeded build with no ref would be deployed as the empty string, and the deploy
+      // would refuse it with a message about the image rather than about the build.
+      const image = res.body?.imageRef
+      if (typeof image !== 'string' || !image) throw new Error('the build succeeded but produced no image reference — re-run the deploy')
+      return { image }
+    }
     if (now() > deadline) {
       throw new Error(`the build did not finish within ${Math.round(BUILD_DEADLINE_MS / 60000)} minutes — check \`insta logs\` or re-run`)
     }

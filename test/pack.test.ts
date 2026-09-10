@@ -1,10 +1,10 @@
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, utimesSync, symlinkSync, linkSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, utimesSync, symlinkSync, linkSync, lstatSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { createHash } from 'node:crypto'
 import { describe, it, expect } from 'vitest'
-import { packDirectory, windowsModeCaveat, ARCHIVE_LIMITS } from '../src/pack.js'
+import { packDirectory, windowsModeCaveat, readEntry, ARCHIVE_LIMITS } from '../src/pack.js'
 
 const mk = () => mkdtempSync(join(tmpdir(), 'insta-pack-'))
 
@@ -419,4 +419,64 @@ itModes('keeps a file re-included under a trailing globstar', () => {
   const names = packedNames(dir)
   expect(names).toContain('abc/keep.txt')
   expect(names).not.toContain('abc/drop.txt')
+})
+
+// The walk classifies with lstat; the read happens later. A plain readFileSync FOLLOWS a symlink
+// that replaced the file in between, so an archive promising "no symlinks" could carry a file
+// from outside the directory entirely. The window is real even without an attacker: anything
+// rewriting the tree while a deploy packs it hits the same path.
+describe('readEntry — the file read cannot be swapped out from under the walk', () => {
+  const found = (path: string, st: { size: number; ino?: number | bigint; dev?: number | bigint }) =>
+    ({ path, mode: 0o644, size: st.size, dir: false, ino: st.ino, dev: st.dev })
+
+  it('reads a file the walk really measured', () => {
+    const dir = mk()
+    const abs = join(dir, 'a.txt')
+    writeFileSync(abs, 'hello\n')
+    const st = lstatSync(abs)
+    expect(readEntry(abs, found('a.txt', st)).toString()).toBe('hello\n')
+  })
+
+  itModes('refuses a file replaced by a symlink after the walk', () => {
+    const dir = mk()
+    const abs = join(dir, 'a.txt')
+    writeFileSync(abs, 'hello\n')
+    const st = lstatSync(abs)
+    writeFileSync(join(dir, 'secret.txt'), 'SECRET\n')
+
+    // The swap: same path, now pointing somewhere else.
+    unlinkSync(abs)
+    symlinkSync(join(dir, 'secret.txt'), abs)
+
+    // The assertion is not merely "it threw" — it is that the secret never came back.
+    let out = ''
+    try { out = readEntry(abs, found('a.txt', st)).toString() } catch (e) { out = `threw: ${(e as Error).message}` }
+    expect(out).not.toContain('SECRET')
+    expect(out).toMatch(/threw:.*(symlink|changed)/)
+  })
+
+  it('refuses a file rewritten to a different size after the walk', () => {
+    const dir = mk()
+    const abs = join(dir, 'a.txt')
+    writeFileSync(abs, 'hello\n')
+    const st = lstatSync(abs)
+
+    // Not an attack, just a build touching its own tree: the tar header would otherwise claim
+    // the old length and disagree with the payload that follows it.
+    writeFileSync(abs, 'hello, a much longer line\n')
+
+    expect(() => readEntry(abs, found('a.txt', st))).toThrow(/changed while packing/)
+  })
+
+  itModes('refuses a file swapped for a DIFFERENT regular file, which O_NOFOLLOW allows', () => {
+    const dir = mk()
+    const abs = join(dir, 'a.txt')
+    writeFileSync(abs, 'hello\n')
+    const st = lstatSync(abs)
+    // Same size, different inode: only the identity check can see this one.
+    unlinkSync(abs)
+    writeFileSync(abs, 'world\n')
+
+    expect(() => readEntry(abs, found('a.txt', st))).toThrow(/changed while packing/)
+  })
 })
