@@ -39,7 +39,15 @@ export type ConnectSource =
   | { source: 'app'; installationId: number; repoId: number; owner: string; repo: string }
   | { source: 'public'; owner: string; repo: string }
 
-export type ConnectOpts = { public?: boolean; rootDir?: string; port?: string; branch?: string; repoBranch?: string; autoDeploy?: boolean; json?: boolean }
+export type ConnectOpts = { public?: boolean; rootDir?: string; port?: string; branch?: string; repoBranch?: string; autoDeploy?: boolean; watchPaths?: string; json?: boolean }
+
+// A comma-separated list, because a shell would glob an unquoted `apps/web/**` into filenames — which
+// also means a pattern containing a comma cannot be expressed. The server does the validation.
+export function parseWatchPaths(raw: string): string[] {
+  const out = raw.split(',').map((p) => p.trim()).filter(Boolean)
+  if (!out.length) throw new Error("watch paths need at least one pattern, e.g. 'apps/web/**,packages/ui/**' (quote them, or the shell expands the *)")
+  return out
+}
 
 // Build/start come from detection only: the platform's nixpacks lane fails a build whose commands differ from it.
 // autoDeploy rides along only when switched off: a public repo 400s on autoDeploy: true.
@@ -55,12 +63,19 @@ export function sourceBody(src: ConnectSource, c: Candidate, o: ConnectOpts) {
     port: o.port !== undefined ? parsePort(o.port) : c.port,
     ...(o.repoBranch ? { branch: o.repoBranch } : {}),
     ...(o.autoDeploy === false ? { autoDeploy: false } : {}),
+    ...(o.watchPaths !== undefined ? { watchPaths: parseWatchPaths(o.watchPaths) } : {}),
   }
 }
 
 export type SourceView =
   | { type: 'image'; image: string | null }
-  | { type: 'github'; owner: string; repo: string; branch: string; root_dir: string | null; auto_deploy: boolean; public: boolean }
+  | { type: 'github'; owner: string; repo: string; branch: string; root_dir: string | null; auto_deploy: boolean; public: boolean; watch_paths?: string[] | null }
+
+// Named as repo-root paths wherever it is printed: every line that carries this also carries root_dir,
+// which the patterns are NOT relative to.
+export function watchPathsClause(paths: readonly string[]): string {
+  return `, but only when a push changes these repo-root paths: ${paths.join(', ')}`
+}
 
 export function repoLine(serviceName: string, s: SourceView): string {
   if (s.type !== 'github') return `compute ${serviceName}: no repository connected${s.image ? ` (runs image ${s.image})` : ''} — connect one with \`insta compute connect-repo <owner/repo> ${serviceName}\``
@@ -68,7 +83,10 @@ export function repoLine(serviceName: string, s: SourceView): string {
     ? 'public repo, deploys are manual (pushes do not redeploy)'
     : s.auto_deploy ? `every push to ${s.branch} redeploys it` : 'auto-deploy off (pushes do not redeploy)'
   const where = s.root_dir ? ` (${s.root_dir}/)` : ''
-  return `compute ${serviceName}: deploys from ${s.owner}/${s.repo}@${s.branch}${where} — ${how}`
+  const only = !s.watch_paths?.length ? ''
+    : s.auto_deploy ? watchPathsClause(s.watch_paths)
+    : `; watch paths ${s.watch_paths.join(', ')} are stored but cannot apply`
+  return `compute ${serviceName}: deploys from ${s.owner}/${s.repo}@${s.branch}${where} — ${how}${only}`
 }
 
 type InstallationRow = { installation_id: string; account_login?: string }
@@ -121,10 +139,29 @@ export async function computeConnectRepo(rawRef: string, serviceName: string | u
   const branch = res.source.branch
   const where = candidate.rootDir ? `${candidate.rootDir}/, ${candidate.builder}` : candidate.builder
   const now = res.build.queued ? `building ${branch} now` : `${branch} is already live at this commit`
+  // From the server's answer, not from the flag: what it stored is what a push is matched against.
+  const filtered = res.source.watch_paths?.length ? watchPathsClause(res.source.watch_paths) : ''
   const how = src.source === 'public' ? 'deploys are manual from here: pushes will not redeploy (public repo)'
     : opts.autoDeploy === false ? 'auto-deploy is off: redeploy with `insta compute connect-repo` again or from the console'
-    : `every push to ${branch} redeploys it`
+    : `every push to ${branch} redeploys it${filtered}`
   info(`connected ${ref.owner}/${ref.repo} → compute ${svc.name} (${where}): ${now} — ${how}`)
+}
+
+// Do not reconnect to change these: watch paths do not change what a build produces, and `connect-repo`
+// would rebuild the service.
+export async function computeWatchPaths(serviceName: string | undefined, opts: { set?: string; clear?: boolean; branch?: string; json?: boolean }): Promise<void> {
+  if (opts.set !== undefined && opts.clear) throw new Error('pass --set or --clear, not both')
+  const patch = opts.clear ? { watchPaths: null } : opts.set !== undefined ? { watchPaths: parseWatchPaths(opts.set) } : null
+  const api = await ApiClient.load()
+  const p = await requireProject()
+  const branch = opts.branch ?? p.branch
+  const svc = await targetService(api, p.projectId, branch, serviceName)
+  const url = `/projects/${p.projectId}/services/${svc.id}/source${q(branch)}`
+  const { source } = patch
+    ? await api.request<{ source: SourceView }>('PATCH', url, patch)
+    : await api.request<{ source: SourceView }>('GET', url)
+  if (opts.json) return printJson({ service: { id: svc.id, name: svc.name }, source })
+  info(patch ? `updated — ${repoLine(svc.name, source)}` : repoLine(svc.name, source))
 }
 
 export async function computeDisconnectRepo(serviceName: string | undefined, opts: { branch?: string; json?: boolean }): Promise<void> {
