@@ -387,7 +387,9 @@ domContact.command('set').description('Set the org default registrant contact (a
   .option('--first-name <s>').option('--last-name <s>').option('--company-name <s>').option('--address1 <s>').option('--address2 <s>').option('--city <s>').option('--state <s>').option('--zip <s>')
   .option('--country <cc>', 'ISO 3166-1 alpha-2, e.g. US').option('--email <s>').option('--phone <e164>', 'E.164, e.g. +14155550100')
   .option('--contact-file <path>', 'JSON file with the contact fields').option('--org <id>').option('--json')
-  .action(guard((o) => domainCmd.domainContactSet(o)))
+  // `contact --org X set` parks --org on the GROUP (enablePositionalOptions); without this merge the
+  // wrong org's registrant contact is written, and that field is legal ownership.
+  .action(guard((o) => domainCmd.domainContactSet({ ...domContact.opts(), ...o })))
 
 const bill = program.command('billing').description('Current billing cycle overview (tier / used / included / overage / credits / forecast + per-dimension & per-project breakdown)')
   .option('--org <id>', 'target org (default: linked project\'s org)').option('--json')

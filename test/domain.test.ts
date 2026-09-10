@@ -76,6 +76,12 @@ describe('domain buy', () => {
     expect(process.exitCode).toBe(2)
     expect(out()).toBe('')
   })
+  it('refuses a malformed --years locally rather than sending NaN', async () => {
+    const { deps: d, calls } = deps()
+    await expect(domainBuy('myapp.com', { group: 'web', years: 'abc' }, d)).rejects.toThrow('exit 1')
+    expect(stderr.join('')).toContain('--years must be a whole number of years, not abc')
+    expect(calls.map((c) => c.method)).toEqual(['GET'])
+  })
   it('--json is the platform body, nothing else', async () => {
     const { deps: d } = deps()
     await domainBuy('myapp.com', { group: 'web', json: true }, d)
@@ -129,7 +135,7 @@ describe('domain list / status', () => {
     expect(out()).toContain('myapp.com  attaching  → web  (expires 2027-09-10, auto-renews)')
     expect(out()).toContain('www.myapp.com  failed — already attached to another compute service')
     expect(out()).toContain('old.com  detached')
-    expect(out()).toContain('insta domain attach old.com')
+    expect(out()).toContain('attach it again: insta domain attach old.com\n')
   })
   it('status shows the domain once it exists, else the order', async () => {
     const { deps: d } = deps({ '/domains/orders': { items: [{ ...order, status: 'attaching' }] }, '/domains': { items: [purchased] } })

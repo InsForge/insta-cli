@@ -88,9 +88,14 @@ export async function domainBuy(name: string, opts: BuyOpts, deps?: DomainDeps):
   const branch = opts.branch ?? p.branch
   const { target } = await domainTarget(api, p.projectId, branch, name, opts.group)
   const contact = await readContactFile(opts.contactFile)
-  const res = await api.rawRequest('POST', `/projects/${p.projectId}/domains/orders`, {
-    domainName: name, years: opts.years === undefined ? undefined : Number(opts.years), branch, group: target.name, contact,
-  })
+  // JSON.stringify drops undefined but keeps NaN as null, which the platform rejects as a type
+  // error rather than a bad term — so a malformed --years is refused here, with the reason.
+  let years: number | undefined
+  if (opts.years !== undefined) {
+    years = Number(opts.years)
+    if (!Number.isInteger(years)) die(`--years must be a whole number of years, not ${opts.years}`)
+  }
+  const res = await api.rawRequest('POST', `/projects/${p.projectId}/domains/orders`, { domainName: name, years, branch, group: target.name, contact })
   if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson(res.body)
   const { order } = res.body as { order: Order }
@@ -116,7 +121,7 @@ export async function domainAttach(name: string, opts: { branch?: string; group?
 
 function domainLines(d: Purchased): string[] {
   const out = [`${d.domainName}  ${d.status}${d.service ? `  → ${d.service}` : ''}${d.expiresAt ? `  (expires ${d.expiresAt.slice(0, 10)}${d.autorenew ? ', auto-renews' : ''})` : ''}`]
-  if (d.status === 'detached' || d.status === 'attach_failed') out.push(`  attach it again: insta domain attach ${d.domainName} [--group <service>]`)
+  if (d.status === 'detached' || d.status === 'attach_failed') out.push(`  attach it again: insta domain attach ${d.domainName}`)
   const w = Math.max(0, ...d.hostnames.map((x) => x.hostname.length))
   for (const h of d.hostnames) out.push(`  ${h.hostname.padEnd(w)}  ${h.state}${h.reason ? ` — ${h.reason}` : ''}`)
   return out
