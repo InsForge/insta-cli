@@ -2,7 +2,7 @@
 import { Command } from 'commander'
 import { configureAgent, detectAgent } from './agent.js'
 import * as agentPolicy from './commands/agent-policy.js'
-import { ApiError, AgentApprovalRequired } from './api.js'
+import { ApiError, AgentApprovalRequired, NetworkError } from './api.js'
 import { CliCancel, CliExit, fail, relayedExitCode } from './util.js'
 import { trackCommand } from './telemetry.js'
 import { cliVersion } from './version.js'
@@ -43,7 +43,8 @@ function onError(e: unknown): void {
     return
   }
   if (e instanceof CliExit || e instanceof CliCancel) return
-  if (e instanceof ApiError) return fail(`${e.message} (HTTP ${e.status})`)
+  if (e instanceof NetworkError) return fail(e.message, e.context)
+  if (e instanceof ApiError) return fail(`${e.message} (HTTP ${e.status})`, e.context)
   fail(e instanceof Error ? e.message : String(e))
 }
 

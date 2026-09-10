@@ -5,11 +5,30 @@ import { autoResolveProject, promptChoice, type ProjectItem } from './resolve-pr
 import { die } from './util.js'
 import { USER_AGENT } from './version.js'
 import { agentHeaders, agentMode } from './agent.js'
+import { describeTarget, failureReason, hostOf, targetLines } from './target.js'
+
+/** Extra lines an error carries under its first line: which host answered (or did not), and what
+ *  pointed the CLI there. Attached at throw time, where the target is known; index.ts prints them. */
+export type ErrorContext = string[]
 
 export class ApiError extends Error {
   // body carries the parsed error payload for callers that branch on machine-readable errors
   // (e.g. template deploy's missing_variables); the message stays the human line.
-  constructor(public status: number, msg: string, public body?: any) { super(msg); this.name = 'ApiError' }
+  constructor(public status: number, msg: string, public body?: any, public context?: ErrorContext) { super(msg); this.name = 'ApiError' }
+}
+
+/** The request never got an answer: DNS, TCP, TLS, or a timeout.
+ *
+ *  undici collapses all of those into `TypeError: fetch failed`, which the CLI printed verbatim —
+ *  no host, no reason, no hint that the target was not the cloud. This names the host it tried and
+ *  why it failed, and keeps the original as `cause` so telemetry still lifts `cause.code`. */
+export class NetworkError extends Error {
+  constructor(public url: string, cause: unknown, public context?: ErrorContext) {
+    const reason = failureReason(cause)
+    super(`cannot reach ${hostOf(url)}${reason ? ` (${reason})` : ''}`)
+    this.name = 'NetworkError'
+    this.cause = cause
+  }
 }
 export class AgentApprovalRequired extends Error {
   constructor(public body: any) { super(body.message ?? `approval required: ${body.approvalId}`) }
@@ -57,15 +76,25 @@ export class ApiClient {
   async request<T = any>(method: string, path: string, body?: unknown, opts: { auth?: boolean } = {}): Promise<T> {
     const res = await this.raw(method, path, body, opts.auth ?? true)
     if (agentMode() && res.status === 202 && res.body?.status === 'approval_required') throw new AgentApprovalRequired(res.body)
-    if (res.status >= 400) throw new ApiError(res.status, res.body?.error ?? `HTTP ${res.status}`, res.body)
+    if (res.status >= 400) throw new ApiError(res.status, res.body?.error ?? `HTTP ${res.status}`, res.body, await this.targetContext())
     return res.body as T
   }
 
   // Like request but returns {status, body} so callers can branch on 202 (approval_required).
   async rawRequest(method: string, path: string, body?: unknown, opts: { auth?: boolean } = {}): Promise<RawResult> {
     const res = await this.raw(method, path, body, opts.auth ?? true)
-    if (res.status >= 400) throw new ApiError(res.status, res.body?.error ?? `HTTP ${res.status}`, res.body)
+    if (res.status >= 400) throw new ApiError(res.status, res.body?.error ?? `HTTP ${res.status}`, res.body, await this.targetContext())
     return res
+  }
+
+  // Computed once, and only on the failure path: a run that succeeds pays nothing, and the config
+  // file is not re-read per error. Empty on the cloud default, so nothing is added to the common case.
+  private noteCache?: ErrorContext
+  private async targetContext(): Promise<ErrorContext> {
+    if (!this.noteCache) {
+      try { this.noteCache = targetLines(await describeTarget(this.apiUrl)) } catch { this.noteCache = [] }
+    }
+    return this.noteCache
   }
 
   private async raw(method: string, path: string, body: unknown, auth: boolean): Promise<RawResult> {
@@ -80,11 +109,18 @@ export class ApiClient {
     const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Insta-Hints': '1', 'User-Agent': USER_AGENT }
     if (auth && this.cfg.accessToken) headers.Authorization = `Bearer ${this.cfg.accessToken}`
     if (auth) Object.assign(headers, await agentHeaders(this, method, path, body === undefined ? '' : JSON.stringify(body)))
-    const res = await this.fetchImpl(this.apiUrl + path, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-    })
+    let res: Response
+    try {
+      res = await this.fetchImpl(this.apiUrl + path, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+      })
+    } catch (e) {
+      // A transport failure, not an HTTP status: there is no response to parse and no 401 to
+      // refresh past, so it goes straight out as a NetworkError naming the host and the setting.
+      throw new NetworkError(this.apiUrl, (e as { cause?: unknown })?.cause ?? e, await this.targetContext())
+    }
     const text = await res.text()
     let parsed: any = null
     try { parsed = text ? JSON.parse(text) : null } catch { parsed = { raw: text } }

@@ -1,6 +1,7 @@
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
-import { ApiClient, ApiError, linkedProject } from '../api.js'
+import { ApiClient, ApiError, NetworkError, linkedProject } from '../api.js'
+import { describeTarget } from '../target.js'
 import { ENVS, ENV_NAMES, envForApiUrl, isEnvName } from '../env.js'
 import { info, die, printJson, promptPassword, openUrl } from '../util.js'
 
@@ -233,14 +234,23 @@ export async function logout(): Promise<void> {
 export async function status(opts: { json?: boolean }): Promise<void> {
   const api = await ApiClient.load()
   let user: any = null
-  try { user = (await api.request('GET', '/me')).user } catch { /* not logged in */ }
+  // A host that never answered is not the same as a rejected credential, and reporting the first
+  // as "(not logged in)" is what sent the user hunting for a login problem that did not exist.
+  let unreachable: string | null = null
+  try { user = (await api.request('GET', '/me')).user } catch (e) {
+    if (e instanceof NetworkError) unreachable = e.message
+  }
   const project = await linkedProject()
   // Surface the environment name alongside the URL: "api: https://api.staging.instacloud.com" is
   // easy to skim past, and mistaking staging for prod is the mistake worth making loud.
   const env = envForApiUrl(api.apiUrl)
-  if (opts.json) return printJson({ env, apiUrl: api.apiUrl, user, project })
-  info(`env:     ${env ?? '(custom)'}`)
+  const target = await describeTarget(api.apiUrl)
+  // The stable token in json, the prose on a terminal. See envShow.
+  if (opts.json) return printJson({ env, apiUrl: api.apiUrl, source: target.kind, unreachable, user, project })
+  info(`env:     ${env ?? 'custom'}`)
   info(`api:     ${api.apiUrl}`)
-  info(`user:    ${user ? (user.email ?? user.id) : '(not logged in)'}`)
+  info(`source:  ${target.source}`)
+  info(`user:    ${unreachable ?? (user ? (user.email ?? user.id) : '(not logged in)')}`)
   info(`project: ${project ? `${project.projectId} (branch ${project.branch})` : '(none linked)'}`)
+  if (!env) info(`switch:  ${target.recovery}`)
 }

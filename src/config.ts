@@ -100,6 +100,20 @@ export async function readPersistedGlobal(): Promise<GlobalConfig> {
   }
 }
 
+/** The apiUrl the config FILE holds, or null when there is no file or it names none.
+ *
+ *  Distinct from readPersistedGlobal, which substitutes DEFAULT_API: "prod because nothing was
+ *  ever chosen" and "prod because a login saved it" are the same host but different provenance,
+ *  and the messages in target.ts have to say which. */
+export async function storedApiUrl(): Promise<string | null> {
+  try {
+    const parsed = JSON.parse(await readFile(GLOBAL_FILE, 'utf8')) as Partial<GlobalConfig>
+    return typeof parsed.apiUrl === 'string' && parsed.apiUrl !== '' ? parsed.apiUrl : null
+  } catch {
+    return null
+  }
+}
+
 export async function writeGlobal(c: GlobalConfig): Promise<void> {
   await mkdir(GLOBAL_DIR, { recursive: true })
   await writeFile(GLOBAL_FILE, JSON.stringify(c, null, 2))

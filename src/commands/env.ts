@@ -7,17 +7,27 @@
 // same file `login --api-url` already writes, so this adds a surface, not a concept.
 import { readPersistedGlobal, resolveEnv, writeGlobal, type GlobalConfig } from '../config.js'
 import { DEFAULT_ENV, ENVS, ENV_NAMES, envForApiUrl, isEnvName, mcpServerName, normalizeUrl, type EnvName } from '../env.js'
+import { describeTarget } from '../target.js'
 import { die, info, printJson } from '../util.js'
 
 export async function envShow(opts: { json?: boolean }): Promise<void> {
   const { apiUrl, env, mcpUrl, skills } = await resolveEnv()
   const mcpServer = mcpServerName(env ?? DEFAULT_ENV)
-  if (opts.json) return printJson({ env, apiUrl, mcpUrl, mcpServer, skills })
-  info(`env:     ${env ?? '(custom)'}`)
+  // `source` answers the question the old output left open: the URL was on screen, but nothing
+  // said which of INSTA_API_URL / INSTA_ENV / a months-old `login --api-url` had chosen it.
+  const target = await describeTarget(apiUrl)
+  // json gets the stable token, a terminal gets the prose. An agent that branched on the wording of
+  // "saved by `insta login --api-url`" would break the next time that sentence is reworded, and the
+  // backticks in it are noise in a machine field.
+  if (opts.json) return printJson({ env, apiUrl, source: target.kind, mcpUrl, mcpServer, skills })
+  info(`env:     ${env ?? 'custom'}`)
   info(`api:     ${apiUrl}`)
-  info(`mcp:     ${mcpUrl} (${mcpServer})`)
-  info(`skills:  ${skills}`)
-  if (!env) info('  (custom apiUrl — `insta env use <name>` to switch to a named environment)')
+  info(`source:  ${target.source}`)
+  // A custom apiUrl has no matching mcp/skills entry, so resolveEnv falls back to the cloud's.
+  // Say so: an unlabelled cloud mcp host under an insta-oss api host reads as a matched pair.
+  info(`mcp:     ${mcpUrl} (${mcpServer}${env ? '' : ', cloud fallback'})`)
+  info(`skills:  ${skills}${env ? '' : ' (cloud fallback)'}`)
+  if (!env) info(`switch:  ${target.recovery}`)
 }
 
 // One stable schema for BOTH envUse outcomes (no-op and real switch), so a scripted caller can key

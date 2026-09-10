@@ -78,8 +78,11 @@ export class CliCancel extends Error {
   }
 }
 
-export function fail(msg: string): void {
+// `context` lines print under the error, already indented, and say where the CLI was pointed and
+// what pointed it there. Empty on the cloud default, so the common failure reads exactly as before.
+export function fail(msg: string, context: string[] = []): void {
   process.stderr.write(`error: ${msg}\n`)
+  for (const line of context) process.stderr.write(line + '\n')
   process.exitCode = 1
 }
 
