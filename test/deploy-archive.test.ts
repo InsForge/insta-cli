@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { uploadArchive, archiveBuildSpec } from '../src/deploy-archive.js'
+import { buildArchive, uploadArchive, archiveBuildSpec } from '../src/deploy-archive.js'
 
 const DIGEST = 'a'.repeat(64)
 const packed = (hasDockerfile = true) => ({ archive: Buffer.from('tar.gz bytes'), sha256: DIGEST, hasDockerfile })
@@ -87,5 +87,79 @@ describe('uploadArchive', () => {
     const { api } = fakeApi(['missing', 'missing'])
 
     await expect(uploadArchive(api, 'p1', packed(), 'main', {}, async () => {})).rejects.toThrow(/upload/i)
+  })
+})
+
+// Two gated calls now stand between a directory and a running service: the mint and the build
+// submit. An approval can stop the run at EITHER, so the recovery has to work from both points.
+describe('buildArchive — the gated submit and the wait after it', () => {
+  const ref = { archiveSha256: DIGEST, build: { type: 'dockerfile' as const } }
+
+  function api(script: Array<{ status: number; body: any }>) {
+    const calls: Array<{ method: string; path: string; body?: any }> = []
+    let i = 0
+    return {
+      calls,
+      api: {
+        rawRequest: async (method: string, path: string, body?: unknown) => {
+          calls.push({ method, path, body })
+          return script[Math.min(i++, script.length - 1)]!
+        },
+      },
+    }
+  }
+
+  it('stops at a pending approval on the submit and asks for nothing else', async () => {
+    const { api: a, calls } = api([{ status: 202, body: { status: 'approval_required', action: 'deploy', approvalId: 'ap_1' } }])
+
+    expect(await buildArchive(a, 'p1', ref, 'main', { json: false })).toBeNull()
+    // One call: no poll loop against a build that was never started.
+    expect(calls).toHaveLength(1)
+    expect(process.exitCode).toBe(2)
+  })
+
+  // The re-run after approving. The submit body is composed only of values the packer reproduces
+  // (the digest) and the target the user named, so it is byte-identical to the body the approval
+  // was granted against, which is what lets the grant apply instead of asking a second time.
+  it('sends a submit body a re-run reproduces exactly', async () => {
+    const { api: a, calls } = api([
+      { status: 200, body: { buildId: 'bld_1' } },
+      { status: 200, body: { state: 'succeeded', imageRef: 'ecr.example/app@sha256:aa' } },
+    ])
+
+    const out = await buildArchive(a, 'p1', ref, 'main', { group: 'api' })
+
+    expect(out).toEqual({ image: 'ecr.example/app@sha256:aa' })
+    expect(calls[0]!.body).toEqual({ branch: 'main', group: 'api', archive: ref })
+  })
+
+  it('keeps polling while the build is running, one request at a time', async () => {
+    let n = 0
+    const a = {
+      rawRequest: async (method: string) => {
+        if (method === 'POST') return { status: 200, body: { buildId: 'bld_1' } }
+        n += 1
+        return n < 3
+          ? { status: 200, body: { state: 'building' } }
+          : { status: 200, body: { state: 'succeeded', imageRef: 'ecr.example/app@sha256:bb' } }
+      },
+    }
+
+    const out = await buildArchive(a, 'p1', ref, 'main', {}, Date.now, async () => undefined)
+
+    expect(out).toEqual({ image: 'ecr.example/app@sha256:bb' })
+    expect(n).toBe(3)
+  })
+
+  it('gives up rather than polling forever when the gateway never finishes', async () => {
+    const a = {
+      rawRequest: async (method: string) =>
+        method === 'POST' ? { status: 200, body: { buildId: 'bld_1' } } : { status: 200, body: { state: 'building' } },
+    }
+    let t = 0
+    const clock = () => (t += 60 * 60 * 1000) // an hour per look
+
+    await expect(buildArchive(a, 'p1', ref, 'main', {}, clock, async () => undefined))
+      .rejects.toThrow(/did not finish/)
   })
 })
