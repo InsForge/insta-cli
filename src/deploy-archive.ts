@@ -10,7 +10,9 @@ export function archiveBuildSpec(hasDockerfile: boolean): ArchiveBuildSpec {
   return hasDockerfile ? { type: 'dockerfile' } : { type: 'nixpacks' }
 }
 
-export type ArchiveRef = { sha256: string; build: ArchiveBuildSpec }
+// sha256 is the IDENTITY (the canonical tar digest), archiveSha256 the INTEGRITY value the build
+// worker checks the bytes it fetched against. They are different digests of the same archive.
+export type ArchiveRef = { sha256: string; archiveSha256: string; build: ArchiveBuildSpec }
 
 type Api = Pick<ApiClient, 'rawRequest'>
 type Opts = { branch?: string; group?: string; json?: boolean }
@@ -36,20 +38,22 @@ const statusPath = (projectId: string, sha256: string) => `/projects/${projectId
 export async function uploadArchive(
   api: Api,
   projectId: string,
-  packed: Pick<PackResult, 'archive' | 'sha256' | 'hasDockerfile'>,
+  packed: Pick<PackResult, 'archive' | 'sha256' | 'tarSha256' | 'hasDockerfile'>,
   branch: string,
   opts: Opts,
   upload: Uploader = defaultUpload,
 ): Promise<ArchiveRef | null> {
-  const ref: ArchiveRef = { sha256: packed.sha256, build: archiveBuildSpec(packed.hasDockerfile) }
+  const ref: ArchiveRef = { sha256: packed.tarSha256, archiveSha256: packed.sha256, build: archiveBuildSpec(packed.hasDockerfile) }
 
-  const first = await api.rawRequest('GET', statusPath(projectId, packed.sha256))
+  // Keyed on the TAR digest everywhere the platform derives storage from, so a re-run under the
+  // other runtime finds the same object instead of uploading a second copy under a second id.
+  const first = await api.rawRequest('GET', statusPath(projectId, packed.tarSha256))
   if (first.body?.state === 'valid') return ref
 
   const minted = await api.rawRequest('POST', `/projects/${projectId}/build-uploads`, {
     branch,
     group: opts.group,
-    sha256: packed.sha256,
+    sha256: packed.tarSha256,
     size: packed.archive.length,
   })
   if (handleApproval(minted, opts.json)) return null
@@ -58,7 +62,7 @@ export async function uploadArchive(
 
   // Never let the deploy call be the thing that discovers a failed upload: its grant is spent in
   // the governance preHandler, so a retry would need a NEW approval.
-  const after = await api.rawRequest('GET', statusPath(projectId, packed.sha256))
+  const after = await api.rawRequest('GET', statusPath(projectId, packed.tarSha256))
   if (after.body?.state !== 'valid') {
     throw new Error('the archive upload did not land — re-run the deploy to try again')
   }

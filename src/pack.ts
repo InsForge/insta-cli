@@ -17,7 +17,13 @@ export const ARCHIVE_LIMITS: ArchiveLimits = {
 
 export type PackResult = {
   archive: Buffer
+  // Integrity: what the build worker verifies the bytes it fetched against. Over the COMPRESSED
+  // bytes, so it is whatever this runtime's zlib produced.
   sha256: string
+  // Identity: the storage id, the dedup key and the value an approval-bound body carries. Over the
+  // TAR, because that is ours and byte-identical everywhere, while gzip output is not: the same
+  // tree packs to 360 bytes under Node 25 and 353 under Bun, and the CLI ships on both.
+  tarSha256: string
   files: number
   // Total entries incl. directories: the worker counts every header, so the cap applies to this.
   entries: number
@@ -185,7 +191,8 @@ export function packDirectory(absDir: string, limits: Partial<ArchiveLimits> = {
   }
   chunks.push(PAD, PAD) // two zero blocks close a tar
 
-  const archive = gzipSync(Buffer.concat(chunks), { level: 9 })
+  const tar = Buffer.concat(chunks)
+  const archive = gzipSync(tar, { level: 9 })
   // gzip carries its own mtime (4-7) and OS byte (9), both filled from the environment.
   archive.writeUInt32LE(0, 4)
   archive[9] = 255
@@ -197,6 +204,7 @@ export function packDirectory(absDir: string, limits: Partial<ArchiveLimits> = {
   return {
     archive,
     sha256: createHash('sha256').update(archive).digest('hex'),
+    tarSha256: createHash('sha256').update(tar).digest('hex'),
     files: found.filter((e) => !e.dir).length,
     entries: found.length,
     extractedBytes,
