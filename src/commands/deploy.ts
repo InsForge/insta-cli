@@ -4,7 +4,7 @@ import { ApiClient, ApiError, requireProject } from '../api.js'
 import { info, die, printJson, handleApproval, renderNextActions, CliExit } from '../util.js'
 import { flyctlBuildAndPush, ensureFlyctl, defaultBuildRunner, stderrBuildRunner, type BuildRunner } from '../flyctl-build.js'
 import { packDirectory, windowsModeCaveat, type ArchiveLimits } from '../pack.js'
-import { buildArchive, uploadArchive, type Uploader } from '../deploy-archive.js'
+import { deployArchive, uploadArchive, type DeployOutcome, type Uploader } from '../deploy-archive.js'
 
 type DeployOpts = { image?: string; branch?: string; group?: string; port?: string; websocket?: boolean; replaceSource?: boolean; json?: boolean }
 
@@ -14,7 +14,7 @@ const note = (opts: DeployOpts) => (opts.json ? (m: string) => void process.stde
 
 // Map CLI options to the platform deploy request body. Pure, so it's unit-tested. --websocket is only
 // sent when set (plain deploys unchanged). Exactly one of image | archive rides along.
-export function deployRequestBody(source: DeploySource, branch: string, opts: DeployOpts): Record<string, unknown> {
+export function deployRequestBody(source: { image: string }, branch: string, opts: DeployOpts): Record<string, unknown> {
   return {
     image: source.image,
     branch,
@@ -25,10 +25,11 @@ export function deployRequestBody(source: DeploySource, branch: string, opts: De
   }
 }
 
-// What a source directory resolved to. EVERY lane now ends in an image ref: flyctl and
-// local-docker build one locally, and the archive lane uploads, asks the platform to build, and
-// waits for the ref the gateway produced. The deploy call itself is identical in all three.
-export type DeploySource = { image: string }
+// What a source directory resolved to. flyctl and local-docker build an image locally and hand it
+// back for the ordinary `/deploy` call. The archive lane is different in kind: its one gated call
+// enqueues the build AND the deploy as a single operation, so by the time it returns the deploy
+// has already happened and there is nothing left to call -- it hands back the outcome instead.
+export type DeploySource = { image: string } | { deployed: DeployOutcome }
 
 type Lane =
   | { lane: 'flyctl' }
@@ -98,15 +99,16 @@ export async function prepareSource(
   log(`packed ${dir}: ${packed.files} files, ${packed.archive.length} bytes`)
   const ref = await uploadArchive(api, projectId, packed, branch, opts, upload)
   if (!ref) return null
-  log(`building ${packed.archive.length} bytes on the gateway (${ref.build.type})`)
-  // The wait lives HERE, not in the platform's deploy handler: a deploy is answered
-  // synchronously and the ALB cuts an idle request at 60s, while an image build runs minutes.
-  // Each poll is its own short request, so the CLI can wait as long as the build takes.
-  const built = await buildArchive(api, projectId, ref, branch, opts)
-  if (!built) return null
-  if ('failed' in built) die(built.failed)
-  log(`built ${built.image}`)
-  return { image: built.image }
+  log(`deploying ${packed.archive.length} bytes via the gateway (${ref.build.type})`)
+  // One gated call enqueues build+deploy as an operation; the wait is ours, one short poll at a
+  // time, because a platform request has to answer inside the ALB's 60s while a build runs minutes.
+  // A repo-connected service refuses this with a 409 the same way it refuses an image deploy, and
+  // the hint that names the FLAG rather than the API field lives here, beside the `/deploy` path.
+  const out = await deployArchive(api, projectId, ref, branch, opts, Date.now, undefined, log)
+    .catch((e) => { throw e instanceof ApiError && e.status === 409 ? new ApiError(e.status, repoConnectedHint(e.message), e.body) : e })
+  if (!out) return null
+  if ('failed' in out) die(out.failed)
+  return { deployed: out }
 }
 
 // A port mismatch is the #1 deploy mistake: the app boots "successfully" but the proxy routes to
@@ -165,6 +167,14 @@ export async function deploy(dir: string | undefined, opts: DeployOpts): Promise
   const effOpts = { ...opts, port: port?.toString() }
   const source = dir ? await prepareSource(api, p.projectId, dir, branch, effOpts) : { image: opts.image! }
   if (!source) return // an approval is pending; the user approves and re-runs
+  if ('deployed' in source) {
+    // The archive lane's operation already deployed. One output shape whichever lane ran, minus
+    // nextActions, which the operation read does not carry.
+    const d = source.deployed
+    if (opts.json) return printJson({ image: d.image, url: d.url, branch: d.branch, group: d.group, machineId: d.machineId })
+    info(`deployed ${d.image} -> ${d.url} (branch ${d.branch}, group ${d.group})`)
+    return
+  }
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/deploy`, deployRequestBody(source, branch, effOpts))
     .catch((e) => { throw e instanceof ApiError && e.status === 409 ? new ApiError(e.status, repoConnectedHint(e.message), e.body) : e })
   if (handleApproval(res, opts.json)) return

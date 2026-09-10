@@ -17,7 +17,7 @@ export function archiveBuildSpec(hasDockerfile: boolean): ArchiveBuildSpec {
 export type ArchiveRef = { archiveSha256: string; build: ArchiveBuildSpec }
 
 type Api = Pick<ApiClient, 'rawRequest'>
-type Opts = { branch?: string; group?: string; json?: boolean }
+type Opts = { branch?: string; group?: string; json?: boolean; port?: string; websocket?: boolean; replaceSource?: boolean }
 
 // Plain fetch, never the api client: the presigned URL carries its own signature and the platform
 // bearer must not be sent to a bucket.
@@ -82,14 +82,24 @@ export async function uploadArchive(
 // WAIT is ours, one short request at a time, because a deploy is answered synchronously and the
 // ALB in front of the platform cuts an idle request at 60s while an image build runs minutes.
 const POLL_MS = 3000
-const BUILD_DEADLINE_MS = 30 * 60 * 1000
+const DEPLOY_DEADLINE_MS = 30 * 60 * 1000
 
-export type BuildOutcome = { image: string } | { failed: string }
+// What the archive lane hands back: the deploy already happened. Same fields `/deploy` answers
+// with for an image body, so the command prints one shape whichever lane ran.
+export type DeployOutcome = { image: string; url: string; branch: string; group: string; machineId?: string }
+export type ArchiveDeployResult = DeployOutcome | { failed: string }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-// Build the uploaded archive and wait it out. Returns null when an approval is pending.
-export async function buildArchive(
+// ONE gated call, then a poll. The platform enqueues the build+deploy as an operation and answers
+// 202 at once, because a request has to finish inside the ALB's 60s and an image build runs
+// minutes; the wait is ours, one short GET at a time. Two gates on the lane with the mint, the
+// same as the flyctl lane. Returns null when an approval is pending.
+//
+// The operation is idempotent on (target, archive, build kind), so a re-run after approving finds
+// the one it already started rather than building again: same image, same result, no second
+// approval for a build that already happened.
+export async function deployArchive(
   api: Api,
   projectId: string,
   ref: ArchiveRef,
@@ -97,39 +107,46 @@ export async function buildArchive(
   opts: Opts,
   now: () => number = Date.now,
   wait: (ms: number) => Promise<unknown> = sleep,
-): Promise<BuildOutcome | null> {
-  const started = await api.rawRequest('POST', `/projects/${projectId}/archive-builds`, {
+  log: (m: string) => void = () => {},
+): Promise<ArchiveDeployResult | null> {
+  const started = await api.rawRequest('POST', `/projects/${projectId}/archive-deploys`, {
     branch,
     group: opts.group,
     archive: ref,
+    port: opts.port ? Number(opts.port) : undefined,
+    websocket: typeof opts.websocket === 'boolean' ? opts.websocket : undefined,
+    replaceSource: opts.replaceSource === true ? true : undefined,
   })
+  // An approval is a 202 too, told apart by its status word; anything else here is our operation.
   if (handleApproval(started, opts.json)) return null
-  const buildId = started.body?.buildId
-  if (typeof buildId !== 'string' || !buildId) throw new Error('the platform started a build but returned no id — re-run the deploy')
+  const operationId = started.body?.operationId
+  if (typeof operationId !== 'string' || !operationId) throw new Error('the platform accepted the deploy but returned no operation id — re-run the deploy')
+  if (started.body?.resumed === true) log('resuming the deploy this archive already started')
 
-  const deadline = now() + BUILD_DEADLINE_MS
+  const deadline = now() + DEPLOY_DEADLINE_MS
+  let last = ''
   for (;;) {
-    const res = await api.rawRequest('GET', `/projects/${projectId}/archive-builds/${encodeURIComponent(buildId)}`)
+    const res = await api.rawRequest('GET', `/projects/${projectId}/archive-deploys/${encodeURIComponent(operationId)}`)
     const state = res.body?.state
-    // A failed build is an ANSWER, not a transport error: the poll worked and the gateway is
-    // telling us why the tree did not build, which is the one sentence worth surfacing verbatim.
-    if (state === 'failed') return { failed: res.body.message || 'the build failed' }
-    // Only the platform's own pending state keeps the loop going. Treating an ABSENT or unknown
-    // state as "still building" meant a contract change, or a truncated response, spent the full
-    // deadline before saying anything -- half an hour of a spinner for a fault visible on the
-    // first poll.
-    if (state !== 'succeeded' && state !== 'building') {
-      throw new Error(`the platform reported an unknown build state (${JSON.stringify(state)}) — upgrade with \`insta upgrade\``)
-    }
-    if (state === 'succeeded') {
-      // A succeeded build with no ref would be deployed as the empty string, and the deploy
-      // would refuse it with a message about the image rather than about the build.
+    // A failed operation is an ANSWER, not a transport error: the poll worked, and the sentence
+    // it carries (usually the gateway's own, e.g. "no Dockerfile at ./api") is the one to show.
+    if (state === 'failed') return { failed: res.body.error || 'the deploy failed' }
+    if (state === 'live') {
       const image = res.body?.imageRef
-      if (typeof image !== 'string' || !image) throw new Error('the build succeeded but produced no image reference — re-run the deploy')
-      return { image }
+      const url = res.body?.url
+      if (typeof image !== 'string' || !image || typeof url !== 'string' || !url) {
+        throw new Error('the deploy finished but the platform returned no image or URL for it — check `insta status`')
+      }
+      return { image, url, branch: String(res.body.branch ?? branch), group: String(res.body.group ?? opts.group ?? ''), machineId: res.body.machineId ?? undefined }
     }
+    // Only the platform's own in-flight states keep the loop going. An absent or unknown state
+    // would otherwise spend the whole deadline looking like a slow build.
+    if (state !== 'queued' && state !== 'building' && state !== 'deploying') {
+      throw new Error(`the platform reported an unknown deploy state (${JSON.stringify(state)}) — upgrade with \`insta upgrade\``)
+    }
+    if (state !== last) { log(state === 'deploying' ? 'image built, deploying it' : `${state}…`); last = state }
     if (now() > deadline) {
-      throw new Error(`the build did not finish within ${Math.round(BUILD_DEADLINE_MS / 60000)} minutes — check \`insta logs\` or re-run`)
+      throw new Error(`the deploy did not finish within ${Math.round(DEPLOY_DEADLINE_MS / 60000)} minutes — check \`insta status\` or re-run`)
     }
     await wait(POLL_MS)
   }

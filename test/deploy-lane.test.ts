@@ -33,9 +33,9 @@ function fakeApi(lane: unknown, extra: Record<string, unknown> = {}) {
         return { status: 200, body: lane }
       }
       if (path.includes('/build-uploads/')) return { status: 200, body: { state: 'valid' } }
-      // Submit answers an id; the poll answers a finished build, so the loop runs exactly once.
-      if (key === 'POST /projects/p1/archive-builds') return { status: 200, body: { buildId: 'bld_1' } }
-      if (path.includes('/archive-builds/')) return { status: 200, body: { state: 'succeeded', imageRef: 'ecr.example/app@sha256:aa' } }
+      // The deploy is accepted as an operation; the poll answers a finished one, so the loop runs once.
+      if (key === 'POST /projects/p1/archive-deploys') return { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'queued' } }
+      if (path.includes('/archive-deploys/')) return { status: 200, body: { state: 'live', imageRef: 'ecr.example/app@sha256:aa', url: 'https://app.example', branch: 'main', group: 'api' } }
       throw new ApiError(501, 'deploy tokens (remote builders) is cloud-only')
     },
   }
@@ -64,18 +64,20 @@ describe('prepareSource — lane dispatch', () => {
   })
 
   // The archive lane never mints a Fly token, a directory with no Dockerfile is legitimate, and
-  // the lane ends in an IMAGE like every other one: the CLI submits the build and waits it out,
-  // so the deploy call that follows is the same call an image deploy has always made.
-  it('packs, uploads, builds and resolves to an image, minting no deploy token', async () => {
+  // it is different in KIND from the other lanes: its one gated call enqueues build+deploy, so
+  // by the time it returns the deploy has happened and it hands back the outcome, not an image
+  // for a `/deploy` call that no longer exists on this path.
+  it('packs, uploads, and resolves to a finished deploy, minting no deploy token', async () => {
     const { api, paths, bodies } = fakeApi({ lane: 'archive', limits: { maxArchiveBytes: 1024 * 1024, maxExtractedBytes: 1024 * 1024, maxFiles: 100 } })
 
-    const out = await prepareSource(api, 'p1', srcDir(false), 'main', {}, noRun)
+    const out = await prepareSource(api, 'p1', srcDir(false), 'main', { group: 'api' }, noRun)
 
-    expect(out).toEqual({ image: 'ecr.example/app@sha256:aa' })
-    expect(bodies['POST /projects/p1/archive-builds'].archive.build).toEqual({ type: 'nixpacks' })
+    expect(out).toEqual({ deployed: { image: 'ecr.example/app@sha256:aa', url: 'https://app.example', branch: 'main', group: 'api', machineId: undefined } })
+    expect(bodies['POST /projects/p1/archive-deploys'].archive.build).toEqual({ type: 'nixpacks' })
     expect(paths).not.toContain('POST /projects/p1/deploy-token')
-    // Order matters: the object has to exist before a build is asked for it.
-    expect(paths.indexOf('POST /projects/p1/build-uploads')).toBeLessThan(paths.indexOf('POST /projects/p1/archive-builds'))
+    expect(paths).not.toContain('POST /projects/p1/deploy')
+    // Order matters: the object has to exist before a deploy is asked for it.
+    expect(paths.indexOf('POST /projects/p1/build-uploads')).toBeLessThan(paths.indexOf('POST /projects/p1/archive-deploys'))
   })
 
   it('selects a dockerfile build when the packed tree has one', async () => {
@@ -83,7 +85,7 @@ describe('prepareSource — lane dispatch', () => {
 
     await prepareSource(api, 'p1', srcDir(true), 'main', {}, noRun)
 
-    expect(bodies['POST /projects/p1/archive-builds'].archive.build).toEqual({ type: 'dockerfile' })
+    expect(bodies['POST /projects/p1/archive-deploys'].archive.build).toEqual({ type: 'dockerfile' })
   })
 
   // A failed build is an ANSWER the gateway gave, not a transport error, and its sentence is the
@@ -91,7 +93,7 @@ describe('prepareSource — lane dispatch', () => {
   // the thrown CliExit, so that is where it has to be asserted.
   it('dies with the gateway’s own sentence when the build fails', async () => {
     const { api } = fakeApi({ lane: 'archive', limits: { maxArchiveBytes: 1024 * 1024, maxExtractedBytes: 1024 * 1024, maxFiles: 100 } }, {
-      'GET /projects/p1/archive-builds/bld_1': { status: 200, body: { state: 'failed', message: 'build bld_1 failed: no Dockerfile at ./api' } },
+      'GET /projects/p1/archive-deploys/op_1': { status: 200, body: { state: 'failed', error: 'build bld_1 failed: no Dockerfile at ./api' } },
     })
     const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
     try {

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { buildArchive, uploadArchive, archiveBuildSpec } from '../src/deploy-archive.js'
+import { deployArchive, uploadArchive, archiveBuildSpec } from '../src/deploy-archive.js'
 
 const DIGEST = 'a'.repeat(64)
 const packed = (hasDockerfile = true) => ({ archive: Buffer.from('tar.gz bytes'), sha256: DIGEST, hasDockerfile })
@@ -90,10 +90,12 @@ describe('uploadArchive', () => {
   })
 })
 
-// Two gated calls now stand between a directory and a running service: the mint and the build
-// submit. An approval can stop the run at EITHER, so the recovery has to work from both points.
-describe('buildArchive — the gated submit and the wait after it', () => {
+// Two gated calls stand between a directory and a running service: the mint, and the deploy.
+// The deploy is ONE call that enqueues build+deploy as an operation, so an approval can stop the
+// run at either, and the recovery has to work from both points.
+describe('deployArchive — the gated call and the poll after it', () => {
   const ref = { archiveSha256: DIGEST, build: { type: 'dockerfile' as const } }
+  const live = { state: 'live', imageRef: 'ecr.example/app@sha256:aa', url: 'https://app.example', branch: 'main', group: 'api', machineId: 'm1' }
 
   function api(script: Array<{ status: number; body: any }>) {
     const calls: Array<{ method: string; path: string; body?: any }> = []
@@ -108,58 +110,84 @@ describe('buildArchive — the gated submit and the wait after it', () => {
       },
     }
   }
+  const noWait = async () => undefined
 
-  it('stops at a pending approval on the submit and asks for nothing else', async () => {
+  it('stops at a pending approval on the deploy and asks for nothing else', async () => {
     const { api: a, calls } = api([{ status: 202, body: { status: 'approval_required', action: 'deploy', approvalId: 'ap_1' } }])
 
-    expect(await buildArchive(a, 'p1', ref, 'main', { json: false })).toBeNull()
-    // One call: no poll loop against a build that was never started.
+    expect(await deployArchive(a, 'p1', ref, 'main', { json: false }, Date.now, noWait)).toBeNull()
     expect(calls).toHaveLength(1)
     expect(process.exitCode).toBe(2)
   })
 
-  // The re-run after approving. The submit body is composed only of values the packer reproduces
-  // (the digest) and the target the user named, so it is byte-identical to the body the approval
-  // was granted against, which is what lets the grant apply instead of asking a second time.
-  it('sends a submit body a re-run reproduces exactly', async () => {
+  // The body is composed only of values the packer reproduces and the target the user named, so
+  // a re-run after approving sends a byte-identical body and the grant applies. Port, websocket
+  // and replaceSource ride along because this call IS the deploy: there is no /deploy after it.
+  it('sends one body a re-run reproduces exactly, carrying every deploy option', async () => {
     const { api: a, calls } = api([
-      { status: 200, body: { buildId: 'bld_1' } },
-      { status: 200, body: { state: 'succeeded', imageRef: 'ecr.example/app@sha256:aa' } },
+      { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'queued' } },
+      { status: 200, body: live },
     ])
 
-    const out = await buildArchive(a, 'p1', ref, 'main', { group: 'api' })
+    const out = await deployArchive(a, 'p1', ref, 'main', { group: 'api', port: '3000', websocket: true, replaceSource: true }, Date.now, noWait)
 
-    expect(out).toEqual({ image: 'ecr.example/app@sha256:aa' })
-    expect(calls[0]!.body).toEqual({ branch: 'main', group: 'api', archive: ref })
+    expect(out).toEqual({ image: 'ecr.example/app@sha256:aa', url: 'https://app.example', branch: 'main', group: 'api', machineId: 'm1' })
+    expect(calls[0]!.body).toEqual({ branch: 'main', group: 'api', archive: ref, port: 3000, websocket: true, replaceSource: true })
+    expect(calls[1]!.path).toBe('/projects/p1/archive-deploys/op_1')
   })
 
-  it('keeps polling while the build is running, one request at a time', async () => {
+  it('keeps polling through every in-flight state, one request at a time', async () => {
+    const states = ['queued', 'building', 'building', 'deploying']
     let n = 0
     const a = {
       rawRequest: async (method: string) => {
-        if (method === 'POST') return { status: 200, body: { buildId: 'bld_1' } }
-        n += 1
-        return n < 3
-          ? { status: 200, body: { state: 'building' } }
-          : { status: 200, body: { state: 'succeeded', imageRef: 'ecr.example/app@sha256:bb' } }
+        if (method === 'POST') return { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'queued' } }
+        const s = states[n++]
+        return s ? { status: 200, body: { state: s } } : { status: 200, body: live }
       },
     }
+    const seen: string[] = []
 
-    const out = await buildArchive(a, 'p1', ref, 'main', {}, Date.now, async () => undefined)
+    const out = await deployArchive(a, 'p1', ref, 'main', {}, Date.now, noWait, (m) => seen.push(m))
 
-    expect(out).toEqual({ image: 'ecr.example/app@sha256:bb' })
-    expect(n).toBe(3)
+    expect(out).toMatchObject({ url: 'https://app.example' })
+    expect(n).toBe(states.length + 1)
+    // Progress is narrated once per state change, not once per poll.
+    expect(seen).toEqual(['queued…', 'building…', 'image built, deploying it'])
   })
 
-  it('gives up rather than polling forever when the gateway never finishes', async () => {
+  it('returns the operation’s own failure sentence rather than throwing', async () => {
+    const { api: a } = api([
+      { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'queued' } },
+      { status: 200, body: { state: 'failed', error: 'build bld_1 failed: no Dockerfile at ./api' } },
+    ])
+    expect(await deployArchive(a, 'p1', ref, 'main', {}, Date.now, noWait)).toEqual({ failed: 'build bld_1 failed: no Dockerfile at ./api' })
+  })
+
+  it('fails fast on a state this CLI does not know instead of polling to the deadline', async () => {
+    const { api: a, calls } = api([
+      { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'queued' } },
+      { status: 200, body: { state: 'reticulating' } },
+    ])
+    await expect(deployArchive(a, 'p1', ref, 'main', {}, Date.now, noWait)).rejects.toThrow(/unknown deploy state/)
+    expect(calls).toHaveLength(2)
+  })
+
+  it('gives up at its own ceiling when the platform never finishes', async () => {
     const a = {
       rawRequest: async (method: string) =>
-        method === 'POST' ? { status: 200, body: { buildId: 'bld_1' } } : { status: 200, body: { state: 'building' } },
+        method === 'POST' ? { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'queued' } } : { status: 200, body: { state: 'building' } },
     }
     let t = 0
-    const clock = () => (t += 60 * 60 * 1000) // an hour per look
+    const clock = () => (t += 60 * 60 * 1000)
+    await expect(deployArchive(a, 'p1', ref, 'main', {}, clock, noWait)).rejects.toThrow(/did not finish/)
+  })
 
-    await expect(buildArchive(a, 'p1', ref, 'main', {}, clock, async () => undefined))
-      .rejects.toThrow(/did not finish/)
+  it('refuses a live operation that carries no image or url', async () => {
+    const { api: a } = api([
+      { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'queued' } },
+      { status: 200, body: { state: 'live' } },
+    ])
+    await expect(deployArchive(a, 'p1', ref, 'main', {}, Date.now, noWait)).rejects.toThrow(/no image or URL/)
   })
 })
