@@ -404,3 +404,19 @@ describe('packDirectory — limits', () => {
     })
   })
 })
+
+// The matcher agreeing is not the promise; what ships is. `abc/**` plus a re-inclusion beneath it
+// used to lose the kept file entirely, because the trailing globstar matched `abc` itself and the
+// walker pruned the directory before any negation could be consulted.
+itModes('keeps a file re-included under a trailing globstar', () => {
+  const dir = mk()
+  writeFileSync(join(dir, 'Dockerfile'), 'FROM alpine\n')
+  mkdirSync(join(dir, 'abc'))
+  writeFileSync(join(dir, 'abc', 'keep.txt'), 'keep\n')
+  writeFileSync(join(dir, 'abc', 'drop.txt'), 'drop\n')
+  writeFileSync(join(dir, '.gitignore'), 'abc/**\n!abc/keep.txt\n')
+
+  const names = packedNames(dir)
+  expect(names).toContain('abc/keep.txt')
+  expect(names).not.toContain('abc/drop.txt')
+})

@@ -214,3 +214,34 @@ describe('compileIgnore — docker preprocessing parity', () => {
     expect(ig.excludes('build/keep.js', false)).toBe(false)
   })
 })
+
+// `abc/**` means everything INSIDE abc. Reading it as "abc and everything inside" is not a
+// near-miss: git-mode canPrune is unconditional, so the walker prunes abc outright and every
+// re-inclusion beneath it becomes unreachable. A rule that reads as "drop this tree but keep one
+// file" then silently drops the file too.
+describe('compileIgnore — trailing /** matches descendants, not the directory', () => {
+  it('does not exclude the directory itself', () => {
+    const ig = git('abc/**\n')
+    expect(ig.excludes('abc', true)).toBe(false)
+    expect(ig.excludes('abc/x.txt', false)).toBe(true)
+    expect(ig.excludes('abc/deep/y.txt', false)).toBe(true)
+  })
+
+  // The property that actually matters. canPrune is not consulted at all here (pack.ts asks it
+  // only for a directory that IS excluded), so leaving abc unexcluded is exactly what lets the
+  // walker descend and the negation be reached.
+  it('leaves the directory walkable so a negation beneath it still applies', () => {
+    const ig = git('abc/**\n!abc/keep.txt\n')
+    expect(ig.excludes('abc', true)).toBe(false)
+    expect(ig.excludes('abc/keep.txt', false)).toBe(false)
+    expect(ig.excludes('abc/drop.txt', false)).toBe(true)
+  })
+
+  // Excluding the DIRECTORY is still a different rule with git's own consequence: git cannot
+  // re-include under an excluded directory, and pruning there is correct.
+  it('still prunes when the rule names the directory itself', () => {
+    const ig = git('abc\n!abc/keep.txt\n')
+    expect(ig.excludes('abc', true)).toBe(true)
+    expect(ig.canPrune('abc')).toBe(true)
+  })
+})

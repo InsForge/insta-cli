@@ -26,7 +26,11 @@ function translate(p: string): string {
       out += '(?:.*/)?' // any number of directories, including none
       i += 3
     } else if (p.startsWith('/**', i) && i + 3 === p.length) {
-      out += '(?:/.*)?'
+      // git: `abc/**` matches everything INSIDE abc, NOT abc itself. Making the suffix optional
+      // matched the directory too, and a git-mode canPrune is unconditional, so the walker then
+      // pruned abc outright and `!abc/keep.txt` beneath it could never be reached -- a rule that
+      // reads as "keep this one file" silently dropped it from the upload.
+      out += '/.+'
       i += 3
     } else if (p.startsWith('**', i)) {
       out += '.*'
