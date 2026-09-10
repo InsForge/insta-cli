@@ -12,7 +12,8 @@ export function archiveBuildSpec(hasDockerfile: boolean): ArchiveBuildSpec {
 
 // ONE digest, over the uploaded bytes: it is both the id the object is stored under and the value
 // the build worker checks the bytes it fetched against. Splitting the two so the id could be
-// canonical across runtimes is what let a Node-packed object be claimed by a Bun-packed digest.
+// canonical across runtimes is what let a Node-packed object be claimed by a Bun-packed digest;
+// the compressor is deterministic instead, so one digest is canonical AND addresses the bytes.
 export type ArchiveRef = { archiveSha256: string; build: ArchiveBuildSpec }
 
 type Api = Pick<ApiClient, 'rawRequest'>
@@ -71,4 +72,47 @@ export async function uploadArchive(
     throw new Error('the archive upload did not land — re-run the deploy to try again')
   }
   return ref
+}
+
+// How often to ask, and how long to keep asking. The platform submits the build and returns; the
+// WAIT is ours, one short request at a time, because a deploy is answered synchronously and the
+// ALB in front of the platform cuts an idle request at 60s while an image build runs minutes.
+const POLL_MS = 3000
+const BUILD_DEADLINE_MS = 30 * 60 * 1000
+
+export type BuildOutcome = { image: string } | { failed: string }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+// Build the uploaded archive and wait it out. Returns null when an approval is pending.
+export async function buildArchive(
+  api: Api,
+  projectId: string,
+  ref: ArchiveRef,
+  branch: string,
+  opts: Opts,
+  now: () => number = Date.now,
+  wait: (ms: number) => Promise<unknown> = sleep,
+): Promise<BuildOutcome | null> {
+  const started = await api.rawRequest('POST', `/projects/${projectId}/archive-builds`, {
+    branch,
+    group: opts.group,
+    archive: ref,
+  })
+  if (handleApproval(started, opts.json)) return null
+  const buildId: string = started.body.buildId
+
+  const deadline = now() + BUILD_DEADLINE_MS
+  for (;;) {
+    const res = await api.rawRequest('GET', `/projects/${projectId}/archive-builds/${encodeURIComponent(buildId)}`)
+    const state = res.body?.state
+    // A failed build is an ANSWER, not a transport error: the poll worked and the gateway is
+    // telling us why the tree did not build, which is the one sentence worth surfacing verbatim.
+    if (state === 'failed') return { failed: res.body.message || 'the build failed' }
+    if (state === 'succeeded') return { image: res.body.imageRef }
+    if (now() > deadline) {
+      throw new Error(`the build did not finish within ${Math.round(BUILD_DEADLINE_MS / 60000)} minutes — check \`insta logs\` or re-run`)
+    }
+    await wait(POLL_MS)
+  }
 }
