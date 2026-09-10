@@ -121,6 +121,14 @@ only. Provider-minted service credentials (`DATABASE_URL`, `BUCKET_NAME`,
 `insta secrets bind` rules, and the postgres connection string is read directly with
 `insta db url` (or `insta db connect` for a psql session).
 
+Secrets can be scoped per compute service, so several services may each define the same name — and
+a flat bundle cannot carry two values for one name. Such a name is **withheld** from the bundle and
+reported on stderr (which services define it, and how to read one). `insta run` then **refuses to
+start the command** rather than let it inherit a stale value for that name from your shell; re-run
+it as `insta run --service compute/<name>` to inject exactly what that one service receives, or
+`--ignore-collisions` to run with the name removed from the child environment altogether.
+`insta secrets --service compute/<name>` reads the same scoped env into `.env`.
+
 ### Destructive actions can require approval
 
 Agent requests are governed by the project's `agent-policy`; human requests use normal RBAC.

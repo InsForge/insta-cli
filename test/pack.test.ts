@@ -82,15 +82,15 @@ describe('packDirectory — determinism', () => {
 
   // Measured, not feared: the same fixture packs to 360 bytes under Node 25 and 353 under Bun, and
   // the CLI ships on both (npx runs Node, the compiled binary runs Bun). So the gzip digest cannot
-  // be the identity, and the two are kept apart.
-  it('exposes a canonical tar digest beside the compressed one', () => {
+  // ONE digest, and it is over the bytes that get uploaded. Anything else, however canonical,
+  // cannot be what an object id is derived from: an id must address the bytes it stores.
+  it('digests the archive buffer itself, not the tar inside it', () => {
     const dir = mk()
     writeTreeA(dir)
     const res = packDirectory(dir)
 
-    expect(res.tarSha256).toMatch(/^[0-9a-f]{64}$/)
-    expect(res.tarSha256).not.toBe(res.sha256)
-    expect(createHash('sha256').update(gunzipSync(res.archive)).digest('hex')).toBe(res.tarSha256)
+    expect(res.sha256).toBe(createHash('sha256').update(res.archive).digest('hex'))
+    expect(res.sha256).not.toBe(createHash('sha256').update(gunzipSync(res.archive)).digest('hex'))
   })
 
   // Format pin over the TAR bytes, not the .tar.gz: zlib output may change across Node versions.

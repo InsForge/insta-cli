@@ -88,10 +88,10 @@ export function dockerfileExposedPort(dockerfile: string): number | undefined {
   return port
 }
 
-// A directory deploy builds the Dockerfile IN the directory — there is no no-Dockerfile lane here.
-// The nixpacks (no-Dockerfile) lane is real but server-side: it runs on the build gateway for
-// GitHub-connected repos only, and nothing reachable from `insta deploy <dir>` can enter it. So the
-// dead-end message names every way forward instead of the bare "add one".
+// This message is for the target that still REQUIRES a Dockerfile: a Fly-backed service, where a
+// directory deploy builds the Dockerfile in the directory and dies without one. On insta-compute
+// the archive lane carries the directory to the gateway and nixpacks builds it, so this dead end is
+// no longer universal. It names every way forward instead of the bare "add one".
 //
 // It deliberately does NOT say "save the Dockerfile `insta build --explain` prints": that file is
 // not standalone — it COPYs `.nixpacks/nixpkgs-<hash>.nix` support files nixpacks writes beside it,
@@ -133,11 +133,18 @@ export async function deploy(dir: string | undefined, opts: DeployOpts): Promise
   const source = dir ? await prepareSource(api, p.projectId, dir, branch, effOpts) : { image: opts.image! }
   if (!source) return // an approval is pending; the user approves and re-runs
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/deploy`, deployRequestBody(source, branch, effOpts))
+    .catch((e) => { throw e instanceof ApiError && e.status === 409 ? new ApiError(e.status, repoConnectedHint(e.message), e.body) : e })
   if (handleApproval(res, opts.json)) return
-  const what = 'image' in source ? source.image : `archive ${source.archive.sha256.slice(0, 12)} (${source.archive.build.type})`
+  const what = 'image' in source ? source.image : `archive ${source.archive.archiveSha256.slice(0, 12)} (${source.archive.build.type})`
   if (opts.json) return printJson({ ...('image' in source ? { image: source.image } : { archive: source.archive }), ...res.body })
   info(`deployed ${what} -> ${res.body.url} (branch ${res.body.branch}, group ${res.body.group})`)
   renderNextActions(res.body.nextActions)
+}
+
+// The platform refuses an image deploy onto a repo-connected service and names the body field it
+// wants; a CLI user can only pass the flag. Pure, so it's unit-tested.
+export function repoConnectedHint(message: string): string {
+  return message.replace(/pass replaceSource: true/g, 'pass --replace-source')
 }
 
 // The local image tag a daemon-side deploy runs: unique per build so a redeploy replaces, and

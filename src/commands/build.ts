@@ -172,10 +172,10 @@ export async function buildReport(
 
   const checks: BuildCheck[] = []
   // Only a Dockerfile IN the directory passes. A nixpacks-generated one is a real plan, but it is
-  // not a plan `insta deploy <dir>` can execute: that path builds the directory's own Dockerfile and
-  // dies without one, and the nixpacks lane runs server-side for GitHub-connected repos only. This
-  // check used to pass on the generated Dockerfile, so a verifier said "deployable" about a
-  // directory `deploy` refuses — the whole point of the command is to not do that.
+  // not one this machine can hand to every target: on a Fly-backed service `insta deploy <dir>`
+  // builds the directory's own Dockerfile and dies without one. On insta-compute the gateway runs
+  // nixpacks itself, so the same directory ships. The check stays a non-pass because it cannot know
+  // the target, and the detail below says both halves rather than promising either.
   checks.push(
     dockerfile.source === 'nixpacks'
       ? {
@@ -248,8 +248,9 @@ export function renderReport(r: BuildReport, explain: boolean): string[] {
   const lines: string[] = []
   lines.push(`plan for ${r.dir}:`)
   // The builder line is the first thing read (and the thing an agent scrapes), so it carries the
-  // lane caveat too — "builder: nixpacks" on its own reads as a promise `insta deploy <dir>` breaks.
-  const lane = r.plan.builder === 'nixpacks' ? ' — GitHub lane only (`insta compute connect-repo`); `insta deploy <dir>` needs a Dockerfile' : ''
+  // lane caveat too — "builder: nixpacks" on its own reads as a promise that is only true on some
+  // targets. It has to say the SAME thing the detail below it says, or a scrape sees both claims.
+  const lane = r.plan.builder === 'nixpacks' ? ' — server-side: insta-compute builds this as-is, a Fly-backed service needs your own Dockerfile' : ''
   lines.push(`  builder: ${r.plan.builder ?? 'none'}${r.plan.providers.length ? ` (providers: ${r.plan.providers.join(', ')})` : ''}${lane}`)
   if (r.plan.installCommand) lines.push(`  install: ${r.plan.installCommand}`)
   if (r.plan.buildCommand) lines.push(`  build:   ${r.plan.buildCommand}`)

@@ -2,8 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { uploadArchive, archiveBuildSpec } from '../src/deploy-archive.js'
 
 const DIGEST = 'a'.repeat(64)
-const TAR_DIGEST = 'b'.repeat(64)
-const packed = (hasDockerfile = true) => ({ archive: Buffer.from('tar.gz bytes'), sha256: DIGEST, tarSha256: TAR_DIGEST, hasDockerfile })
+const packed = (hasDockerfile = true) => ({ archive: Buffer.from('tar.gz bytes'), sha256: DIGEST, hasDockerfile })
 
 type Call = { method: string; path: string; body?: any }
 
@@ -47,9 +46,9 @@ describe('uploadArchive', () => {
 
     const out = await uploadArchive(api, 'p1', packed(), 'main', {}, async (url) => { puts.push(url) })
 
-    expect(out).toEqual({ sha256: TAR_DIGEST, archiveSha256: DIGEST, build: { type: 'dockerfile' } })
+    expect(out).toEqual({ archiveSha256: DIGEST, build: { type: 'dockerfile' } })
     expect(puts).toEqual([])
-    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([`GET /projects/p1/build-uploads/${TAR_DIGEST}`])
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([`GET /projects/p1/build-uploads/${DIGEST}`])
   })
 
   it('mints, uploads and re-checks when the object is missing', async () => {
@@ -60,15 +59,15 @@ describe('uploadArchive', () => {
       puts.push({ url, bytes: body.length })
     })
 
-    expect(out).toEqual({ sha256: TAR_DIGEST, archiveSha256: DIGEST, build: { type: 'nixpacks' } })
+    expect(out).toEqual({ archiveSha256: DIGEST, build: { type: 'nixpacks' } })
     expect(puts).toEqual([{ url: 'https://bucket.example/o?put=1', bytes: 12 }])
     expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
-      `GET /projects/p1/build-uploads/${TAR_DIGEST}`,
+      `GET /projects/p1/build-uploads/${DIGEST}`,
       'POST /projects/p1/build-uploads',
-      `GET /projects/p1/build-uploads/${TAR_DIGEST}`,
+      `GET /projects/p1/build-uploads/${DIGEST}`,
     ])
     // The mint carries the content digest and the exact byte count that gets signed into the PUT.
-    expect(calls[1]!.body).toEqual({ branch: 'main', group: 'api', sha256: TAR_DIGEST, size: 12 })
+    expect(calls[1]!.body).toEqual({ branch: 'main', group: 'api', sha256: DIGEST, size: 12 })
   })
 
   // handleApproval sets exit 2 and the user re-runs; nothing may be uploaded or deployed here.

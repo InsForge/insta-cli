@@ -10,9 +10,10 @@ export function archiveBuildSpec(hasDockerfile: boolean): ArchiveBuildSpec {
   return hasDockerfile ? { type: 'dockerfile' } : { type: 'nixpacks' }
 }
 
-// sha256 is the IDENTITY (the canonical tar digest), archiveSha256 the INTEGRITY value the build
-// worker checks the bytes it fetched against. They are different digests of the same archive.
-export type ArchiveRef = { sha256: string; archiveSha256: string; build: ArchiveBuildSpec }
+// ONE digest, over the uploaded bytes: it is both the id the object is stored under and the value
+// the build worker checks the bytes it fetched against. Splitting the two so the id could be
+// canonical across runtimes is what let a Node-packed object be claimed by a Bun-packed digest.
+export type ArchiveRef = { archiveSha256: string; build: ArchiveBuildSpec }
 
 type Api = Pick<ApiClient, 'rawRequest'>
 type Opts = { branch?: string; group?: string; json?: boolean }
@@ -38,22 +39,25 @@ const statusPath = (projectId: string, sha256: string) => `/projects/${projectId
 export async function uploadArchive(
   api: Api,
   projectId: string,
-  packed: Pick<PackResult, 'archive' | 'sha256' | 'tarSha256' | 'hasDockerfile'>,
+  packed: Pick<PackResult, 'archive' | 'sha256' | 'hasDockerfile'>,
   branch: string,
   opts: Opts,
   upload: Uploader = defaultUpload,
 ): Promise<ArchiveRef | null> {
-  const ref: ArchiveRef = { sha256: packed.tarSha256, archiveSha256: packed.sha256, build: archiveBuildSpec(packed.hasDockerfile) }
+  const ref: ArchiveRef = { archiveSha256: packed.sha256, build: archiveBuildSpec(packed.hasDockerfile) }
 
-  // Keyed on the TAR digest everywhere the platform derives storage from, so a re-run under the
-  // other runtime finds the same object instead of uploading a second copy under a second id.
-  const first = await api.rawRequest('GET', statusPath(projectId, packed.tarSha256))
+  // The id the platform derives storage from is this digest, so an object that is already there is
+  // BYTE-IDENTICAL to the one in hand and the ref describes it truthfully. Keying on the tar digest
+  // instead bought cross-runtime dedup and paid for it with a lie: a Bun re-run of a Node upload
+  // matched the id, skipped the upload, and sent Bun's digest for Node's bytes, which the worker
+  // then rejected on every attempt until the object expired.
+  const first = await api.rawRequest('GET', statusPath(projectId, packed.sha256))
   if (first.body?.state === 'valid') return ref
 
   const minted = await api.rawRequest('POST', `/projects/${projectId}/build-uploads`, {
     branch,
     group: opts.group,
-    sha256: packed.tarSha256,
+    sha256: packed.sha256,
     size: packed.archive.length,
   })
   if (handleApproval(minted, opts.json)) return null
@@ -62,7 +66,7 @@ export async function uploadArchive(
 
   // Never let the deploy call be the thing that discovers a failed upload: its grant is spent in
   // the governance preHandler, so a retry would need a NEW approval.
-  const after = await api.rawRequest('GET', statusPath(projectId, packed.tarSha256))
+  const after = await api.rawRequest('GET', statusPath(projectId, packed.sha256))
   if (after.body?.state !== 'valid') {
     throw new Error('the archive upload did not land — re-run the deploy to try again')
   }
