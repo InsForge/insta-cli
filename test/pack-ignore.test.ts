@@ -175,3 +175,42 @@ describe('compileIgnore — git escaping', () => {
     expect(docker('#comment\n').excludes('#comment', false)).toBe(false)
   })
 })
+
+// `.dockerignore` decides the upload boundary, so a rule that silently fails to match ships a
+// file the author withheld. These are the shapes docker's own parser handles and this one did
+// not (moby/patternmatcher ReadAll: BOM strip, comment test before trim, TrimSpace, Clean).
+describe('compileIgnore — docker preprocessing parity', () => {
+  it('strips a UTF-8 BOM, so a BOM-prefixed first rule still matches', () => {
+    expect(docker('﻿secrets.env\n').excludes('secrets.env', false)).toBe(true)
+    // Same for git: the BOM belongs to the file, not to the pattern.
+    expect(git('﻿secrets.env\n').excludes('secrets.env', false)).toBe(true)
+  })
+
+  it('cleans a path so a traversal spelling still names the file it resolves to', () => {
+    expect(docker('foo/../secrets.env\n').excludes('secrets.env', false)).toBe(true)
+    expect(docker('./secrets.env\n').excludes('secrets.env', false)).toBe(true)
+    expect(docker('a//b\n').excludes('a/b', false)).toBe(true)
+  })
+
+  // Clean drops the trailing slash, so docker has no directory-only form. Treating it as one
+  // under-excludes: `secrets/` would then miss a FILE called secrets.
+  it('matches a file for a trailing-slash rule, the way docker does', () => {
+    const ig = docker('secrets/\n')
+    expect(ig.excludes('secrets', true)).toBe(true)
+    expect(ig.excludes('secrets', false)).toBe(true)
+    // git keeps its own meaning: there, the slash really does mean directory-only.
+    expect(git('secrets/\n').excludes('secrets', false)).toBe(false)
+  })
+
+  it('trims surrounding whitespace, and only treats an UNINDENTED hash as a comment', () => {
+    expect(docker('   secrets.env   \n').excludes('secrets.env', false)).toBe(true)
+    // docker tests for '#' before trimming, so an indented one is a pattern, not a comment.
+    expect(docker('  #secrets\n').excludes('#secrets', false)).toBe(true)
+    expect(docker('#secrets\n').excludes('#secrets', false)).toBe(false)
+  })
+
+  it('trims after the negation marker too', () => {
+    const ig = docker('build\n!  build/keep.js\n')
+    expect(ig.excludes('build/keep.js', false)).toBe(false)
+  })
+})

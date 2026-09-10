@@ -1,3 +1,5 @@
+import { posix } from 'node:path'
+
 // Ignore matching for `insta deploy <dir>`: git and docker anchor patterns differently.
 
 export type Flavour = 'git' | 'docker'
@@ -89,35 +91,63 @@ function stripTrailingSpaces(line: string): string {
   return line.slice(0, end)
 }
 
+// Docker's own preprocessing, in its order (moby/patternmatcher ReadAll): the comment test runs
+// BEFORE trimming, so `  #x` is a pattern and not a comment, and every surviving pattern goes
+// through filepath.Clean. Clean is the part that matters most here: it resolves `foo/../secrets`
+// to `secrets` and DROPS a trailing slash, so `secrets/` excludes a file named `secrets` too.
+// Treating that slash as directory-only, the way git does, under-excludes exactly the shape a
+// user writes when they mean "keep this out".
+function cleanDockerPattern(pat: string): string {
+  const normalized = posix.normalize(pat)
+  const cut = normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized
+  return cut === '' ? '.' : cut
+}
+
 export function compileIgnore(files: IgnoreFile[], flavour: Flavour): Ignore {
   const rules: Rule[] = []
   for (const f of files) {
-    for (const raw of f.text.split('\n')) {
+    // A UTF-8 BOM belongs to the FILE, not to its first pattern. Both parsers strip it, and
+    // without that a BOM-prefixed `secrets.env` silently matches nothing.
+    const text = f.text.charCodeAt(0) === 0xfeff ? f.text.slice(1) : f.text
+    for (const raw of text.split('\n')) {
       // \r always goes: that is the line ending, never pattern text. What follows differs by
       // flavour, so the two are separate steps.
       const noEol = raw.replace(/\r+$/, '')
-      const line = flavour === 'git' ? stripTrailingSpaces(noEol) : noEol.replace(/\s+$/, '')
-      if (!line) continue
-
-      let pat = line
+      let pat: string
       let negated = false
-      // A leading `\#` or `\!` is git's way to name a file that really starts with one. It has to
-      // short-circuit BOTH checks below: unescaping first and then testing would read `\!secrets`
-      // as a negation of `secrets`, the exact inverse of what the author asked for.
-      if (flavour === 'git' && (pat.startsWith('\\#') || pat.startsWith('\\!'))) {
-        pat = pat.slice(1)
-      } else {
-        if (pat.startsWith('#')) continue
-        negated = pat.startsWith('!')
-        if (negated) pat = pat.slice(1)
-      }
-
       let dirOnly = false
-      if (pat.endsWith('/')) {
-        dirOnly = true
-        pat = pat.slice(0, -1)
+
+      if (flavour === 'docker') {
+        // Comment test first, untrimmed, then trim: docker's order, not ours.
+        if (noEol.startsWith('#')) continue
+        pat = noEol.trim()
+        if (!pat) continue
+        negated = pat.startsWith('!')
+        if (negated) pat = pat.slice(1).trim()
+        if (!pat) continue
+        pat = cleanDockerPattern(pat)
+        if (pat === '.') continue
+      } else {
+        const line = stripTrailingSpaces(noEol)
+        if (!line) continue
+        pat = line
+        // A leading `\#` or `\!` is git's way to name a file that really starts with one. It has
+        // to short-circuit BOTH checks below: unescaping first and then testing would read
+        // `\!secrets` as a negation of `secrets`, the exact inverse of what was asked for.
+        if (pat.startsWith('\\#') || pat.startsWith('\\!')) {
+          pat = pat.slice(1)
+        } else {
+          if (pat.startsWith('#')) continue
+          negated = pat.startsWith('!')
+          if (negated) pat = pat.slice(1)
+        }
+        // Only git gives a trailing slash meaning. Docker's Clean already removed it above.
+        if (pat.endsWith('/')) {
+          dirOnly = true
+          pat = pat.slice(0, -1)
+        }
+        if (pat.startsWith('./')) pat = pat.slice(2)
       }
-      if (pat.startsWith('./')) pat = pat.slice(2)
 
       // docker anchors every pattern to the root; git only when the pattern has a slash.
       let anchored = true
