@@ -183,6 +183,33 @@ describe('deployArchive — the gated call and the poll after it', () => {
     await expect(deployArchive(a, 'p1', ref, 'main', {}, clock, noWait)).rejects.toThrow(/did not finish/)
   })
 
+  // A failed operation's `error` is the one sentence worth showing; a non-string there must fall
+  // back to a real message, not print "[object Object]".
+  it('falls back to a plain message when a failed operation carries a non-string error', async () => {
+    const { api: a } = api([
+      { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'queued' } },
+      { status: 200, body: { state: 'failed', error: { code: 'E_BUILD' } } },
+    ])
+    expect(await deployArchive(a, 'p1', ref, 'main', {}, Date.now, noWait)).toEqual({ failed: 'the deploy failed' })
+  })
+
+  // Omitted metadata falls back to what was requested; metadata of the WRONG TYPE is a broken
+  // contract, and String() coercing it would report a target the deploy never named.
+  it('falls back for omitted branch/group but refuses a non-string one', async () => {
+    const omitted = api([
+      { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'queued' } },
+      { status: 200, body: { state: 'live', imageRef: 'ecr.example/a@sha256:aa', url: 'https://app.example' } },
+    ])
+    expect(await deployArchive(omitted.api, 'p1', ref, 'main', { group: 'api' }, Date.now, noWait))
+      .toEqual({ image: 'ecr.example/a@sha256:aa', url: 'https://app.example', branch: 'main', group: 'api', machineId: undefined })
+
+    const wrongType = api([
+      { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'queued' } },
+      { status: 200, body: { state: 'live', imageRef: 'ecr.example/a@sha256:aa', url: 'https://app.example', branch: { name: 'main' } } },
+    ])
+    await expect(deployArchive(wrongType.api, 'p1', ref, 'main', {}, Date.now, noWait)).rejects.toThrow(/non-string branch/)
+  })
+
   it('refuses a live operation that carries no image or url', async () => {
     const { api: a } = api([
       { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'queued' } },

@@ -130,14 +130,32 @@ export async function deployArchive(
     const state = res.body?.state
     // A failed operation is an ANSWER, not a transport error: the poll worked, and the sentence
     // it carries (usually the gateway's own, e.g. "no Dockerfile at ./api") is the one to show.
-    if (state === 'failed') return { failed: res.body.error || 'the deploy failed' }
+    if (state === 'failed') {
+      // `||` would let a non-string through and the CLI would print "[object Object]" for the one
+      // sentence that explains the failure. Only a non-empty string is a message.
+      const error = res.body?.error
+      return { failed: typeof error === 'string' && error ? error : 'the deploy failed' }
+    }
     if (state === 'live') {
       const image = res.body?.imageRef
       const url = res.body?.url
       if (typeof image !== 'string' || !image || typeof url !== 'string' || !url) {
         throw new Error('the deploy finished but the platform returned no image or URL for it — check `insta status`')
       }
-      return { image, url, branch: String(res.body.branch ?? branch), group: String(res.body.group ?? opts.group ?? ''), machineId: res.body.machineId ?? undefined }
+      // Optional strings, validated as such. String() would have coerced a protocol error into a
+      // plausible-looking branch or group and reported a target the deploy never named. An omitted
+      // field falls back to what was requested; a field of the wrong type is a broken contract.
+      const optionalString = (field: string, v: unknown): string | undefined => {
+        if (v === undefined || v === null) return undefined
+        if (typeof v !== 'string') throw new Error(`the platform returned a non-string ${field} for the deploy — upgrade with \`insta upgrade\``)
+        return v
+      }
+      return {
+        image, url,
+        branch: optionalString('branch', res.body.branch) ?? branch,
+        group: optionalString('group', res.body.group) ?? opts.group ?? '',
+        machineId: optionalString('machineId', res.body.machineId),
+      }
     }
     // Only the platform's own in-flight states keep the loop going. An absent or unknown state
     // would otherwise spend the whole deadline looking like a slow build.
