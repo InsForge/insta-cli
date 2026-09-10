@@ -468,15 +468,7 @@ describe('readEntry — the file read cannot be swapped out from under the walk'
     expect(() => readEntry(abs, found('a.txt', st))).toThrow(/changed while packing/)
   })
 
-  itModes('refuses a file swapped for a DIFFERENT regular file, which O_NOFOLLOW allows', () => {
-    const dir = mk()
-    const abs = join(dir, 'a.txt')
-    writeFileSync(abs, 'hello\n')
-    const st = lstatSync(abs)
-    // Same size, different inode: only the identity check can see this one.
-    unlinkSync(abs)
-    writeFileSync(abs, 'world\n')
-
-    expect(() => readEntry(abs, found('a.txt', st))).toThrow(/changed while packing/)
-  })
+  // NOT tested: a same-size delete+recreate. Measured on linux, the inode is reused and
+  // mtimeNs/ctimeNs are identical inside one timestamp tick, so no stat-based check can see it.
+  // Asserting either way would encode a guess -- the limitation is documented at readEntry.
 })

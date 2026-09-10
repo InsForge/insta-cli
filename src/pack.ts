@@ -148,14 +148,22 @@ function walk(
 //   walk cannot see. Undefined on Windows, where it degrades to the check below.
 //
 //   fstat on the OPEN HANDLE must still describe the file the walk measured: same inode, same
-//   device, same size. That catches a swap O_NOFOLLOW allows (a hard link, or a plain file
-//   replaced by another plain file) and also catches a file rewritten mid-pack, which would
-//   otherwise produce a tar whose header length disagrees with its payload.
+//   device, same size. Its job is the tar's own consistency -- a file rewritten to a different
+//   length mid-pack would otherwise produce a header whose count disagrees with its payload.
 //
-// What neither closes: an ANCESTOR directory swapped for a symlink. Node exposes no openat, so
-// resolving each component against a directory handle is not available here. Saying so is better
-// than implying the boundary is airtight -- an attacker who can rewrite directories inside the
-// tree being packed can already put any bytes they like into it by writing them.
+// Two things neither closes, and both are stated rather than implied away:
+//
+//   An ANCESTOR directory swapped for a symlink. Node exposes no openat, so resolving each
+//   component against a directory handle is not available here.
+//
+//   A same-size plain file deleted and recreated. Measured on linux rather than assumed: the
+//   inode is REUSED and mtimeNs/ctimeNs are byte-identical for a delete+create inside one
+//   timestamp tick, so no stat-based identity can see it. It is also the least interesting case
+//   -- the symlink promise still holds, the tar stays well formed because the length did not
+//   move, and the archive simply carries a slightly newer copy of a file the caller owns.
+//
+// The residual on both is narrow: someone able to rewrite files and directories inside the tree
+// being packed can already put any bytes they like into it by writing them.
 export function readEntry(abs: string, e: Found): Buffer {
   const noFollow = (constants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0
   let fd: number
