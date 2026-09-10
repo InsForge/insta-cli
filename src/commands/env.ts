@@ -16,7 +16,10 @@ export async function envShow(opts: { json?: boolean }): Promise<void> {
   // `source` answers the question the old output left open: the URL was on screen, but nothing
   // said which of INSTA_API_URL / INSTA_ENV / a months-old `login --api-url` had chosen it.
   const target = await describeTarget(apiUrl)
-  if (opts.json) return printJson({ env, apiUrl, source: target.source, mcpUrl, mcpServer, skills })
+  // json gets the stable token, a terminal gets the prose. An agent that branched on the wording of
+  // "saved by `insta login --api-url`" would break the next time that sentence is reworded, and the
+  // backticks in it are noise in a machine field.
+  if (opts.json) return printJson({ env, apiUrl, source: target.kind, mcpUrl, mcpServer, skills })
   info(`env:     ${env ?? 'custom'}`)
   info(`api:     ${apiUrl}`)
   info(`source:  ${target.source}`)

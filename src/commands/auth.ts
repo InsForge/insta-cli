@@ -245,7 +245,8 @@ export async function status(opts: { json?: boolean }): Promise<void> {
   // easy to skim past, and mistaking staging for prod is the mistake worth making loud.
   const env = envForApiUrl(api.apiUrl)
   const target = await describeTarget(api.apiUrl)
-  if (opts.json) return printJson({ env, apiUrl: api.apiUrl, source: target.source, unreachable, user, project })
+  // The stable token in json, the prose on a terminal. See envShow.
+  if (opts.json) return printJson({ env, apiUrl: api.apiUrl, source: target.kind, unreachable, user, project })
   info(`env:     ${env ?? 'custom'}`)
   info(`api:     ${api.apiUrl}`)
   info(`source:  ${target.source}`)

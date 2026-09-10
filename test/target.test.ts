@@ -13,14 +13,31 @@ const OSS = 'https://api.98-87-8-168.sslip.io'
 describe('target provenance', () => {
   it('names INSTA_API_URL when the env var chose the host', () => {
     const t = buildTarget({ apiUrl: OSS, stored: PROD, envApiUrl: OSS })
+    expect(t.kind).toBe('env-api-url')
     expect(t.source).toBe('INSTA_API_URL')
     expect(t.recovery).toBe('unset INSTA_API_URL')
   })
 
   it('names INSTA_ENV when the named env var chose the host', () => {
     const t = buildTarget({ apiUrl: STAGING, stored: PROD, envName: 'staging' })
+    expect(t.kind).toBe('env-name')
     expect(t.source).toBe('INSTA_ENV=staging')
     expect(t.recovery).toBe('unset INSTA_ENV')
+  })
+
+  // `kind` is what --json publishes, so it must not drift with the prose. Every branch, once.
+  it('pairs a stable token with every prose source', () => {
+    const seen = new Map<string, string>([
+      [buildTarget({ apiUrl: OSS, stored: PROD, envApiUrl: OSS }).kind, 'INSTA_API_URL'],
+      [buildTarget({ apiUrl: STAGING, stored: PROD, envName: 'staging' }).kind, 'INSTA_ENV=staging'],
+      [buildTarget({ apiUrl: OSS, stored: OSS }).kind, 'saved by `insta login --api-url`'],
+      [buildTarget({ apiUrl: STAGING, stored: STAGING }).kind, 'saved by `insta env use`'],
+      [buildTarget({ apiUrl: PROD, stored: null }).kind, 'built-in default'],
+      [buildTarget({ apiUrl: OSS, stored: PROD }).kind, '--api-url flag'],
+    ])
+    expect([...seen.keys()].sort()).toEqual(
+      ['default', 'env-api-url', 'env-name', 'flag', 'saved-api-url', 'saved-env'],
+    )
   })
 
   // `env use` only ever writes a host from the env table, so a stored host OUTSIDE it can only
@@ -38,6 +55,13 @@ describe('target provenance', () => {
   // login --api-url sets the client's host before anything is persisted.
   it('attributes a host that matches nothing on disk to the flag', () => {
     expect(buildTarget({ apiUrl: OSS, stored: PROD }).source).toBe('--api-url flag')
+  })
+
+  // Caught by driving the real binary: with prod already persisted, "insta env use prod" is a
+  // no-op that prints "already on prod". The fix has to undo whatever actually chose the host.
+  it('tells the user to drop the flag, not to switch an env that is already set', () => {
+    expect(buildTarget({ apiUrl: OSS, stored: PROD }).recovery).toBe('drop --api-url')
+    expect(buildTarget({ apiUrl: OSS, stored: OSS }).recovery).toBe('insta env use prod')
   })
 
   it('ignores a trailing slash when matching the source', () => {
@@ -73,6 +97,21 @@ describe('failureReason', () => {
   it('translates the undici and libuv codes a dead host produces', () => {
     expect(failureReason({ code: 'UND_ERR_CONNECT_TIMEOUT' })).toBe('connect timeout')
     expect(failureReason({ code: 'ENOTFOUND' })).toBe('DNS lookup failed')
+    expect(failureReason({ code: 'ECONNREFUSED' })).toBe('connection refused')
+  })
+
+  // The compiled binaries run on Bun, which spells its codes differently and puts them on the
+  // error itself. Caught only by driving the real artifact: the suite runs on Node.
+  it('translates the Bun codes the compiled binary produces', () => {
+    expect(failureReason({ code: 'ConnectionRefused' })).toBe('could not connect')
+    expect(failureReason({ code: 'CERT_HAS_EXPIRED' })).toBe('TLS certificate expired')
+  })
+
+  // Bun reports a connect TIMEOUT as ConnectionRefused, so it cannot tell a terminated box from a
+  // refused port. Claiming "connection refused" there would be confidently wrong about the very
+  // host this exists for; Node's own ECONNREFUSED does mean refused and stays precise.
+  it('stays non-committal on Bun and precise on Node for the refused-looking codes', () => {
+    expect(failureReason({ code: 'ConnectionRefused' })).not.toContain('refused')
     expect(failureReason({ code: 'ECONNREFUSED' })).toBe('connection refused')
   })
 

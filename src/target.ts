@@ -9,11 +9,23 @@
 import { DEFAULT_ENV, ENVS, ENV_NAMES, envForApiUrl, normalizeUrl, type EnvName } from './env.js'
 import { storedApiUrl } from './config.js'
 
+/** Which setting chose the target. A stable token, so `--json` consumers (agents, mostly) can
+ *  branch on it: the human `source` string is prose and will be reworded. */
+export type TargetSource =
+  | 'env-api-url'   // $INSTA_API_URL
+  | 'env-name'      // $INSTA_ENV
+  | 'saved-api-url' // persisted by `insta login --api-url`
+  | 'saved-env'     // persisted by `insta env use` / `login --env`
+  | 'default'       // nothing was ever chosen
+  | 'flag'          // --api-url on the running command, not yet persisted
+
 export type Target = {
   apiUrl: string
   host: string
   /** null for a host no environment name covers: an insta-oss daemon, a preview, a tunnel. */
   env: EnvName | null
+  /** Machine-stable; `source` is the same fact as prose. */
+  kind: TargetSource
   /** The setting that chose apiUrl, phrased to sit after a `source:` label. */
   source: string
   /** The one command that gets back to InstaCloud from here. */
@@ -36,24 +48,36 @@ export function buildTarget(i: {
   const named = i.envName?.trim().toLowerCase()
   const namedApi = named && (ENV_NAMES as string[]).includes(named) ? ENVS[named as EnvName].api : undefined
 
-  let source: string
-  if (i.envApiUrl && normalizeUrl(i.envApiUrl) === want) source = 'INSTA_API_URL'
-  else if (namedApi && normalizeUrl(namedApi) === want) source = `INSTA_ENV=${named}`
+  let kind: TargetSource
+  if (i.envApiUrl && normalizeUrl(i.envApiUrl) === want) kind = 'env-api-url'
+  else if (namedApi && normalizeUrl(namedApi) === want) kind = 'env-name'
   else if (i.stored && normalizeUrl(i.stored) === want) {
     // A stored host the env table knows was written by `env use` (or by `login --env`, which
     // writes the same value); anything else was a literal URL the user typed at `login --api-url`.
-    source = envForApiUrl(i.stored) ? 'saved by `insta env use`' : 'saved by `insta login --api-url`'
-  } else if (i.stored === null && env === DEFAULT_ENV) source = 'built-in default'
+    kind = envForApiUrl(i.stored) ? 'saved-env' : 'saved-api-url'
+  } else if (i.stored === null && env === DEFAULT_ENV) kind = 'default'
   // Nothing in the environment or on disk accounts for this URL, so it came from the flag the
   // running command was given (`login --api-url`, before anything is persisted).
-  else source = '--api-url flag'
+  else kind = 'flag'
 
+  const source =
+    kind === 'env-api-url' ? 'INSTA_API_URL'
+      : kind === 'env-name' ? `INSTA_ENV=${named}`
+        : kind === 'saved-env' ? 'saved by `insta env use`'
+          : kind === 'saved-api-url' ? 'saved by `insta login --api-url`'
+            : kind === 'default' ? 'built-in default'
+              : '--api-url flag'
+
+  // Undo the thing that actually chose this host, not the thing that usually does. `env use prod`
+  // is the right advice only when something is PERSISTED; against a bare `--api-url` on the
+  // running command it is a no-op that prints "already on prod" and deepens the confusion.
   const recovery =
-    source === 'INSTA_API_URL' ? 'unset INSTA_API_URL'
-      : source.startsWith('INSTA_ENV=') ? 'unset INSTA_ENV'
-        : 'insta env use prod'
+    kind === 'env-api-url' ? 'unset INSTA_API_URL'
+      : kind === 'env-name' ? 'unset INSTA_ENV'
+        : kind === 'flag' ? 'drop --api-url'
+          : 'insta env use prod'
 
-  return { apiUrl: i.apiUrl, host: hostOf(i.apiUrl), env, source, recovery }
+  return { apiUrl: i.apiUrl, host: hostOf(i.apiUrl), env, kind, source, recovery }
 }
 
 /** The live target, from the resolved apiUrl plus the config file and the environment. */
@@ -75,10 +99,28 @@ export function targetLines(t: Target): string[] {
   return lines
 }
 
-// undici reports every transport failure as the same `TypeError: fetch failed`; the code that says
-// WHICH failure is on the cause. Anything unmapped falls through to the code, then the message, so
-// a new libuv/undici code degrades to a raw-but-present reason rather than to nothing.
+// Two runtimes, two vocabularies, and the shipped artifact is the one that is easy to forget.
+//
+// On Node (`npm i -g insta`) undici reports every transport failure as the same
+// `TypeError: fetch failed`, with the code that says WHICH failure on `.cause`. On Bun (the
+// compiled binaries install.sh serves, so: most users) it is a plain `Error` carrying the code on
+// the error ITSELF, no cause at all, spelled in Bun's own CamelCase.
+//
+// Bun is also coarser, and that part needs care rather than a translation. It reports a connect
+// TIMEOUT as `ConnectionRefused`, so it cannot tell a terminated box from a refused port from a
+// dead DNS name. Rendering that as "connection refused" would be a confident lie about the exact
+// host this feature exists for, so it gets the honest, non-committal "could not connect". Node's
+// own ECONNREFUSED really does mean refused and keeps the precise wording.
+//
+// Anything unmapped falls through to the code, then the message, so a new runtime code degrades to
+// a raw-but-present reason rather than to nothing.
 const REASONS: Record<string, string> = {
+  // Bun (the compiled binaries).
+  ConnectionRefused: 'could not connect',
+  ConnectionClosed: 'connection closed',
+  FailedToOpenSocket: 'could not open a socket',
+  Timeout: 'timed out',
+  // Node / undici (the npm install).
   UND_ERR_CONNECT_TIMEOUT: 'connect timeout',
   UND_ERR_HEADERS_TIMEOUT: 'no response headers',
   UND_ERR_SOCKET: 'socket closed',
