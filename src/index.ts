@@ -205,14 +205,14 @@ sec.command('tree').description('Show secrets as project → branch → service 
   .action(guard((o) => secretsCmd.secretsTree(o)))
 
 // ---- build (pre-push verification — local, offline, deploys nothing) ----
-program.command('build [dir]').description('Verify a source directory would build before deploying: detection plan + the Dockerfile (yours, or the one nixpacks would generate for the GitHub lane — `insta deploy <dir>` needs your own) + static checks. Local and offline — no login needed, nothing pushed. Exit 1 when the verdict is failed')
+program.command('build [dir]').description('Verify a source directory would build before deploying: detection plan + the Dockerfile (yours, or the one nixpacks would generate server-side) + static checks. Local and offline — no login needed, nothing pushed. Exit 1 when the verdict is failed')
   .option('--explain', 'include the Dockerfile content in the output')
   .option('--port <p>', 'port the app listens on (else the Dockerfile EXPOSE)')
   .option('--json')
   .action(guard((dir, o) => build(dir, o)))
 
 // ---- deploy ----
-program.command('deploy [dir]').description('Deploy a source directory (built remotely on Fly) or a prebuilt --image to a branch compute group')
+program.command('deploy [dir]').description('Deploy a source directory (built remotely; on insta-compute a Dockerfile is optional and nixpacks detects the runtime) or a prebuilt --image to a branch compute group')
   .option('--image <url>', 'prebuilt container image to deploy (instead of a source dir)').option('--branch <b>').option('--group <g>').option('--port <p>')
   .option('--websocket', 'run a WebSocket app (larger guest + connection-based concurrency)')
   .option('--replace-source', 'the service deploys from a connected GitHub repo: switch it to this image and remove the repo connection (admin); without it such a deploy is refused')

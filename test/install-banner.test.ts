@@ -16,8 +16,11 @@ describe('installer next-steps banner', () => {
     expect(deployLine).toBeDefined()
   })
 
-  it('says a directory deploy needs a Dockerfile — it must not promise what deploy rejects', () => {
-    expect(deployLine.toLowerCase()).toContain('dockerfile')
+  // The requirement is now per-target: optional on insta-compute, required on Fly. A banner cannot
+  // know which the reader has, so it must claim NEITHER rather than promise what deploy rejects.
+  it('makes no Dockerfile claim either way, since the answer depends on the target', () => {
+    expect(deployLine.toLowerCase()).not.toContain('dockerfile')
+    expect(deployLine.toLowerCase()).not.toContain('no docker')
   })
 
   it('points at `insta build` first, so the user sees the plan before the deploy can dead-end', () => {

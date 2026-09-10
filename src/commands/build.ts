@@ -183,11 +183,11 @@ export async function buildReport(
           severity: 'warning',
           status: 'fail',
           title: 'Dockerfile',
-          detail: `${dockerfileDetail} — but \`insta deploy <dir>\` builds the directory's own Dockerfile; the nixpacks lane runs server-side for GitHub-connected repos only`,
+          detail: `${dockerfileDetail} — \`insta deploy <dir>\` builds this on the gateway with nixpacks when the service runs on insta-compute, and needs your own Dockerfile on a Fly-backed one`,
           // NOT "save the generated Dockerfile here": it is not standalone (it COPYs the
           // .nixpacks/nixpkgs-<hash>.nix support files nixpacks writes beside it, which this
           // directory does not have). The detected commands above are the reusable part.
-          nextAction: `to deploy this directory, write a Dockerfile at ${userDockerfilePath} — the detected install/start commands above are the starting point; or connect the GitHub repo to the service (\`insta compute connect-repo <owner/repo>\`) to use the nixpacks lane`,
+          nextAction: `on insta-compute this deploys as-is (nixpacks builds it on the gateway). On a Fly-backed service, write a Dockerfile at ${userDockerfilePath} — the detected install/start commands above are the starting point — or connect the GitHub repo (\`insta compute connect-repo <owner/repo>\`)`,
         }
       : {
           id: 'dockerfile',

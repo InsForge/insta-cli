@@ -74,7 +74,9 @@ insta deploy .
 opt-in, so you add only what you need. `secrets` writes the current branch's user-defined
 secrets to `./.env` (the postgres connection string is read with `insta db url`). `deploy .`
 builds the directory remotely and ships it to the branch's compute
-service; it needs a `Dockerfile`, but no local Docker.
+service, with no local Docker. Whether it needs a `Dockerfile` depends on where the
+service runs: on insta-compute it is optional, and a directory without one is built
+by nixpacks on the build gateway; on Fly-backed services one is still required.
 
 ## Authentication
 

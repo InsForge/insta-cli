@@ -173,9 +173,13 @@ describe('buildReport', () => {
     // exit 1 — it must only stop short of "deployable".
     expect(df.severity).toBe('warning')
     expect(df.detail).toContain('insta deploy <dir>')
-    expect(df.detail).toContain('GitHub-connected repos only')
+    // The split is now BY TARGET, not by GitHub connection: insta-compute builds this directory
+    // as-is on the gateway, Fly still needs the user's own Dockerfile. Naming only one of the two
+    // is what previously blessed a directory deploy refuses.
+    expect(df.detail).toContain('insta-compute')
+    expect(df.detail).toContain('Fly')
     expect(df.nextAction).toContain(join(dir, 'Dockerfile'))
-    expect(df.nextAction).toContain('GitHub')
+    expect(df.nextAction).toContain('insta-compute')
     // Must NOT tell the user to save the generated Dockerfile: it COPYs .nixpacks/ support files
     // this directory has no copy of, so that advice would be a second false promise.
     expect(df.nextAction).not.toMatch(/save the generated/i)
