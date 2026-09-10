@@ -75,7 +75,7 @@ export type AgentScope = { projectId?: string }
 // scope.projectId. A miss fails HERE, naming the route, instead of on the platform as a
 // "for a different project" 403 whose setup hint cannot help — keep this list in step with the
 // account-level paths in src/commands/.
-const ACCOUNT_ROUTES = new Set(['agent', 'auth', 'me', 'orgs', 'regions', 'templates', 'tokens', 'github'])
+export const ACCOUNT_ROUTES: ReadonlySet<string> = new Set(['agent', 'auth', 'me', 'orgs', 'regions', 'templates', 'tokens', 'github'])
 
 export async function agentHeaders(api: SessionApi, method: string, path: string, rawBody: string, scope: AgentScope = {}): Promise<Record<string, string>> {
   if (!mode) return {}

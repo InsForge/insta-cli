@@ -3,7 +3,7 @@ import { generateKeyPairSync, verify, createHash } from 'node:crypto'
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { agentHeaders, configureAgent, detectAgent, loadAgentSession, saveAgentSession } from '../src/agent.js'
+import { ACCOUNT_ROUTES, agentHeaders, configureAgent, detectAgent, loadAgentSession, saveAgentSession } from '../src/agent.js'
 import { ApiClient, AgentApprovalRequired } from '../src/api.js'
 import { writeProject } from '../src/config.js'
 import { splitExecArgs } from '../src/commands/compute.js'
@@ -69,12 +69,15 @@ it('signs a project-owned request that lacks /projects/ in its path with the nam
   const mint = vi.fn(async () => ({ token: 'boot', agentSessionId: 'ags_boot', projectId: null, expiresAt: new Date(Date.now() + 60000).toISOString() }))
   await expect(agentHeaders({ apiUrl: session.apiUrl, request: mint }, 'GET', '/template-deployments/d1', '')).rejects.toThrow(/GET \/template-deployments\/d1 is a project route.*insta CLI bug/)
   expect(mint).not.toHaveBeenCalled()
-  // Account-level routes still mint a bootstrap session (the query string does not change that).
-  for (const p of ['/orgs', '/me', '/templates/plausible', '/github/installations?orgId=o', '/regions']) {
+  // Every account-level route still mints a bootstrap session — bare, with a sub-path, and with a
+  // query string — so a segment dropped from the list is caught here, not by a user's 403.
+  const accountPaths = [...ACCOUNT_ROUTES].flatMap(seg => [`/${seg}`, `/${seg}/x`, `/${seg}/x?orgId=o&y=1`])
+  for (const p of accountPaths) {
     const boot = await agentHeaders({ apiUrl: session.apiUrl, request: mint }, 'GET', p, '')
-    expect(boot['Insta-Agent-Session']).toBe('ags_boot')
+    expect(boot['Insta-Agent-Session'], p).toBe('ags_boot')
   }
-  expect(mint).toHaveBeenCalledTimes(5)
+  expect(mint).toHaveBeenCalledTimes(accountPaths.length)
+  expect(ACCOUNT_ROUTES.has('tokens')).toBe(true) // `insta tokens` is an authenticated account call
   expect(mint).toHaveBeenCalledWith('POST', '/agent/sessions', expect.objectContaining({ projectId: undefined }))
   // Naming the project loads its saved session instead, and never mints.
   mint.mockClear()
