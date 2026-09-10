@@ -63,12 +63,19 @@ it('signs a project-owned request that lacks /projects/ in its path with the nam
   await saveAgentSession(session, dir)
   vi.spyOn(process, 'cwd').mockReturnValue(dir)
   configureAgent({ source: 'cli-detected', client: 'codex' })
-  // Without a scope the path decides, and /template-deployments/:id reads as account-level: a
-  // bootstrap session is minted (the platform then rejects it as "for a different project").
+  // Without a scope, /template-deployments/:id is neither a /projects/ path nor an account-level
+  // route: refuse locally, naming the route, rather than mint a bootstrap session the platform
+  // would reject as "for a different project" (a hint that cannot help).
   const mint = vi.fn(async () => ({ token: 'boot', agentSessionId: 'ags_boot', projectId: null, expiresAt: new Date(Date.now() + 60000).toISOString() }))
-  const unscoped = await agentHeaders({ apiUrl: session.apiUrl, request: mint }, 'GET', '/template-deployments/d1', '')
+  await expect(agentHeaders({ apiUrl: session.apiUrl, request: mint }, 'GET', '/template-deployments/d1', '')).rejects.toThrow(/GET \/template-deployments\/d1 is a project route.*insta CLI bug/)
+  expect(mint).not.toHaveBeenCalled()
+  // Account-level routes still mint a bootstrap session (the query string does not change that).
+  for (const p of ['/orgs', '/me', '/templates/plausible', '/github/installations?orgId=o', '/regions']) {
+    const boot = await agentHeaders({ apiUrl: session.apiUrl, request: mint }, 'GET', p, '')
+    expect(boot['Insta-Agent-Session']).toBe('ags_boot')
+  }
+  expect(mint).toHaveBeenCalledTimes(5)
   expect(mint).toHaveBeenCalledWith('POST', '/agent/sessions', expect.objectContaining({ projectId: undefined }))
-  expect(unscoped['Insta-Agent-Session']).toBe('ags_boot')
   // Naming the project loads its saved session instead, and never mints.
   mint.mockClear()
   const scoped = await agentHeaders({ apiUrl: session.apiUrl, request: mint }, 'GET', '/template-deployments/d1', '', { projectId: 'p' })

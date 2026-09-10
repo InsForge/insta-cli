@@ -70,6 +70,13 @@ export async function loadAgentSession(apiUrl: string, projectId: string, cwd = 
 // including the projectless bootstrap session — so the caller has to name the project it means.
 export type AgentScope = { projectId?: string }
 
+// Routes the CLI may call on an account-level (bootstrap) session, by first path segment. Every
+// other route is project-owned: either its path names the project or the caller passes
+// scope.projectId. A miss fails HERE, naming the route, instead of on the platform as a
+// "for a different project" 403 whose setup hint cannot help — keep this list in step with the
+// account-level paths in src/commands/.
+const ACCOUNT_ROUTES = new Set(['agent', 'auth', 'me', 'orgs', 'regions', 'templates', 'tokens', 'github'])
+
 export async function agentHeaders(api: SessionApi, method: string, path: string, rawBody: string, scope: AgentScope = {}): Promise<Record<string, string>> {
   if (!mode) return {}
   if (canonicalTarget(path) === '/agent/sessions' && method === 'POST') return {
@@ -78,6 +85,9 @@ export async function agentHeaders(api: SessionApi, method: string, path: string
   const target = canonicalTarget(path)
   const match = target.match(/^\/projects\/([^/?]+)/)
   const projectId = scope.projectId ?? (match ? decodeURIComponent(match[1]!) : undefined)
+  if (!projectId && !ACCOUNT_ROUTES.has(target.split('/')[1]?.split('?')[0] ?? '')) {
+    throw new Error(`${method.toUpperCase()} ${target} is a project route but no project was given — this is an insta CLI bug; please report it with \`insta feedback\``)
+  }
   // Account reads/project creation have no project policy yet. Mint a short-lived bootstrap
   // assertion in memory. It cannot access project routes; never downgrade to a human request.
   const session = projectId ? await loadAgentSession(api.apiUrl, projectId) : await issueAgentSession(api)
