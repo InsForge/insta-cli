@@ -120,3 +120,58 @@ describe('compileIgnore — re-inclusion under an excluded directory', () => {
     expect(ig.canPrune('vendor')).toBe(true)
   })
 })
+
+// `.gitignore` is what decides the upload boundary, so a rule that silently fails to match does
+// not merely pack an extra file, it ships one the author explicitly withheld. Each of these is a
+// documented gitignore(5) escape that the parser used to read as literal backslash text.
+describe('compileIgnore — git escaping', () => {
+  it('excludes a file whose name really starts with # via \\#', () => {
+    const ig = git('\\#credentials\n')
+    expect(ig.excludes('#credentials', false)).toBe(true)
+    // Still a comment without the escape, and still not a rule about a backslash.
+    expect(git('#credentials\n').excludes('#credentials', false)).toBe(false)
+    expect(ig.excludes('\\#credentials', false)).toBe(false)
+  })
+
+  it('excludes a file whose name really starts with ! via \\!, and does not read it as negation', () => {
+    const ig = git('*\n\\!secrets\n')
+    // The inverse failure is the dangerous one: unescaping before the negation check would turn
+    // this into "re-include secrets", so assert the file is EXCLUDED, not merely matched.
+    expect(ig.excludes('!secrets', false)).toBe(true)
+    expect(git('\\!secrets\n').excludes('!secrets', false)).toBe(true)
+  })
+
+  it('keeps an escaped trailing space as part of the name', () => {
+    const ig = git('private\\ \n')
+    expect(ig.excludes('private ', false)).toBe(true)
+    expect(ig.excludes('private', false)).toBe(false)
+    // Unescaped trailing spaces are still ignored, which is the other half of the same rule.
+    expect(git('private  \n').excludes('private', false)).toBe(true)
+  })
+
+  it('treats an escaped wildcard as the character itself', () => {
+    const ig = git('\\*.log\n')
+    expect(ig.excludes('*.log', false)).toBe(true)
+    expect(ig.excludes('debug.log', false)).toBe(false)
+  })
+
+  it('does not let an escaped wildcard cut the prune head short', () => {
+    // literalHead must read the escape the way translate does, or it stops at the `*` and prunes
+    // on the head "build/" instead of the real directory name.
+    const ig = git('build\\*dir/\n')
+    expect(ig.excludes('build*dir', true)).toBe(true)
+    expect(ig.canPrune('build*dir')).toBe(true)
+  })
+
+  it('still honours a CRLF file, where \\r is the line ending and not pattern text', () => {
+    expect(git('build\r\nvendor\r\n').excludes('build', true)).toBe(true)
+  })
+
+  // docker's own parser trims and comments unconditionally, with no line-level escape, while its
+  // matcher does honour `\` inside a pattern. Both halves pinned so the flavours cannot converge.
+  it('leaves docker line parsing alone but still escapes inside a pattern', () => {
+    expect(docker('\\*.log\n').excludes('*.log', false)).toBe(true)
+    expect(docker('\\*.log\n').excludes('debug.log', false)).toBe(false)
+    expect(docker('#comment\n').excludes('#comment', false)).toBe(false)
+  })
+})

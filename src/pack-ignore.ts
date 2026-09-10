@@ -45,6 +45,11 @@ function translate(p: string): string {
         out += '[' + (cls.startsWith('!') ? '^' + cls.slice(1) : cls) + ']'
         i = end + 1
       }
+    } else if (p.charAt(i) === '\\' && i + 1 < p.length) {
+      // Escape: the next character is data, not a wildcard. Git documents this, and docker's
+      // matcher (Go filepath.Match) honours it too, so it applies to both flavours.
+      out += escapeLiteral(p.charAt(i + 1))
+      i += 2
     } else {
       out += escapeLiteral(p.charAt(i))
       i += 1
@@ -53,22 +58,59 @@ function translate(p: string): string {
   return out
 }
 
-// Wildcard-free head of a pattern; empty means it could match anywhere.
+// Wildcard-free head of a pattern; empty means it could match anywhere. Escape-aware for the same
+// reason translate() is: `\*` is a literal star, so a head stopping at it would prune the wrong
+// tree, and the head must be UNESCAPED because it is compared against real path text.
 function literalHead(full: string): string {
-  const m = /[*?[]/.exec(full)
-  return m ? full.slice(0, m.index) : full
+  let out = ''
+  for (let i = 0; i < full.length; i++) {
+    const c = full.charAt(i)
+    if (c === '\\' && i + 1 < full.length) {
+      out += full.charAt(i + 1)
+      i += 1
+      continue
+    }
+    if (c === '*' || c === '?' || c === '[') return out
+    out += c
+  }
+  return out
+}
+
+// Git ignores trailing spaces UNLESS escaped, so `private\ ` names a file whose name ends in a
+// space. Stripping unconditionally silently widened every such rule to a different path.
+function stripTrailingSpaces(line: string): string {
+  let end = line.length
+  while (end > 0 && line.charAt(end - 1) === ' ') {
+    let backslashes = 0
+    for (let k = end - 2; k >= 0 && line.charAt(k) === '\\'; k--) backslashes++
+    if (backslashes % 2 === 1) break
+    end -= 1
+  }
+  return line.slice(0, end)
 }
 
 export function compileIgnore(files: IgnoreFile[], flavour: Flavour): Ignore {
   const rules: Rule[] = []
   for (const f of files) {
     for (const raw of f.text.split('\n')) {
-      const line = raw.replace(/\s+$/, '')
-      if (!line || line.startsWith('#')) continue
+      // \r always goes: that is the line ending, never pattern text. What follows differs by
+      // flavour, so the two are separate steps.
+      const noEol = raw.replace(/\r+$/, '')
+      const line = flavour === 'git' ? stripTrailingSpaces(noEol) : noEol.replace(/\s+$/, '')
+      if (!line) continue
 
       let pat = line
-      const negated = pat.startsWith('!')
-      if (negated) pat = pat.slice(1)
+      let negated = false
+      // A leading `\#` or `\!` is git's way to name a file that really starts with one. It has to
+      // short-circuit BOTH checks below: unescaping first and then testing would read `\!secrets`
+      // as a negation of `secrets`, the exact inverse of what the author asked for.
+      if (flavour === 'git' && (pat.startsWith('\\#') || pat.startsWith('\\!'))) {
+        pat = pat.slice(1)
+      } else {
+        if (pat.startsWith('#')) continue
+        negated = pat.startsWith('!')
+        if (negated) pat = pat.slice(1)
+      }
 
       let dirOnly = false
       if (pat.endsWith('/')) {

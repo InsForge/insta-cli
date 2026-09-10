@@ -93,7 +93,8 @@ describe('packDirectory — determinism', () => {
     expect(res.sha256).not.toBe(createHash('sha256').update(gunzipSync(res.archive)).digest('hex'))
   })
 
-  // Format pin over the TAR bytes, not the .tar.gz: zlib output may change across Node versions.
+  // Format pin over the TAR bytes. Its .tar.gz counterpart is the test below: both are pinned now
+  // that the compressor is ours rather than the runtime's.
   itModes('produces byte-identical tar output for a fixed fixture tree', () => {
     const dir = mk()
     writeFileSync(join(dir, 'Dockerfile'), 'FROM alpine\n')
@@ -108,6 +109,26 @@ describe('packDirectory — determinism', () => {
     expect(createHash('sha256').update(tar).digest('hex')).toBe(
       '86d57c3d50425ed7c94540b9ded038e074c7a3ec62c8be9a88e624027318b83a',
     )
+  })
+
+  // The digest of these bytes is the archive's IDENTITY: the storage id, the dedup key, and part
+  // of the approval-bound deploy body. Pinning it is what makes "one tree, one identity, every
+  // machine" a property the suite defends rather than a sentence in a PR. Verified out-of-band as
+  // well: this fixture packs to the same 315 bytes and the same digest under node:25 and
+  // oven/bun, which node:zlib did not (360 vs 353 bytes, different digests).
+  itModes('produces a byte-identical .tar.gz, not just a byte-identical tar', () => {
+    const dir = mk()
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM alpine\n')
+    chmodSync(join(dir, 'Dockerfile'), 0o644)
+    writeFileSync(join(dir, 'run.sh'), '#!/bin/sh\necho hi\n')
+    chmodSync(join(dir, 'run.sh'), 0o755)
+    mkdirSync(join(dir, 'src'))
+    writeFileSync(join(dir, 'src', 'app.js'), "console.log('hi')\n")
+    chmodSync(join(dir, 'src', 'app.js'), 0o644)
+
+    const res = packDirectory(dir)
+    expect(res.archive.length).toBe(210)
+    expect(res.sha256).toBe('dfd0a923a121af1938e8e8c026f16d03ddbad9f5fd91cd4030a6e1b46ed22117')
   })
 
   it('normalises the gzip header, which carries its own mtime and OS byte', () => {

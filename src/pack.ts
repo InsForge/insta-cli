@@ -1,7 +1,12 @@
 import { readdirSync, readFileSync, lstatSync, readlinkSync, existsSync } from 'node:fs'
 import { join, sep } from 'node:path'
 import { createHash } from 'node:crypto'
-import { gzipSync } from 'node:zlib'
+// Not node:zlib. The digest of this archive IS its identity: the id the object is stored under,
+// the dedup key, and part of the approval-bound deploy body. The runtime's zlib is native and its
+// output differs between the runtimes this CLI ships on -- the same tree packs to 360 bytes under
+// Node 25 and 353 under Bun -- so with it the identity of a tree changed with the install channel.
+// fflate is pure JS: same algorithm, same bytes, everywhere.
+import { gzipSync } from 'fflate'
 import { compileIgnore, type Ignore, type IgnoreFile, type Flavour } from './pack-ignore.js'
 
 // Packs a source directory into the tar.gz the build gateway fetches as source.archive.
@@ -17,10 +22,10 @@ export const ARCHIVE_LIMITS: ArchiveLimits = {
 
 export type PackResult = {
   archive: Buffer
-  // Over the COMPRESSED bytes, so it is whatever this runtime's zlib produced: the same tree packs
-  // to 360 bytes under Node 25 and 353 under Bun, and the CLI ships on both. That is not canonical
-  // and must not be described as such, but it IS the digest of the object that gets stored, which
-  // is the only thing an id addressing that object may be derived from.
+  // Over the COMPRESSED bytes, which are the bytes that get uploaded, so this is both the id the
+  // object is stored under and what the build worker verifies its download against. Canonical
+  // because the compressor is pure JS rather than the runtime's native zlib: one tree has one
+  // identity on every machine, whichever way the CLI was installed.
   sha256: string
   files: number
   // Total entries incl. directories: the worker counts every header, so the cap applies to this.
@@ -190,8 +195,9 @@ export function packDirectory(absDir: string, limits: Partial<ArchiveLimits> = {
   chunks.push(PAD, PAD) // two zero blocks close a tar
 
   const tar = Buffer.concat(chunks)
-  const archive = gzipSync(tar, { level: 9 })
-  // gzip carries its own mtime (4-7) and OS byte (9), both filled from the environment.
+  const archive = Buffer.from(gzipSync(tar, { level: 9, mtime: 0 }))
+  // Pinned here as well as asked of the library: gzip carries its own mtime (4-7) and OS byte (9),
+  // and a header the packer writes itself cannot drift with a dependency's defaults.
   archive.writeUInt32LE(0, 4)
   archive[9] = 255
 
