@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { ApiClient, ApiError, requireProject } from '../api.js'
 import { info, die, printJson, handleApproval, renderNextActions, CliExit } from '../util.js'
 import { flyctlBuildAndPush, ensureFlyctl, defaultBuildRunner, stderrBuildRunner, type BuildRunner } from '../flyctl-build.js'
-import { packDirectory, type ArchiveLimits } from '../pack.js'
+import { packDirectory, windowsModeCaveat, type ArchiveLimits } from '../pack.js'
 import { uploadArchive, type ArchiveRef, type Uploader } from '../deploy-archive.js'
 
 type DeployOpts = { image?: string; branch?: string; group?: string; port?: string; websocket?: boolean; replaceSource?: boolean; json?: boolean }
@@ -68,6 +68,8 @@ export async function prepareSource(
   }
   const log = note(opts)
   const absDir = resolve(process.cwd(), dir)
+  const caveat = windowsModeCaveat()
+  if (caveat) log(caveat)
   const packed = packDirectory(absDir, lane.limits)
   log(`packed ${dir}: ${packed.files} files, ${packed.archive.length} bytes`)
   const ref = await uploadArchive(api, projectId, packed, branch, opts, upload)

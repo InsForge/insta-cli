@@ -143,6 +143,13 @@ function rootIgnore(absDir: string): { ig: Ignore; files: IgnoreFile[]; flavour:
 
 const mib = (n: number): string => `${(n / (1024 * 1024)).toFixed(1)} MiB`
 
+// Windows has no POSIX exec bit for lstat to report, so a script packs as 0644 and the image
+// cannot run it. Same as `docker build` from Windows; say so rather than let it fail at start-up.
+export function windowsModeCaveat(platform: string = process.platform): string | null {
+  if (platform !== 'win32') return null
+  return 'packing on Windows: file permissions are not preserved, so an executable script arrives as 0644 — add `RUN chmod +x <path>` to your Dockerfile if the image runs one'
+}
+
 export function packDirectory(absDir: string, limits: Partial<ArchiveLimits> = {}): PackResult {
   const cap = { ...ARCHIVE_LIMITS, ...limits }
   const found: Found[] = []

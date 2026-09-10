@@ -4,12 +4,15 @@ import { join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { createHash } from 'node:crypto'
 import { describe, it, expect } from 'vitest'
-import { packDirectory, ARCHIVE_LIMITS } from '../src/pack.js'
+import { packDirectory, windowsModeCaveat, ARCHIVE_LIMITS } from '../src/pack.js'
 
 const mk = () => mkdtempSync(join(tmpdir(), 'insta-pack-'))
 
 // Making a symlink on Windows needs elevation, which CI's windows runner has not got.
 const itLinks = process.platform === 'win32' ? it.skip : it
+// Windows has no POSIX exec bit for chmod to set or lstat to report, so anything asserting one is
+// asserting the platform, not the packer. The loss itself is real and warned about at pack time.
+const itModes = process.platform === 'win32' ? it.skip : it
 
 // Assert on the bytes we ship. ustar: name@0 mode@100 uid@108 gid@116 size@124 mtime@136 type@156.
 type TarEntry = { name: string; mode: number; uid: number; gid: number; size: number; mtime: number; type: string }
@@ -78,7 +81,7 @@ describe('packDirectory — determinism', () => {
   })
 
   // Format pin over the TAR bytes, not the .tar.gz: zlib output may change across Node versions.
-  it('produces byte-identical tar output for a fixed fixture tree', () => {
+  itModes('produces byte-identical tar output for a fixed fixture tree', () => {
     const dir = mk()
     writeFileSync(join(dir, 'Dockerfile'), 'FROM alpine\n')
     chmodSync(join(dir, 'Dockerfile'), 0o644)
@@ -123,7 +126,7 @@ describe('packDirectory — layout and modes', () => {
     expect(names).toEqual([...names].sort())
   })
 
-  it('preserves the executable bit and leaves plain files at 0644', () => {
+  itModes('preserves the executable bit and leaves plain files at 0644', () => {
     const dir = mk()
     writeFileSync(join(dir, 'entrypoint.sh'), '#!/bin/sh\n')
     chmodSync(join(dir, 'entrypoint.sh'), 0o755)
@@ -135,7 +138,7 @@ describe('packDirectory — layout and modes', () => {
     expect(byName['README']).toBe(0o644)
   })
 
-  it('changes the digest when only the executable bit changes', () => {
+  itModes('changes the digest when only the executable bit changes', () => {
     const a = mk()
     const b = mk()
     for (const d of [a, b]) writeFileSync(join(d, 'run.sh'), '#!/bin/sh\n')
@@ -143,6 +146,19 @@ describe('packDirectory — layout and modes', () => {
     chmodSync(join(b, 'run.sh'), 0o755)
 
     expect(packDirectory(a).sha256).not.toBe(packDirectory(b).sha256)
+  })
+})
+
+// The exec bit is genuinely lost on Windows, so the user hears it at pack time rather than as a
+// permission-denied container start. Platform is a parameter so both branches run everywhere.
+describe('windowsModeCaveat', () => {
+  it('warns on win32 and names the workaround', () => {
+    expect(windowsModeCaveat('win32')).toMatch(/chmod \+x/)
+  })
+
+  it('says nothing where the mode is real', () => {
+    expect(windowsModeCaveat('darwin')).toBeNull()
+    expect(windowsModeCaveat('linux')).toBeNull()
   })
 })
 
