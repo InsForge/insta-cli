@@ -245,3 +245,28 @@ describe('compileIgnore — trailing /** matches descendants, not the directory'
     expect(ig.canPrune('abc')).toBe(true)
   })
 })
+
+// A nested .gitignore's own location is a directory NAME, not pattern syntax. Concatenating it
+// into the pattern before translating meant a directory containing a character the glob grammar
+// claims — all legal on posix — silently disabled every rule that file declared.
+describe('compileIgnore — a nested ignore file under an odd directory name', () => {
+  const nested = (base: string, text: string) => compileIgnore([{ base, text }], 'git')
+
+  it.each([
+    ['a backslash', 'we\\ird'],
+    ['a star', 'we*ird'],
+    ['a bracket', 'we[ird'],
+    ['a plus', 'we+ird'],
+  ])('applies its rules under a directory name containing %s', (_name, base) => {
+    const ig = nested(base, 'secrets.env\n')
+    expect(ig.excludes(`${base}/secrets.env`, false)).toBe(true)
+    // And does not leak into a sibling whose name the metacharacter would have matched.
+    expect(ig.excludes('weird/secrets.env', false)).toBe(false)
+  })
+
+  it('still prunes on the real directory name, not the escaped one', () => {
+    const ig = nested('we*ird', 'build/\n')
+    expect(ig.excludes('we*ird/build', true)).toBe(true)
+    expect(ig.canPrune('we*ird/build')).toBe(true)
+  })
+})

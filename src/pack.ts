@@ -6,6 +6,12 @@ import { createHash } from 'node:crypto'
 // output differs between the runtimes this CLI ships on -- the same tree packs to 360 bytes under
 // Node 25 and 353 under Bun -- so with it the identity of a tree changed with the install channel.
 // fflate is pure JS: same algorithm, same bytes, everywhere.
+//
+// PINNED EXACTLY in package.json, not caret-ranged, and that is load-bearing rather than tidy.
+// A compiled binary bundles whatever the lockfile resolved, while `npx insta` resolves the range
+// afresh against the registry. A patch release is free to emit different valid gzip for the same
+// input, so a caret would let the two channels produce different digests for one tree -- exactly
+// the property this dependency was taken on to guarantee.
 import { gzipSync } from 'fflate'
 import { compileIgnore, type Ignore, type IgnoreFile, type Flavour } from './pack-ignore.js'
 
@@ -242,6 +248,11 @@ export function packDirectory(absDir: string, limits: Partial<ArchiveLimits> = {
   chunks.push(PAD, PAD) // two zero blocks close a tar
 
   const tar = Buffer.concat(chunks)
+  // Drop the per-file buffers before the compressor allocates: concat has copied every byte, so
+  // holding the originals through gzip is a third full copy of the tree for nothing. This does
+  // not make the packer streaming -- the peak is still two copies plus the compressor's own
+  // working set -- but it is the part that costs nothing to give back.
+  chunks.length = 0
   const archive = Buffer.from(gzipSync(tar, { level: 9, mtime: 0 }))
   // Pinned here as well as asked of the library: gzip carries its own mtime (4-7) and OS byte (9),
   // and a header the packer writes itself cannot drift with a dependency's defaults.

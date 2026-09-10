@@ -114,6 +114,13 @@ export async function buildArchive(
     // A failed build is an ANSWER, not a transport error: the poll worked and the gateway is
     // telling us why the tree did not build, which is the one sentence worth surfacing verbatim.
     if (state === 'failed') return { failed: res.body.message || 'the build failed' }
+    // Only the platform's own pending state keeps the loop going. Treating an ABSENT or unknown
+    // state as "still building" meant a contract change, or a truncated response, spent the full
+    // deadline before saying anything -- half an hour of a spinner for a fault visible on the
+    // first poll.
+    if (state !== 'succeeded' && state !== 'building') {
+      throw new Error(`the platform reported an unknown build state (${JSON.stringify(state)}) — upgrade with \`insta upgrade\``)
+    }
     if (state === 'succeeded') {
       // A succeeded build with no ref would be deployed as the empty string, and the deploy
       // would refuse it with a message about the image rather than about the build.

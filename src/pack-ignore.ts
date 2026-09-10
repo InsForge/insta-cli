@@ -160,8 +160,14 @@ export function compileIgnore(files: IgnoreFile[], flavour: Flavour): Ignore {
       if (!pat) continue
 
       const body = anchored ? pat : `**/${pat}`
-      const full = f.base ? `${f.base}/${body}` : body
-      rules.push({ re: new RegExp('^' + translate(full) + '$'), negated, dirOnly, literal: literalHead(full) })
+      // The base is a real DIRECTORY NAME, not pattern syntax. Concatenating it before translate
+      // meant a nested .gitignore under a directory containing `\`, `*` or `[` -- all legal on
+      // posix -- had its own location read as glob, so none of its rules matched anything.
+      // Escaped as a literal and joined at the regex level instead, and prefixed to the prune
+      // head the same way, since that head is compared against real path text.
+      const prefix = f.base ? escapeLiteral(f.base) + '/' : ''
+      const head = f.base ? `${f.base}/${literalHead(body)}` : literalHead(body)
+      rules.push({ re: new RegExp('^' + prefix + translate(body) + '$'), negated, dirOnly, literal: head })
     }
   }
 

@@ -49,9 +49,23 @@ async function discoverLane(api: Pick<ApiClient, 'rawRequest'>, projectId: strin
     // one and fail somewhere unrelated. An unknown answer is the server being ahead of us, and
     // saying that is more useful than guessing.
     const lane = (res.body ?? {}) as Lane
+    const tag = (lane as { lane?: string }).lane ?? ''
     const known = ['flyctl', 'local-docker', 'archive', 'none']
-    if (!known.includes((lane as { lane?: string }).lane ?? '')) {
-      die(`this platform answered with a source-build lane this CLI does not know (${JSON.stringify((lane as { lane?: string }).lane)}) — upgrade with \`insta upgrade\``)
+    if (!known.includes(tag)) {
+      die(`this platform answered with a source-build lane this CLI does not know (${JSON.stringify(tag)}) — upgrade with \`insta upgrade\``)
+    }
+    // The tag alone is not the contract: each branch carries a payload this code then trusts.
+    // An `archive` with malformed limits fell back to local defaults, so the CLI would enforce
+    // caps the SERVER does not have, and a `none` with no reason died with `undefined`.
+    if (tag === 'archive') {
+      const l = (lane as { limits?: Record<string, unknown> }).limits
+      const positive = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v > 0
+      if (!l || !positive(l.maxArchiveBytes) || !positive(l.maxExtractedBytes) || !positive(l.maxFiles)) {
+        die('this platform offered the archive lane without usable size limits — upgrade with `insta upgrade`')
+      }
+    }
+    if (tag === 'none' && typeof (lane as { reason?: unknown }).reason !== 'string') {
+      die('this platform refused a source build without saying why — upgrade with `insta upgrade`')
     }
     return lane
   } catch (e) {
