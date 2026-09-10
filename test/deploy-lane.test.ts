@@ -102,6 +102,19 @@ describe('prepareSource — lane dispatch', () => {
     }
   })
 
+  // `--json` promises one parseable document on stdout, and this lane added two progress lines
+  // (packing, building) plus a poll loop to the path that has to keep that promise.
+  it('writes no progress to stdout in --json mode', async () => {
+    const { api } = fakeApi({ lane: 'archive', limits: { maxArchiveBytes: 1024 * 1024, maxExtractedBytes: 1024 * 1024, maxFiles: 100 } })
+    const out = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    try {
+      await prepareSource(api, 'p1', srcDir(false), 'main', { json: true }, noRun)
+      expect(out.mock.calls.map((c) => String(c[0])).join('')).toBe('')
+    } finally {
+      out.mockRestore()
+    }
+  })
+
   // The platform already worded the refusal; repeating it in the CLI would let the two drift.
   it('refuses with the platform’s own reason when no lane serves the target', async () => {
     const { api } = fakeApi({ lane: 'none', reason: 'source builds are not supported on the insta-compute provider yet' })
