@@ -79,10 +79,17 @@ export async function deploy(dir: string | undefined, opts: DeployOpts): Promise
   const effOpts = { ...opts, port: port?.toString() }
   const image = dir ? await buildFromSource(api, p.projectId, dir, branch, effOpts) : opts.image!
   const res = await api.rawRequest('POST', `/projects/${p.projectId}/deploy`, deployRequestBody(image, branch, effOpts))
+    .catch((e) => { throw e instanceof ApiError && e.status === 409 ? new ApiError(e.status, repoConnectedHint(e.message), e.body) : e })
   if (handleApproval(res, opts.json)) return
   if (opts.json) return printJson({ image, ...res.body })
   info(`deployed ${image} -> ${res.body.url} (branch ${res.body.branch}, group ${res.body.group})`)
   renderNextActions(res.body.nextActions)
+}
+
+// The platform refuses an image deploy onto a repo-connected service and names the body field it
+// wants; a CLI user can only pass the flag. Pure, so it's unit-tested.
+export function repoConnectedHint(message: string): string {
+  return message.replace(/pass replaceSource: true/g, 'pass --replace-source')
 }
 
 // The local image tag a daemon-side deploy runs: unique per build so a redeploy replaces, and
