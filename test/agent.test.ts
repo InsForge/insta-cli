@@ -77,7 +77,9 @@ it('signs a project-owned request that lacks /projects/ in its path with the nam
     expect(boot['Insta-Agent-Session'], p).toBe('ags_boot')
   }
   expect(mint).toHaveBeenCalledTimes(accountPaths.length)
-  expect(ACCOUNT_ROUTES.has('tokens')).toBe(true) // `insta tokens` is an authenticated account call
+  // The set itself is pinned literally: iterating it above proves each entry works, not that none
+  // went missing — the inventory of account-level calls in src/commands/ as of this test.
+  expect([...ACCOUNT_ROUTES].sort()).toEqual(['agent', 'auth', 'github', 'me', 'orgs', 'regions', 'templates', 'tokens'])
   expect(mint).toHaveBeenCalledWith('POST', '/agent/sessions', expect.objectContaining({ projectId: undefined }))
   // Naming the project loads its saved session instead, and never mints.
   mint.mockClear()
