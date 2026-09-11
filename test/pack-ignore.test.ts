@@ -5,6 +5,10 @@ import { compileIgnore } from '../src/pack-ignore.js'
 const git = (text: string, base = '') => compileIgnore([{ base, text }], 'git')
 const docker = (text: string) => compileIgnore([{ base: '', text }], 'docker')
 
+// A file NAME containing a backslash cannot exist on Windows, where `\` is the separator, and the
+// ignore package reads such a path as one there and refuses it. These cases are about posix names.
+const itPosixNames = process.platform === 'win32' ? it.skip : it
+
 describe('compileIgnore — shared syntax', () => {
   it('ignores blank lines and comments', () => {
     const ig = git('\n# a comment\n\n  \nbuild\n')
@@ -129,9 +133,13 @@ describe('compileIgnore — git escaping', () => {
   it('excludes a file whose name really starts with # via \\#', () => {
     const ig = git('\\#credentials\n')
     expect(ig.excludes('#credentials', false)).toBe(true)
-    // Still a comment without the escape, and still not a rule about a backslash.
+    // Still a comment without the escape.
     expect(git('#credentials\n').excludes('#credentials', false)).toBe(false)
-    expect(ig.excludes('\\#credentials', false)).toBe(false)
+  })
+
+  itPosixNames('does not read an escape as a rule about a backslash in the name', () => {
+    expect(git('\\#credentials\n').excludes('\\#credentials', false)).toBe(false)
+    expect(git('[\\\\].txt\n').excludes('\\.txt', false)).toBe(true)
   })
 
   it('excludes a file whose name really starts with ! via \\!, and does not read it as negation', () => {
@@ -231,7 +239,6 @@ describe('compileIgnore — bracket expressions', () => {
     expect(git('[a-c].txt\n').excludes('b.txt', false)).toBe(true)
     expect(git('[a-c].txt\n').excludes('d.txt', false)).toBe(false)
     expect(git('[\\]].txt\n').excludes('].txt', false)).toBe(true)
-    expect(git('[\\\\].txt\n').excludes('\\.txt', false)).toBe(true)
     // An escaped hyphen is a member, not a range: `[a\-c]` is the three characters a, - and c.
     expect(git('[a\\-c]\n').excludes('-', false)).toBe(true)
     expect(git('[a\\-c]\n').excludes('b', false)).toBe(false)
