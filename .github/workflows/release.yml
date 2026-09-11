@@ -131,7 +131,10 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
       # OIDC trusted publishing: npm trusts this workflow's identity directly (configured on
-      # npmjs.com → package `insta` → Trusted Publisher: InsForge/instacloud-cli, release.yml).
+      # npmjs.com → package `insta` → Trusted Publisher). That setting MUST name
+      # InsForge/instacloud-cli, release.yml. npm does NOT follow GitHub repo renames, so if it
+      # still says the pre-rename InsForge/insta-cli this publish step fails — check it before
+      # the next release.
       # No token secret. Needs npm ≥ 11.5 for the OIDC exchange; Node 22 bundles an older one.
       - run: npm install -g npm@latest
       - run: npm ci
