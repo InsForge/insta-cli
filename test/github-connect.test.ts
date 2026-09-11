@@ -1,7 +1,7 @@
 // `insta compute connect-repo` / `repo` / `watch-paths`: the parts that decide, without a network.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { ApiError, type ApiClient } from '../src/api.js'
-import { parseRepoRef, pickCandidate, sourceBody, repoLine, findCallerRepo, authorizeTerminal, parseWatchPaths, computeWatchPaths, watchPathsClause, type Candidate } from '../src/commands/github.js'
+import { parseRepoRef, pickCandidate, sourceBody, repoLine, findCallerRepo, authorizeTerminal, canAuthorizeHere, parseWatchPaths, computeWatchPaths, watchPathsClause, type Candidate } from '../src/commands/github.js'
 
 const cand = (o: Partial<Candidate> = {}): Candidate => ({ rootDir: null, builder: 'nixpacks', buildCommand: 'npm run build', startCommand: 'npm start', port: 3000, ...o })
 
@@ -144,13 +144,17 @@ describe('findCallerRepo', () => {
       await expect(findCallerRepo(listed([{ id: 42, owner: 'acme', repo: 'app', installationId: bad }]), 'org_1', ref, never)).rejects.toThrow(/without an installation to build it through/)
     }
   })
+  it('with nothing that can read the code, it fails with something to act on instead of waiting', async () => {
+    const api = fake({ '/orgs/org_1/github/repos': new ApiError(400, 'your github account is not linked — authorize github, then list again', {}) })
+    await expect(findCallerRepo(api, 'org_1', ref, never, false)).rejects.toThrow(/nothing here can read the code[\s\S]*--public/)
+  })
   it('an unlinked terminal authorizes once, and the repos that come back are used', async () => {
     const api = fake({ '/orgs/org_1/github/repos': new ApiError(400, 'your github account is not linked — authorize github, then list again', {}) })
-    await expect(findCallerRepo(api, 'org_1', ref, async () => [{ id: 42, owner: 'acme', repo: 'app', installationId: 7 }])).resolves.toEqual({ installationId: 7, repoId: 42 })
+    await expect(findCallerRepo(api, 'org_1', ref, async () => [{ id: 42, owner: 'acme', repo: 'app', installationId: 7 }], true)).resolves.toEqual({ installationId: 7, repoId: 42 })
   })
   it('a dead authorization also authorizes again', async () => {
     const api = fake({ '/orgs/org_1/github/repos': new ApiError(400, 'your github authorization is no longer accepted — authorize github again', {}) })
-    await expect(findCallerRepo(api, 'org_1', ref, async () => [{ id: 42, owner: 'acme', repo: 'app', installationId: 7 }])).resolves.toEqual({ installationId: 7, repoId: 42 })
+    await expect(findCallerRepo(api, 'org_1', ref, async () => [{ id: 42, owner: 'acme', repo: 'app', installationId: 7 }], true)).resolves.toEqual({ installationId: 7, repoId: 42 })
   })
   it('the same words at another status are a real failure, not a reason to visit GitHub', async () => {
     const api = fake({ '/orgs/org_1/github/repos': new ApiError(502, 'your github account is not linked', {}) })
@@ -170,6 +174,23 @@ describe('findCallerRepo', () => {
   })
   it('an org-less link is refused before any request', async () => {
     await expect(findCallerRepo(fake({}), '', ref, never)).rejects.toThrow(/INSTA_ORG_ID/)
+  })
+})
+
+describe('canAuthorizeHere', () => {
+  it('--json has no reader, whatever the terminal is', () => {
+    expect(canAuthorizeHere({ json: true })).toBe(false)
+  })
+  it('a plain pipe has none either — the old fast failure is the right answer there', () => {
+    const tty = process.stderr.isTTY
+    try {
+      Object.defineProperty(process.stderr, 'isTTY', { value: false, configurable: true })
+      expect(canAuthorizeHere({})).toBe(false)
+      Object.defineProperty(process.stderr, 'isTTY', { value: true, configurable: true })
+      expect(canAuthorizeHere({})).toBe(true)
+    } finally {
+      Object.defineProperty(process.stderr, 'isTTY', { value: tty, configurable: true })
+    }
   })
 })
 

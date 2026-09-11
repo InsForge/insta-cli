@@ -1,4 +1,5 @@
 import { ApiClient, ApiError, requireProject } from '../api.js'
+import { agentMode } from '../agent.js'
 import { info, printJson } from '../util.js'
 import { resolveSoleService, parsePort, q } from './services.js'
 
@@ -142,7 +143,15 @@ const needsAuthorization = (e: unknown): boolean => e instanceof ApiError && e.s
 
 // The repositories THIS caller's GitHub account can reach — the same question the platform asks again
 // when the connect lands, so a repo missing here would be refused there anyway.
-export async function findCallerRepo(api: ApiClient, orgId: string, ref: RepoRef, authorize: typeof authorizeTerminal = authorizeTerminal): Promise<{ installationId: number; repoId: number }> {
+// Someone has to read the code and type it at GitHub. A terminal qualifies, and so does agent mode —
+// an agent relays the URL to the person driving it — but --json and a bare pipe have no reader, and a
+// ten-minute wait there is a stall where the old code failed with something to act on.
+export function canAuthorizeHere(opts: { json?: boolean } = {}): boolean {
+  if (opts.json) return false
+  return !!agentMode() || !!process.stderr.isTTY
+}
+
+export async function findCallerRepo(api: ApiClient, orgId: string, ref: RepoRef, authorize: typeof authorizeTerminal = authorizeTerminal, canAuthorize = canAuthorizeHere()): Promise<{ installationId: number; repoId: number }> {
   if (!orgId) throw new Error('this directory is linked without an org — set INSTA_ORG_ID alongside INSTA_PROJECT_ID, or link it with `insta project link`')
   let repos: RepoRow[]
   try {
@@ -156,6 +165,9 @@ export async function findCallerRepo(api: ApiClient, orgId: string, ref: RepoRef
       throw new Error('connecting a repository needs the org admin role — ask an admin to connect it, or pass --public for a public repository')
     }
     if (!needsAuthorization(e)) throw e
+    if (!canAuthorize) {
+      throw new Error('this GitHub account is not authorized for InstaCloud yet, and nothing here can read the code GitHub shows — run `insta compute connect-repo` from a terminal, connect the repository from the console, or pass --public for a public repository')
+    }
     repos = await authorize(api, orgId)
   }
   const whole = (n: unknown) => n !== null && n !== '' && Number.isInteger(Number(n)) && Number(n) > 0
@@ -189,7 +201,7 @@ export async function computeConnectRepo(rawRef: string, serviceName: string | u
   const svc = await targetService(api, p.projectId, opts.branch ?? p.branch, serviceName)
   const src: ConnectSource = opts.public
     ? { source: 'public', ...ref }
-    : { source: 'app', ...(await findCallerRepo(api, p.orgId, ref)), ...ref }
+    : { source: 'app', ...(await findCallerRepo(api, p.orgId, ref, authorizeTerminal, canAuthorizeHere(opts))), ...ref }
   // Detection must scan the branch that will be built: the build refuses commands that differ from what it detects there.
   const detected = await api.request<{ services: Candidate[] }>('POST', `/projects/${p.projectId}/github/detect`, { ...src, ...(opts.repoBranch ? { ref: opts.repoBranch } : {}) })
   const candidate = pickCandidate(detected.services, opts.rootDir)
