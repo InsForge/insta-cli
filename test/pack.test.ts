@@ -325,6 +325,23 @@ describe('packDirectory — ignore files', () => {
     expect(names).toContain('axb')
   })
 
+  it.each([
+    ['?.env', '😀.env', '😀😀.env'],
+    ['[😀-🙏].env', '😁.env', 'a.env'],
+    ['[[:digit:]].env', '1.env', 'a.env'],
+    ['[a-c[:digit:]].env', 'b.env', 'z.env'],
+    ['[[:^digit:]].env', '😀.env', '1.env'],
+  ])('does not upload files excluded by Docker rule %s', (pattern, excluded, kept) => {
+    const dir = mk()
+    writeFileSync(join(dir, '.dockerignore'), pattern + '\n')
+    writeFileSync(join(dir, excluded), 'withheld fixture\n')
+    writeFileSync(join(dir, kept), 'included fixture\n')
+
+    const names = packedNames(dir)
+    expect(names).not.toContain(excluded)
+    expect(names).toContain(kept)
+  })
+
   it('reads a .dockerignore foo**bar as docker does: foobar and foo/x/bar go, fooXbar stays', () => {
     const dir = mk()
     writeFileSync(join(dir, '.dockerignore'), 'foo**bar\n')

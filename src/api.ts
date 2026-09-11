@@ -76,7 +76,7 @@ export class ApiClient {
   private async raw(method: string, path: string, body: unknown, auth: boolean, scope: RequestOpts = {}): Promise<RawResult> {
     let r = await this.fetch(method, path, body, auth, scope)
     if (r.status === 401 && auth && this.cfg.refreshToken) {
-      if (await this.refresh()) r = await this.fetch(method, path, body, auth, scope)
+      if (await this.refresh(scope.signal)) r = await this.fetch(method, path, body, auth, scope)
     }
     return r
   }
@@ -97,15 +97,19 @@ export class ApiClient {
     return { status: res.status, body: parsed }
   }
 
-  private async refresh(): Promise<boolean> {
+  private async refresh(signal?: AbortSignal): Promise<boolean> {
     try {
-      const res = await this.fetch('POST', '/auth/refresh', { refreshToken: this.cfg.refreshToken }, false)
+      const res = await this.fetch('POST', '/auth/refresh', { refreshToken: this.cfg.refreshToken }, false, { signal })
       if (res.status >= 400) return false
       this.cfg.accessToken = res.body.accessToken
       this.cfg.refreshToken = res.body.refreshToken
       await this.persist()
       return true
-    } catch {
+    } catch (e) {
+      // Refresh belongs to the original request's time budget. Do not turn its cancellation
+      // into the earlier 401: the caller needs the abort to report a timeout or cancellation.
+      signal?.throwIfAborted()
+      if (e instanceof Error && (e.name === 'AbortError' || e.name === 'TimeoutError')) throw e
       return false
     }
   }

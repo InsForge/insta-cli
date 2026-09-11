@@ -249,6 +249,41 @@ describe('compileIgnore — ** placement', () => {
 })
 
 describe('compileIgnore — bracket expressions', () => {
+  it('docker: matches Unicode code points with ? and bracket ranges', () => {
+    expect(docker('?.env').excludes('😀.env', false)).toBe(true)
+    expect(docker('??.env').excludes('😀.env', false)).toBe(false)
+    expect(docker('[😀-🙏].env').excludes('😁.env', false)).toBe(true)
+    expect(docker('[^😀].env').excludes('😁.env', false)).toBe(true)
+    expect(docker('[^😀].env').excludes('😀.env', false)).toBe(false)
+  })
+
+  it.each([
+    ['alnum', '5', '-'], ['alpha', 'a', '5'], ['ascii', 'a', 'é'],
+    ['blank', '\t', 'a'], ['cntrl', '\x01', 'a'], ['digit', '5', 'a'],
+    ['graph', '!', ' '], ['lower', 'a', 'A'], ['print', ' ', '\x01'],
+    ['punct', '-', 'a'], ['space', '\t', 'a'], ['upper', 'A', 'a'],
+    ['word', '_', '-'], ['xdigit', 'f', 'g'],
+  ])('docker: supports the ASCII POSIX class %s and its complement', (name, member, other) => {
+    expect(docker(`[[:${name}:]].env`).excludes(`${member}.env`, false)).toBe(true)
+    expect(docker(`[[:${name}:]].env`).excludes(`${other}.env`, false)).toBe(false)
+    expect(docker(`[[:^${name}:]].env`).excludes(`${member}.env`, false)).toBe(false)
+    expect(docker(`[[:^${name}:]].env`).excludes(`${other}.env`, false)).toBe(true)
+    expect(docker(`[[:^${name}:]].env`).excludes('😀.env', false)).toBe(true)
+  })
+
+  it('docker: combines named classes, literals, ranges and outer negation', () => {
+    const ig = docker('[a-c[:digit:][:upper:]_].env')
+    for (const name of ['b.env', '5.env', 'A.env', '_.env']) expect(ig.excludes(name, false)).toBe(true)
+    expect(ig.excludes('z.env', false)).toBe(false)
+    expect(docker('[^[:digit:]].env').excludes('a.env', false)).toBe(true)
+    expect(docker('[^[:digit:]].env').excludes('1.env', false)).toBe(false)
+    expect(docker('[[:alpha:]].env').excludes('é.env', false)).toBe(false)
+  })
+
+  it.each(['[[:unknown:]]', '[[:constructor:]]', '[[:digit]]'])('docker: refuses malformed POSIX syntax %s instead of ignoring it', (pattern) => {
+    expect(() => docker(pattern)).toThrow(/POSIX class in .dockerignore/)
+  })
+
   it('treats a ] right after the opening [ as a member, so []] names a file called ]', () => {
     const ig = git('[]]\n')
     expect(ig.excludes(']', false)).toBe(true)

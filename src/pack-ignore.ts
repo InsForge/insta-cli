@@ -128,8 +128,36 @@ function translate(p: string): string {
   return out
 }
 
-// Inside a class only these carry regex meaning; `-` is left alone so a range stays a range.
-const escapeInClass = (c: string): string => (/[\\\]\[^-]/.test(c) ? '\\' + c : c)
+// Escape members, including an explicitly escaped hyphen. bracket() preserves raw range hyphens.
+const escapeInClass = (c: string): string => ('\\][^-'.includes(c) ? '\\' + c : c)
+
+// Go/RE2's POSIX classes are ASCII, not JavaScript's Unicode \s/\w or locale-dependent classes.
+// https://pkg.go.dev/regexp/syntax#hdr-Syntax
+const POSIX_CLASSES: Record<string, string> = {
+  alnum: '0-9A-Za-z', alpha: 'A-Za-z', ascii: '\\x00-\\x7f', blank: '\\t ',
+  cntrl: '\\x00-\\x1f\\x7f', digit: '0-9', graph: '\\x21-\\x7e', lower: 'a-z',
+  print: '\\x20-\\x7e', punct: '\\x21-\\x2f\\x3a-\\x40\\x5b-\\x60\\x7b-\\x7e',
+  space: '\\t\\n\\v\\f\\r ', upper: 'A-Z', word: '0-9A-Za-z_', xdigit: '0-9A-Fa-f',
+}
+
+function posixClass(name: string, negated: boolean): string {
+  const body = Object.hasOwn(POSIX_CLASSES, name) ? POSIX_CLASSES[name] : undefined
+  if (body === undefined) throw new Error('unsupported POSIX class in .dockerignore: ' + name)
+  if (!negated) return body
+  // A complemented named class can be mixed with other members inside [...]. Expand its
+  // ranges instead of nesting a negated JS class, which would silently change the grammar.
+  const member = new RegExp('[' + body + ']', 'u')
+  const point = (n: number) => '\\u{' + n.toString(16) + '}'
+  const range = (a: number, b: number) => a === b ? point(a) : point(a) + '-' + point(b)
+  let out = ''
+  let start = 0
+  for (let c = 0; c < 128; c++) {
+    if (!member.test(String.fromCodePoint(c))) continue
+    if (start < c) out += range(start, c - 1)
+    start = c + 1
+  }
+  return out + range(start, 0x10ffff)
+}
 
 // A bracket expression starting at p[start], or null when no `]` closes it and the `[` is a
 // literal. docker hands the class to Go's regexp: a `]` right after the opening `[` (or after
@@ -149,6 +177,13 @@ function bracket(p: string, start: number): { re: string; end: number } | null {
     const c = p.charAt(j)
     if (c === ']' && !first) return { re: `[${negated ? '^/' : ''}${body}]`, end: j + 1 }
     first = false
+    if (p.startsWith('[:', j)) {
+      const named = /^\[:(\^?)([a-z]+):\]/.exec(p.slice(j))
+      if (!named) throw new Error('invalid POSIX class in .dockerignore')
+      body += posixClass(named[2]!, named[1] === '^')
+      j += named[0].length
+      continue
+    }
     if (c === '\\' && j + 1 < p.length) {
       body += escapeInClass(p.charAt(j + 1))
       j += 2
@@ -216,7 +251,9 @@ function compileDocker(files: IgnoreFile[]): Ignore {
       // is compared against real path text.
       const prefix = f.base ? escapeLiteral(f.base) + '/' : ''
       const head = f.base ? `${f.base}/${literalHead(pat)}` : literalHead(pat)
-      rules.push({ re: new RegExp('^' + prefix + translate(pat) + '$'), negated, literal: head })
+      // Go matches runes: without Unicode mode, ? consumes half of a non-BMP filename,
+      // letting files the user excluded into the uploaded archive.
+      rules.push({ re: new RegExp('^' + prefix + translate(pat) + '$', 'u'), negated, literal: head })
     }
   }
 
