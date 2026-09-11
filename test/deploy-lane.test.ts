@@ -66,6 +66,18 @@ describe('prepareSource — lane dispatch', () => {
     expect(paths).toContain('POST /projects/p1/deploy-token')
   })
 
+  // insta-oss names this lane: the token mint answers 501 and the directory is built by the same
+  // docker the daemon runs, so the image is a local tag and nothing archive-shaped is asked for.
+  it('takes the local-docker path when the platform names that lane', async () => {
+    const { api, paths } = fakeApi({ lane: 'local-docker' })
+
+    const out = await prepareSource(api, 'p1', srcDir(), 'main', {}, noRun)
+
+    expect(out).toMatchObject({ image: expect.stringMatching(/^insta-src-p1-default:/) })
+    expect(paths).toContain('POST /projects/p1/deploy-token')
+    expect(paths.some((p) => p.includes('archive') || p.includes('build-uploads'))).toBe(false)
+  })
+
   // The archive lane never mints a Fly token, a directory with no Dockerfile is legitimate, and
   // it is different in KIND from the other lanes: its one gated call enqueues build+deploy, so
   // by the time it returns the deploy has happened and it hands back the outcome, not an image

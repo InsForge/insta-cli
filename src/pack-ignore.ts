@@ -70,28 +70,35 @@ type Rule = { re: RegExp; negated: boolean; literal: string }
 
 const escapeLiteral = (c: string): string => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-// Glob to RegExp the way moby/patternmatcher compiles one: `*` and `?` stop at a separator, `**`
-// crosses wherever it stands. `**foo` is a suffix match and `foo**` a prefix match on the literal
-// there, so `.*` is what docker does, not an approximation of it. And the slash after ANY `**` is
-// eaten with it, boundary or not: `a**/b` is `a(.*/)?b`, which matches `ab` at the root as well
-// as `a/x/b`. Leaving that slash mandatory kept `ab` in an upload a local docker build excludes.
+// The rest of a pattern carries no glob syntax, so docker's fast paths apply to it.
+const plain = (rest: string): boolean => !/[*?[\]\\]/.test(rest)
+
+// Glob to RegExp the way moby/patternmatcher compiles one (its compile(), read line by line):
+// `*` and `?` stop at a separator; a `**` is an optional run of whole directories, `(.*/)?`, and
+// the slash right after it is eaten with it, wherever it stands, so `a**/b` and `foo**bar` both
+// reach `ab`/`foobar` at the root and `a/x/b`/`foo/x/bar` below, and neither reaches `fooXbar`.
+// Two fast paths are broader than that regex and are matched exactly: a pattern that is `**` plus
+// plain text is a suffix match (`**foo` takes `xfoo`), and one ending in `**` is a prefix match.
+// Reading every interior `**` as `.*` excluded `fooXbar`, a file a local docker build keeps.
 function translate(p: string): string {
   let out = ''
   let i = 0
   while (i < p.length) {
     if (p.startsWith('**', i)) {
-      const atBoundary = i === 0 || p.charAt(i - 1) === '/'
       if (p.charAt(i + 2) === '/') {
-        out += '(?:.*/)?' // any number of directories, including none
+        out += '(?:.*/)?' // any number of directories, including none; the slash goes with it
         i += 3
-      } else if (atBoundary && i + 2 === p.length) {
-        // Bare `**` is everything. `abc/**` is everything INSIDE abc and NOT abc itself: making
-        // the suffix optional matched the directory too, and a rule that reads as "drop this tree
-        // but keep one file" then dropped the file with it.
-        out += i === 0 ? '.*' : '.+'
+      } else if (i + 2 === p.length) {
+        // Trailing: bare `**` is everything, `foo**` a prefix match. `abc/**` is everything INSIDE
+        // abc and NOT abc itself: making the suffix optional matched the directory too, and a rule
+        // that reads as "drop this tree but keep one file" then dropped the file with it.
+        out += i > 0 && p.charAt(i - 1) === '/' ? '.+' : '.*'
+        i += 2
+      } else if (i === 0 && plain(p.slice(2))) {
+        out += '.*' // docker's suffixMatch: `**foo` is "ends with foo"
         i += 2
       } else {
-        out += '.*'
+        out += '(?:.*/)?'
         i += 2
       }
     } else if (p.charAt(i) === '*') {

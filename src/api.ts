@@ -25,7 +25,9 @@ export function storeApiKeyCredential(cfg: GlobalConfig, token: string, user?: G
 type RawResult = { status: number; body: any }
 // projectId: the project this request acts on when the path does not carry /projects/:id, so agent
 // mode signs with that project's session instead of a projectless bootstrap one (see agentHeaders).
-type RequestOpts = { auth?: boolean } & AgentScope
+// `signal` bounds one request: a poll loop hands in the time it has left, so a stalled endpoint
+// cannot hold the CLI past the caller's own deadline.
+type RequestOpts = { auth?: boolean; signal?: AbortSignal } & AgentScope
 
 export class ApiClient {
   constructor(private cfg: GlobalConfig, private readonly fetchImpl: typeof fetch = fetch) {}
@@ -71,7 +73,7 @@ export class ApiClient {
     return res
   }
 
-  private async raw(method: string, path: string, body: unknown, auth: boolean, scope: AgentScope = {}): Promise<RawResult> {
+  private async raw(method: string, path: string, body: unknown, auth: boolean, scope: RequestOpts = {}): Promise<RawResult> {
     let r = await this.fetch(method, path, body, auth, scope)
     if (r.status === 401 && auth && this.cfg.refreshToken) {
       if (await this.refresh()) r = await this.fetch(method, path, body, auth, scope)
@@ -79,7 +81,7 @@ export class ApiClient {
     return r
   }
 
-  private async fetch(method: string, path: string, body: unknown, auth: boolean, scope: AgentScope = {}): Promise<RawResult> {
+  private async fetch(method: string, path: string, body: unknown, auth: boolean, scope: RequestOpts = {}): Promise<RawResult> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Insta-Hints': '1', 'User-Agent': USER_AGENT }
     if (auth && this.cfg.accessToken) headers.Authorization = `Bearer ${this.cfg.accessToken}`
     if (auth) Object.assign(headers, await agentHeaders(this, method, path, body === undefined ? '' : JSON.stringify(body), scope))
@@ -87,6 +89,7 @@ export class ApiClient {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: scope.signal,
     })
     const text = await res.text()
     let parsed: any = null

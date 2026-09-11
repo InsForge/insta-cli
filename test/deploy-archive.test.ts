@@ -186,6 +186,33 @@ describe('deployArchive — the gated call and the poll after it', () => {
     expect(await deployArchive(a, 'p1', ref, 'main', {}, Date.now, noWait)).toEqual({ failed: 'build bld_1 failed: no Dockerfile at ./api' })
   })
 
+  // "Up to 30 minutes" is a wall-clock ceiling, not a count of answers: each poll is bounded by
+  // what remains, and once nothing remains no further poll is made.
+  it('bounds every status poll by the remaining deadline and stops polling once it has passed', async () => {
+    const seen: unknown[] = []
+    let t = 0
+    const clock = () => (t += 20 * 60 * 1000) // POST at 20min-equivalent ticks: the second poll is overdue
+    const a = {
+      rawRequest: async (method: string, _path: string, _body?: unknown, opts?: { signal?: AbortSignal }) => {
+        if (method === 'GET') seen.push(opts?.signal)
+        return method === 'POST' ? { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'queued' } } : { status: 200, body: { state: 'building' } }
+      },
+    }
+    await expect(deployArchive(a, 'p1', ref, 'main', {}, clock, noWait)).rejects.toThrow(/did not finish within 30 minutes/)
+    expect(seen).toHaveLength(1) // deadline fixed at 20+30=50; the poll at 40 ran, the one due at 60 did not
+    expect(seen[0]).toBeInstanceOf(AbortSignal)
+  })
+
+  it('names a stalled status poll rather than hanging on it', async () => {
+    const a = {
+      rawRequest: async (method: string) => {
+        if (method === 'POST') return { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'queued' } }
+        throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' })
+      },
+    }
+    await expect(deployArchive(a, 'p1', ref, 'main', {}, Date.now, noWait)).rejects.toThrow(/did not answer a status poll within 20s/)
+  })
+
   it('fails fast on a state this CLI does not know instead of polling to the deadline', async () => {
     const { api: a, calls } = api([
       { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'queued' } },

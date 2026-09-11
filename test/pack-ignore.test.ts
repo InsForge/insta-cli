@@ -224,6 +224,21 @@ describe('compileIgnore — ** placement', () => {
     expect(docker('src/**\n').excludes('src', true)).toBe(false)
   })
 
+  it('docker: an interior ** is an optional run of directories, never a run of characters', () => {
+    const ig = docker('foo**bar\n')
+    expect(ig.excludes('foobar', false)).toBe(true)
+    expect(ig.excludes('foo/x/bar', false)).toBe(true)
+    expect(ig.excludes('fooXbar', false)).toBe(false) // a local docker build keeps this file
+  })
+
+  it('docker: a leading ** with plain text after it is a suffix match, with glob syntax after it a directory run', () => {
+    expect(docker('**foo\n').excludes('xfoo', false)).toBe(true) // patternmatcher's suffixMatch
+    expect(docker('**foo\n').excludes('a/xfoo', false)).toBe(true)
+    expect(docker('**fo?\n').excludes('fo1', false)).toBe(true)
+    expect(docker('**fo?\n').excludes('a/fo1', false)).toBe(true)
+    expect(docker('**fo?\n').excludes('xfo1', false)).toBe(false) // the regexp path: (.*/)?fo[^/]
+  })
+
   it('docker: eats the slash after any **, so a**/b reaches ab at the root as well as a/x/b', () => {
     const ig = docker('a**/b\n')
     expect(ig.excludes('ab', false)).toBe(true) // (.*/)? matched nothing
@@ -269,6 +284,12 @@ describe('compileIgnore — bracket expressions', () => {
   it('never lets a negated class stand in for a separator', () => {
     expect(git('a[!x]b\n').excludes('a/b', false)).toBe(false)
     expect(git('a[!x]b\n').excludes('ayb', false)).toBe(true)
+  })
+
+  it('docker: keeps a range a range, so [a-c] takes b', () => {
+    expect(docker('[a-c].env\n').excludes('b.env', false)).toBe(true)
+    expect(docker('[a-c].env\n').excludes('d.env', false)).toBe(false)
+    expect(docker('[a\\-c].env\n').excludes('b.env', false)).toBe(false) // escaped: a member, not a range
   })
 
   it('docker: negates on ^ only, a ! is an ordinary member', () => {

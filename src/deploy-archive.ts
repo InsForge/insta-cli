@@ -83,6 +83,9 @@ export async function uploadArchive(
 // ALB in front of the platform cuts an idle request at 60s while an image build runs minutes.
 const POLL_MS = 3000
 const DEPLOY_DEADLINE_MS = 30 * 60 * 1000
+// One status read is a small GET; anything longer than this is a stalled endpoint, not a slow one.
+const POLL_REQUEST_TIMEOUT_MS = 20_000
+const isAbort = (e: unknown): boolean => e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError')
 
 // What the archive lane hands back: the deploy already happened. Same fields `/deploy` answers
 // with for an image body, so the command prints one shape whichever lane ran.
@@ -124,9 +127,20 @@ export async function deployArchive(
   if (started.body?.resumed === true) log('resuming the deploy this archive already started')
 
   const deadline = now() + DEPLOY_DEADLINE_MS
+  const overdue = () => new Error(`the deploy did not finish within ${Math.round(DEPLOY_DEADLINE_MS / 60000)} minutes — check \`insta status\` or re-run`)
   let last = ''
   for (;;) {
-    const res = await api.rawRequest('GET', `/projects/${projectId}/archive-deploys/${encodeURIComponent(operationId)}`)
+    // The deadline bounds the wall clock, not the number of answers: it is checked before each poll,
+    // and each poll is itself bounded by what remains, so a stalled endpoint cannot hold the CLI
+    // past it, and an answer that would arrive after it is not waited for.
+    const remaining = deadline - now()
+    if (remaining <= 0) throw overdue()
+    const res = await api.rawRequest('GET', `/projects/${projectId}/archive-deploys/${encodeURIComponent(operationId)}`, undefined, {
+      signal: AbortSignal.timeout(Math.min(remaining, POLL_REQUEST_TIMEOUT_MS)),
+    }).catch((e) => {
+      if (!isAbort(e)) throw e
+      throw remaining <= POLL_REQUEST_TIMEOUT_MS ? overdue() : new Error(`the platform did not answer a status poll within ${POLL_REQUEST_TIMEOUT_MS / 1000}s — check \`insta status\` or re-run`)
+    })
     const state = res.body?.state
     // A failed operation is an ANSWER, not a transport error: the poll worked, and the sentence
     // it carries (usually the gateway's own, e.g. "no Dockerfile at ./api") is the one to show.
@@ -163,9 +177,6 @@ export async function deployArchive(
       throw new Error(`the platform reported an unknown deploy state (${JSON.stringify(state)}) — upgrade with \`insta upgrade\``)
     }
     if (state !== last) { log(state === 'deploying' ? 'image built, deploying it' : `${state}…`); last = state }
-    if (now() > deadline) {
-      throw new Error(`the deploy did not finish within ${Math.round(DEPLOY_DEADLINE_MS / 60000)} minutes — check \`insta status\` or re-run`)
-    }
     await wait(POLL_MS)
   }
 }

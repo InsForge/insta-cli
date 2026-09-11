@@ -325,6 +325,21 @@ describe('packDirectory — ignore files', () => {
     expect(names).toContain('axb')
   })
 
+  it('reads a .dockerignore foo**bar as docker does: foobar and foo/x/bar go, fooXbar stays', () => {
+    const dir = mk()
+    writeFileSync(join(dir, '.dockerignore'), 'foo**bar\n')
+    writeFileSync(join(dir, 'foobar'), 'x\n')
+    writeFileSync(join(dir, 'fooXbar'), 'x\n')
+    mkdirSync(join(dir, 'foo'))
+    mkdirSync(join(dir, 'foo', 'x'))
+    writeFileSync(join(dir, 'foo', 'x', 'bar'), 'x\n')
+
+    const names = packedNames(dir)
+    expect(names).not.toContain('foobar')
+    expect(names).not.toContain('foo/x/bar')
+    expect(names).toContain('fooXbar')
+  })
+
   it('excludes a file named ] for a []] rule', () => {
     const dir = mk()
     writeFileSync(join(dir, '.gitignore'), '[]]\n')
