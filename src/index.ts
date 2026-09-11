@@ -32,6 +32,7 @@ import * as govern from './commands/govern.js'
 import * as observe from './commands/observe.js'
 import * as obs from './commands/metrics.js'
 import { billing, billingUpgrade, billingPortal } from './commands/billing.js'
+import * as domainCmd from './commands/domain.js'
 import * as selfUpdate from './commands/upgrade.js'
 import * as feedbackCmd from './commands/feedback.js'
 
@@ -363,6 +364,33 @@ program.command('logs <target> [group]').description('Service logs (runtime by d
 program.command('usage').description('Usage for the current billing cycle by billing dimension (org by default; --proj for one project)')
   .option('--from <unix>').option('--to <unix>').option('--proj [id]', 'show one project (the linked one, or a given id) instead of the whole org').option('--json')
   .action(guard((o) => obs.usage(o)))
+// ---- domains bought through InstaCloud (BYO domains: `insta compute set-domain`) ----
+const dom = program.command('domain').description('Buy a domain through InstaCloud and attach it to a compute service (your own domain: `insta compute set-domain`)')
+dom.command('search <keyword>').description('Search purchasable names with prices (a label like "myapp" or a full name like "myapp.com")')
+  .option('--tlds <list>', 'comma-separated TLDs to include').option('--org <id>', "target org (default: linked project's org)").option('--json')
+  .action(guard((keyword, o) => domainCmd.domainSearch(keyword, o)))
+dom.command('buy <name>').description('Buy a domain and attach it to a branch compute service — pay at the printed Stripe Checkout link (gated: domain.purchase)')
+  .option('--years <n>', 'registration term in years (default 1)').option('--branch <b>').option('--group <g>', "compute service (default: the branch's sole compute service)")
+  .option('--contact-file <path>', 'registrant contact as JSON (default: the org contact from `insta domain contact set`)')
+  .option('--no-open', 'print the checkout URL instead of opening a browser').option('--json')
+  .action(guard((name, o) => domainCmd.domainBuy(name, o)))
+dom.command('attach <name>').description('Attach a bought domain whose service was deleted (or whose attach failed) to a compute service (gated: deploy)')
+  .option('--branch <b>').option('--group <g>', "compute service (default: the branch's sole compute service)").option('--json')
+  .action(guard((name, o) => domainCmd.domainAttach(name, o)))
+dom.command('list').description('Domains bought through InstaCloud in this project, with attach state per hostname').option('--json')
+  .action(guard((o) => domainCmd.domainList(o)))
+dom.command('status <name>').description("A bought domain's order and attach state").option('--json')
+  .action(guard((name, o) => domainCmd.domainStatus(name, o)))
+const domContact = dom.command('contact').description("Show the org's default registrant contact (the legal registrant of every domain bought with it)")
+  .option('--org <id>').option('--json').action(guard((o) => domainCmd.domainContactShow(o)))
+domContact.command('set').description('Set the org default registrant contact (admin) from flags or --contact-file <path>; --company-name makes that organization the legal registrant')
+  .option('--first-name <s>').option('--last-name <s>').option('--company-name <s>').option('--address1 <s>').option('--address2 <s>').option('--city <s>').option('--state <s>').option('--zip <s>')
+  .option('--country <cc>', 'ISO 3166-1 alpha-2, e.g. US').option('--email <s>').option('--phone <e164>', 'E.164, e.g. +14155550100')
+  .option('--contact-file <path>', 'JSON file with the contact fields').option('--org <id>').option('--json')
+  // `contact --org X set` parks --org on the GROUP (enablePositionalOptions); without this merge the
+  // wrong org's registrant contact is written, and that field is legal ownership.
+  .action(guard((o) => domainCmd.domainContactSet({ ...domContact.opts(), ...o })))
+
 const bill = program.command('billing').description('Current billing cycle overview (tier / used / included / overage / credits / forecast + per-dimension & per-project breakdown)')
   .option('--org <id>', 'target org (default: linked project\'s org)').option('--json')
   .action(guard((o) => billing(o)))

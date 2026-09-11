@@ -5,7 +5,7 @@ import { cycleLine, dimensionLines } from './metrics.js'
 type OrgOpt = { org?: string }
 
 // Resolve the target org: explicit --org, else the linked project's org.
-async function resolveOrgId(opts: OrgOpt): Promise<string> {
+export async function resolveOrgId(opts: OrgOpt): Promise<string> {
   if (opts.org) return opts.org
   return (await requireProject()).orgId
 }
@@ -117,7 +117,7 @@ export async function billingPortal(opts: OrgOpt & { open?: boolean; json?: bool
 // "opening", not "opened": a launcher that starts and then fails reports it asynchronously,
 // so openUrl's true return is an attempt, not a confirmation (see util.ts) — and the URL is
 // already printed above for exactly that case.
-function presentUrl(url: string, label: string, open?: boolean): void {
+export function presentUrl(url: string, label: string, open?: boolean): void {
   info(label)
   info(`  ${url}`)
   if (open !== false && openUrl(url)) info('(opening in your default browser…)')
