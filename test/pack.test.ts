@@ -299,6 +299,17 @@ describe('packDirectory — ignore files', () => {
     expect(names).toContain('axb/keep.env') // ...which this one is
   })
 
+  it('excludes what a POSIX named class names, so [[:digit:]].env withholds 1.env', () => {
+    const dir = mk()
+    writeFileSync(join(dir, '.gitignore'), '[[:digit:]].env\n')
+    writeFileSync(join(dir, '1.env'), 'x\n')
+    writeFileSync(join(dir, 'a.env'), 'x\n')
+
+    const names = packedNames(dir)
+    expect(names).not.toContain('1.env')
+    expect(names).toContain('a.env')
+  })
+
   it('excludes a file named ] for a []] rule', () => {
     const dir = mk()
     writeFileSync(join(dir, '.gitignore'), '[]]\n')

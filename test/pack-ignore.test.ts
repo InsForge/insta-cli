@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, it, expect } from 'vitest'
 import { compileIgnore } from '../src/pack-ignore.js'
 
@@ -178,9 +179,19 @@ describe('compileIgnore — git escaping', () => {
   })
 })
 
+// The git flavour's verdicts decide which files enter the archive, so the package producing them
+// is part of the archive's identity, exactly as fflate is. A caret would let an install pick a
+// release whose grammar differs and pack a different tree under the same digest.
+describe('compileIgnore — the git grammar is a pinned dependency', () => {
+  it('pins ignore to an exact version', () => {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { dependencies: Record<string, string> }
+    expect(pkg.dependencies.ignore).toMatch(/^\d+\.\d+\.\d+$/)
+  })
+})
+
 // The `**` grammar and bracket expressions, against git's wildmatch and docker's patternmatcher.
 // Every case here is a rule a real ignore file can carry, and each one either shipped a withheld
-// file or dropped a kept one before.
+// file or dropped a kept one under some earlier hand-written matcher.
 describe('compileIgnore — ** placement', () => {
   it('git: crosses directories only as a leading **/, a trailing /**, or /**/ in the middle', () => {
     expect(git('**/gen.js\n').excludes('a/b/gen.js', false)).toBe(true)
@@ -221,10 +232,22 @@ describe('compileIgnore — bracket expressions', () => {
     expect(git('[a-c].txt\n').excludes('d.txt', false)).toBe(false)
     expect(git('[\\]].txt\n').excludes('].txt', false)).toBe(true)
     expect(git('[\\\\].txt\n').excludes('\\.txt', false)).toBe(true)
+    // An escaped hyphen is a member, not a range: `[a\-c]` is the three characters a, - and c.
+    expect(git('[a\\-c]\n').excludes('-', false)).toBe(true)
+    expect(git('[a\\-c]\n').excludes('b', false)).toBe(false)
   })
 
-  it('reads an unclosed [ as a literal', () => {
-    expect(git('[abc\n').excludes('[abc', false)).toBe(true)
+  it('git: understands the POSIX named classes wildmatch does', () => {
+    expect(git('[[:digit:]].env\n').excludes('1.env', false)).toBe(true)
+    expect(git('[[:digit:]].env\n').excludes('a.env', false)).toBe(false)
+    expect(git('[[:alpha:]][[:digit:]].log\n').excludes('a1.log', false)).toBe(true)
+    expect(git('[[:alpha:]][[:digit:]].log\n').excludes('11.log', false)).toBe(false)
+  })
+
+  it('git: an unclosed [ matches nothing, as wildmatch aborts on it', () => {
+    // An earlier hand-written matcher read it as a literal `[`. wildmatch.c returns WM_ABORT_ALL
+    // for a class that never closes, so the rule is inert rather than a rule about a bracket.
+    expect(git('[abc\n').excludes('[abc', false)).toBe(false)
     expect(git('[abc\n').excludes('a', false)).toBe(false)
   })
 

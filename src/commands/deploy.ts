@@ -61,7 +61,7 @@ async function discoverLane(api: Pick<ApiClient, 'rawRequest'>, projectId: strin
     // caps the SERVER does not have, and a `none` with no reason died with `undefined`.
     if (tag === 'archive') {
       const l = (lane as { limits?: Record<string, unknown> }).limits
-      const positive = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v > 0
+      const positive = (v: unknown) => typeof v === 'number' && Number.isSafeInteger(v) && v > 0
       if (!l || !positive(l.maxArchiveBytes) || !positive(l.maxExtractedBytes) || !positive(l.maxFiles)) {
         die('this platform offered the archive lane without usable size limits — upgrade with `insta upgrade`')
       }
