@@ -2,11 +2,11 @@
 # InstaCloud CLI installer. Downloads the prebuilt native binary for your platform from GitHub
 # releases, verifies it against SHA256SUMS, and installs it. macOS / Linux / WSL.
 #
-#   curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/InsForge/instacloud-cli/main/install.sh | sh
 #
 # Agent one-liner (installs the CLI AND sets up coding-agent skills; on a human terminal it also
 # offers the browser login — unattended runs stay fully non-interactive):
-#   curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/agents.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/InsForge/instacloud-cli/main/agents.sh | sh
 #   (equivalent to piping this script with:  sh -s -- --agents; add -y for a hard non-interactive run)
 #
 # Flags:
@@ -52,7 +52,7 @@ case "$ENV_NAME" in
   *) echo "error: unknown environment '$ENV_NAME' (expected prod or staging)" >&2; exit 1 ;;
 esac
 
-REPO="InsForge/insta-cli"
+REPO="InsForge/instacloud-cli"
 BIN="insta"
 INSTALL_DIR="${INSTA_INSTALL_DIR:-$HOME/.insta/bin}"
 

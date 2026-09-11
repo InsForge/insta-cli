@@ -16,7 +16,7 @@ Native binary, no Node required (macOS / Linux / WSL). Installs to `~/.insta/bin
 verifies the download against `SHA256SUMS`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/InsForge/instacloud-cli/main/install.sh | sh
 ```
 
 From npm:
@@ -48,7 +48,7 @@ On macOS/Linux without Node, the native-binary installer puts the `insta` CLI on
 skill + MCP steps it then runs still need Node — the skills tool runs via npx). Never run it
 on native Windows — PowerShell's `curl` alias and the WSL `bash` shim break it; use npx
 above, or download `insta-windows-x64.exe` from the
-[releases page](https://github.com/InsForge/insta-cli/releases):
+[releases page](https://github.com/InsForge/instacloud-cli/releases):
 
 ```bash
 curl -fsSL agents.instacloud.com | sh
@@ -157,7 +157,7 @@ other, so switching environments drops the stored session and you log in again.
 | control plane | `api.instacloud.com` | `api.staging.instacloud.com` |
 | MCP server | `mcp.instacloud.com/mcp` | `mcp.staging.instacloud.com/mcp` |
 | MCP registers as | `insta-cloud` | `insta-cloud-staging` |
-| agent skills | `InsForge/insta-skills` | `InsForge/insta-skills#devel` |
+| agent skills | `InsForge/instacloud-skills` | `InsForge/instacloud-skills#devel` |
 | CLI channel | latest stable release | newest prerelease, else stable |
 
 ```bash
@@ -180,7 +180,7 @@ That host is a CloudFront cache, so after a change to the installer it can serve
 previous copy for up to about a day. This form is equivalent and always current:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/InsForge/insta-cli/main/install.sh | sh -s -- --agents --staging
+curl -fsSL https://raw.githubusercontent.com/InsForge/instacloud-cli/main/install.sh | sh -s -- --agents --staging
 ```
 
 If the environment cannot be applied — an installed CLI older than 0.0.23 has no `insta
@@ -204,7 +204,7 @@ build never reaches a production installer.
 ## Commands
 
 `insta --help` is the authoritative list. For flags, approval gates and plan limits, see the
-[full command reference](https://github.com/InsForge/insta-skills/blob/main/insta/cli-reference.md).
+[full command reference](https://github.com/InsForge/instacloud-skills/blob/main/insta/cli-reference.md).
 
 | Command | What it covers |
 |---|---|
@@ -252,7 +252,7 @@ build never reaches a production installer.
 ## Agent skills
 
 The `insta` skill and its task guides live in
-[InsForge/insta-skills](https://github.com/InsForge/insta-skills). `insta setup agent`
+[InsForge/instacloud-skills](https://github.com/InsForge/instacloud-skills). `insta setup agent`
 installs it user-globally for every coding agent on the machine. `insta project create` and
 `insta project link` additionally install the stack skills (Tigris, Better Auth) into the
 project, along with the `insta observe` credential-audit hook. Postgres needs no stack
