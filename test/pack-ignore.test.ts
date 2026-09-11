@@ -223,6 +223,14 @@ describe('compileIgnore — ** placement', () => {
     expect(docker('**.log\n').excludes('sub/debug.log', false)).toBe(true)
     expect(docker('src/**\n').excludes('src', true)).toBe(false)
   })
+
+  it('docker: eats the slash after any **, so a**/b reaches ab at the root as well as a/x/b', () => {
+    const ig = docker('a**/b\n')
+    expect(ig.excludes('ab', false)).toBe(true) // (.*/)? matched nothing
+    expect(ig.excludes('a/x/b', false)).toBe(true)
+    expect(ig.excludes('ax/b', false)).toBe(true)
+    expect(ig.excludes('axb', false)).toBe(false) // the optional group has to end at a slash
+  })
 })
 
 describe('compileIgnore — bracket expressions', () => {
@@ -360,9 +368,10 @@ describe('compileIgnore — a nested ignore file under an odd directory name', (
     expect(ig.excludes('weird/secrets.env', false)).toBe(false)
   })
 
-  it('still prunes on the real directory name, not the escaped one', () => {
+  // Only the exclude is asserted: git-mode canPrune is unconditional, so it says nothing here.
+  it('applies a directory-only rule under the real directory name', () => {
     const ig = nested('we*ird', 'build/\n')
     expect(ig.excludes('we*ird/build', true)).toBe(true)
-    expect(ig.canPrune('we*ird/build')).toBe(true)
+    expect(ig.excludes('we*ird/build', false)).toBe(false)
   })
 })

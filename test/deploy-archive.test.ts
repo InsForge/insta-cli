@@ -120,10 +120,9 @@ describe('deployArchive — the gated call and the poll after it', () => {
     expect(process.exitCode).toBe(2)
   })
 
-  // The body is composed only of values the packer reproduces and the target the user named, so
-  // a re-run after approving sends a byte-identical body and the grant applies. Port, websocket
-  // and replaceSource ride along because this call IS the deploy: there is no /deploy after it.
-  it('sends one body a re-run reproduces exactly, carrying every deploy option', async () => {
+  // Port, websocket and replaceSource ride along because this call IS the deploy: there is no
+  // /deploy after it.
+  it('carries every deploy option in the one gated body', async () => {
     const { api: a, calls } = api([
       { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'queued' } },
       { status: 200, body: live },
@@ -134,6 +133,29 @@ describe('deployArchive — the gated call and the poll after it', () => {
     expect(out).toEqual({ image: 'ecr.example/app@sha256:aa', url: 'https://app.example', branch: 'main', group: 'api', machineId: 'm1' })
     expect(calls[0]!.body).toEqual({ branch: 'main', group: 'api', archive: ref, port: 3000, websocket: true, replaceSource: true })
     expect(calls[1]!.path).toBe('/projects/p1/archive-deploys/op_1')
+  })
+
+  // The body is composed only of values the packer reproduces and the target the user named, so
+  // a re-run after approving sends a byte-identical body and the grant applies. Asserted by
+  // running twice, not by reading the code: this is the mechanism behind "no resumable state".
+  it('sends the identical body on a re-run and says which operation it rejoined', async () => {
+    const { api: a, calls } = api([
+      { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'queued' } },
+      { status: 200, body: live },
+      { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'live', resumed: true } },
+      { status: 200, body: live },
+    ])
+    const opts = { group: 'api', port: '3000', websocket: true, replaceSource: true }
+    const seen: string[] = []
+
+    const first = await deployArchive(a, 'p1', ref, 'main', opts, Date.now, noWait, (m) => seen.push(`1:${m}`))
+    const second = await deployArchive(a, 'p1', ref, 'main', { ...opts }, Date.now, noWait, (m) => seen.push(`2:${m}`))
+
+    expect(calls.map((c) => c.method)).toEqual(['POST', 'GET', 'POST', 'GET'])
+    expect(calls[2]!.body).toEqual(calls[0]!.body)
+    expect(second).toEqual(first)
+    // Only the run that rejoined an existing operation says so.
+    expect(seen.filter((m) => m.includes('resuming'))).toEqual(['2:resuming the deploy this archive already started'])
   })
 
   it('keeps polling through every in-flight state, one request at a time', async () => {

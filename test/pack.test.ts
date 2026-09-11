@@ -310,6 +310,21 @@ describe('packDirectory — ignore files', () => {
     expect(names).toContain('a.env')
   })
 
+  it('reads a .dockerignore a**/b the way docker does, reaching the root ab and the nested a/x/b', () => {
+    const dir = mk()
+    writeFileSync(join(dir, '.dockerignore'), 'a**/b\n')
+    writeFileSync(join(dir, 'ab'), 'x\n')
+    mkdirSync(join(dir, 'a'))
+    mkdirSync(join(dir, 'a', 'x'))
+    writeFileSync(join(dir, 'a', 'x', 'b'), 'x\n')
+    writeFileSync(join(dir, 'axb'), 'x\n')
+
+    const names = packedNames(dir)
+    expect(names).not.toContain('ab')
+    expect(names).not.toContain('a/x/b')
+    expect(names).toContain('axb')
+  })
+
   it('excludes a file named ] for a []] rule', () => {
     const dir = mk()
     writeFileSync(join(dir, '.gitignore'), '[]]\n')

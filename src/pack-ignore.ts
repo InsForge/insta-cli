@@ -72,14 +72,16 @@ const escapeLiteral = (c: string): string => c.replace(/[.*+?^${}()|[\]\\]/g, '\
 
 // Glob to RegExp the way moby/patternmatcher compiles one: `*` and `?` stop at a separator, `**`
 // crosses wherever it stands. `**foo` is a suffix match and `foo**` a prefix match on the literal
-// there, so `.*` is what docker does, not an approximation of it.
+// there, so `.*` is what docker does, not an approximation of it. And the slash after ANY `**` is
+// eaten with it, boundary or not: `a**/b` is `a(.*/)?b`, which matches `ab` at the root as well
+// as `a/x/b`. Leaving that slash mandatory kept `ab` in an upload a local docker build excludes.
 function translate(p: string): string {
   let out = ''
   let i = 0
   while (i < p.length) {
     if (p.startsWith('**', i)) {
       const atBoundary = i === 0 || p.charAt(i - 1) === '/'
-      if (atBoundary && p.charAt(i + 2) === '/') {
+      if (p.charAt(i + 2) === '/') {
         out += '(?:.*/)?' // any number of directories, including none
         i += 3
       } else if (atBoundary && i + 2 === p.length) {
