@@ -105,7 +105,7 @@ const setupCmd = program.command('setup').description('Set up this machine for I
 setupCmd.command('agent').description('Install the insta CLI (if missing), the insta skill for all coding agents, and the MCP server — targets production; pass --env staging for the staging deployment')
   .option('-y, --yes', 'non-interactive')
   .option('--env <prod|staging>', 'deployment to set this machine up for (default: prod — switches and persists, like `insta env use`)')
-  .option('--mcp-token', 'register the MCP server with a minted insta_ API token instead of OAuth (headless machines / CI)')
+  .option('--mcp-token', 'register Claude Code with a minted insta_ API token instead of OAuth (requires login and token-creation permission)')
   .option('--project <id>', 'also link this directory to an existing project after setup (flows through login first if needed)')
   .option('--create [name]', 'also create a new project and link this directory after setup (default name: this directory; mutually exclusive with --project)')
   .action(guard((o) => setup.setupAgent(o)))
@@ -114,7 +114,7 @@ setupCmd.command('agent').description('Install the insta CLI (if missing), the i
 const mcpCmd = program.command('mcp').description('insta-cloud remote MCP server integration')
 mcpCmd.command('install').description('Register the remote MCP server with coding agents (default: Claude Code + all detected)')
   .option('--agent <slug>', 'one agent: claude-code, cursor, codex, opencode, copilot, factory-droid')
-  .option('--mcp-token', 'claude-code only: minted insta_ API token instead of OAuth (headless machines / CI)')
+  .option('--mcp-token', 'claude-code only: minted insta_ API token instead of OAuth (requires login and token-creation permission)')
   .action(guard((o) => mcp.mcpInstall(o)))
 
 // ---- org ----
