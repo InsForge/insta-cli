@@ -129,7 +129,9 @@ describe('findCallerRepo', () => {
   } }) as unknown as ApiClient
   const ref = { owner: 'acme', repo: 'app' }
   const never = async () => { throw new Error('must not authorize') }
-  const listed = (repos: unknown[]) => fake({ '/orgs/org_1/github/repos': { repos } })
+  // A backend from before the claim route (404 there): the messages these assert are the console hand-off
+  // ones it keeps. What a claim changes is covered in the describe below.
+  const listed = (repos: unknown[]) => fake({ '/orgs/org_1/github/repos': { repos }, '/orgs/org_1/github/installations/claim': new ApiError(404, 'Route POST:/orgs/org_1/github/installations/claim not found', {}) })
   it('answers the installation the repo came from, as numbers, matching case-insensitively', async () => {
     await expect(findCallerRepo(listed([{ id: 42, owner: 'Acme', repo: 'App', installationId: 7 }]), 'org_1', ref, never)).resolves.toEqual({ installationId: 7, repoId: 42 })
   })
@@ -174,6 +176,108 @@ describe('findCallerRepo', () => {
   })
   it('an org-less link is refused before any request', async () => {
     await expect(findCallerRepo(fake({}), '', ref, never)).rejects.toThrow(/INSTA_ORG_ID/)
+  })
+
+  // The claim route answers differently as the person acts at GitHub, so these fakes answer per call:
+  // each path's answers are consumed in order, and the last one repeats.
+  describe('an unreachable repo claims the App installation on its account', () => {
+    afterEach(() => vi.restoreAllMocks())
+    const CLAIM = '/orgs/org_1/github/installations/claim'
+    const LIST = '/orgs/org_1/github/repos'
+    const hit = { id: 42, owner: 'acme', repo: 'app', installationId: 7 }
+    const url = 'https://github.com/apps/insta-cloud/installations/new'
+    const script = (answers: Record<string, unknown[]>) => {
+      const calls: Array<{ path: string; body: unknown }> = []
+      const said: string[] = []
+      const waits: number[] = []
+      const api = { request: async (_m: string, path: string, body?: unknown) => {
+        const key = path.split('?')[0]!
+        const queue = answers[key]
+        if (!queue?.length) throw new Error(`unexpected path ${path}`)
+        calls.push({ path: key, body })
+        const a = queue.length > 1 ? queue.shift() : queue[0]
+        if (a instanceof Error) throw a
+        return a
+      } } as unknown as ApiClient
+      // restoreAllMocks leaves the spied method a mock, so a "spy once" guard would skip every test after
+      // the first; spyOn on an already spied method reuses the spy, so a second fake in one test is fine.
+      vi.spyOn(process.stderr, 'write').mockImplementation((l: any) => { said.push(String(l)); return true })
+      const claims = () => calls.filter((c) => c.path === CLAIM)
+      return { api, calls, claims, said, waits, wait: async (s: number) => { waits.push(s) } }
+    }
+    it('a claim that lands lists again and answers from the installation just granted', async () => {
+      const d = script({ [LIST]: [{ repos: [] }, { repos: [hit] }], [CLAIM]: [{ installation: { installation_id: 7, account_login: 'acme' } }] })
+      await expect(findCallerRepo(d.api, 'org_1', ref, never, true, d.wait)).resolves.toEqual({ installationId: 7, repoId: 42 })
+      // Named by the repo's owner: the claim must not grant whatever else this person administers.
+      expect(d.claims().map((c) => c.body)).toEqual([{ accountLogin: 'acme' }])
+      expect(d.waits).toEqual([])
+    })
+    it('a repo reachable through another installation still claims — the account is what is missing', async () => {
+      const d = script({ [LIST]: [{ repos: [{ id: 9, owner: 'other', repo: 'x', installationId: 3 }] }, { repos: [hit] }], [CLAIM]: [{ installation: { installation_id: 7 } }] })
+      await expect(findCallerRepo(d.api, 'org_1', ref, never, true, d.wait)).resolves.toEqual({ installationId: 7, repoId: 42 })
+    })
+    it('granted, but the installation leaves this repo out: say where on GitHub to include it', async () => {
+      const d = script({ [LIST]: [{ repos: [] }], [CLAIM]: [{ installation: { installation_id: 7 } }] })
+      await expect(findCallerRepo(d.api, 'org_1', ref, never, true, d.wait)).rejects.toThrow(/installation on acme can reach[\s\S]*Repository access[\s\S]*--public/)
+    })
+    it('with nothing that can read the URL, it fails with the URL in hand instead of waiting', async () => {
+      const d = script({ [LIST]: [{ repos: [] }], [CLAIM]: [{ installUrl: url }] })
+      await expect(findCallerRepo(d.api, 'org_1', ref, never, false, d.wait)).rejects.toThrow(new RegExp(`not installed on acme[\\s\\S]*${url}[\\s\\S]*run this command again[\\s\\S]*--public`))
+      expect(d.waits).toEqual([])
+    })
+    it('a terminal prints the install URL, polls the claim until it lands, then lists again', async () => {
+      const d = script({ [LIST]: [{ repos: [] }, { repos: [hit] }], [CLAIM]: [{ installUrl: url }, { installUrl: url }, { installation: { installation_id: 7 } }] })
+      await expect(findCallerRepo(d.api, 'org_1', ref, never, true, d.wait)).resolves.toEqual({ installationId: 7, repoId: 42 })
+      // The URL IS the flow: without it on screen there is nothing for the person to do.
+      expect(d.said.join('')).toContain(url)
+      expect(d.said.join('')).toContain('not installed on acme')
+      expect(d.waits).toEqual([5, 5])
+      expect(d.claims()).toHaveLength(3)
+    })
+    it('a rate-limited or dropped poll backs off instead of ending the wait', async () => {
+      const d = script({ [LIST]: [{ repos: [] }, { repos: [hit] }], [CLAIM]: [{ installUrl: url }, new ApiError(429, 'HTTP 429', {}), new TypeError('socket hang up'), { installation: { installation_id: 7 } }] })
+      await expect(findCallerRepo(d.api, 'org_1', ref, never, true, d.wait)).resolves.toEqual({ installationId: 7, repoId: 42 })
+      expect(d.waits).toEqual([5, 10, 15])
+    })
+    it('a poll that fails for a real reason ends the wait with that reason', async () => {
+      const d = script({ [LIST]: [{ repos: [] }], [CLAIM]: [{ installUrl: url }, new ApiError(403, 'requires admin role', {})] })
+      await expect(findCallerRepo(d.api, 'org_1', ref, never, true, d.wait)).rejects.toThrow(/requires admin role/)
+    })
+    it('gives up after ten minutes of nobody installing', async () => {
+      const d = script({ [LIST]: [{ repos: [] }], [CLAIM]: [{ installUrl: url }] })
+      await expect(findCallerRepo(d.api, 'org_1', ref, never, true, d.wait)).rejects.toThrow(/not completed in time/)
+      expect(d.waits.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(600)
+      expect(d.waits.length).toBeLessThanOrEqual(120)
+    })
+    it('a backend without the claim route keeps the console messages, for an empty list and a partial one', async () => {
+      const missing = new ApiError(404, 'Route POST:/orgs/org_1/github/installations/claim not found', {})
+      const empty = script({ [LIST]: [{ repos: [] }], [CLAIM]: [missing] })
+      await expect(findCallerRepo(empty.api, 'org_1', ref, never, true, empty.wait)).rejects.toThrow(/install it on the account[\s\S]*console/)
+      const partial = script({ [LIST]: [{ repos: [{ id: 9, owner: 'acme', repo: 'other', installationId: 7 }] }], [CLAIM]: [missing] })
+      await expect(findCallerRepo(partial.api, 'org_1', ref, never, true, partial.wait)).rejects.toThrow(/not one your GitHub account can reach[\s\S]*--public/)
+      expect(empty.waits).toEqual([])
+    })
+    it('a claim refused as unlinked authorizes once, then claims again', async () => {
+      let authorized = 0
+      const authorize = async () => { authorized++; return [] }
+      const d = script({ [LIST]: [{ repos: [] }, { repos: [hit] }], [CLAIM]: [new ApiError(400, 'your github account is not linked — authorize github, then claim again', {}), { installation: { installation_id: 7 } }] })
+      await expect(findCallerRepo(d.api, 'org_1', ref, authorize, true, d.wait)).resolves.toEqual({ installationId: 7, repoId: 42 })
+      expect(authorized).toBe(1)
+      expect(d.claims()).toHaveLength(2)
+    })
+    it('a claim refused as unlinked with no reader is the old fast failure', async () => {
+      const d = script({ [LIST]: [{ repos: [] }], [CLAIM]: [new ApiError(400, 'your github account is not linked — authorize github, then claim again', {})] })
+      await expect(findCallerRepo(d.api, 'org_1', ref, never, false, d.wait)).rejects.toThrow(/nothing here can read the code/)
+    })
+    it('installations on other accounts only are named, with where the repo lives', async () => {
+      const d = script({ [LIST]: [{ repos: [] }], [CLAIM]: [{ installations: [{ installationId: 3, accountLogin: 'someoneelse', accountType: 'User' }] }] })
+      await expect(findCallerRepo(d.api, 'org_1', ref, never, true, d.wait)).rejects.toThrow(/installed on someoneelse but not on acme[\s\S]*--public/)
+    })
+    it('an answer with nothing to act on is a platform mismatch, not a silent wait', async () => {
+      const d = script({ [LIST]: [{ repos: [] }], [CLAIM]: [{}] })
+      await expect(findCallerRepo(d.api, 'org_1', ref, never, true, d.wait)).rejects.toThrow(/nothing to act on/)
+      expect(d.waits).toEqual([])
+    })
   })
 })
 
