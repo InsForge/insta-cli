@@ -17,24 +17,36 @@ type Rule = { re: RegExp; negated: boolean; dirOnly: boolean; literal: string }
 
 const escapeLiteral = (c: string): string => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-// Glob to RegExp: `*` and `?` stop at a separator, only `**` crosses one.
-function translate(p: string): string {
+// Glob to RegExp: `*` and `?` stop at a separator; when `**` crosses one depends on the flavour.
+//
+// git (wildmatch): `**` means "any number of directories" only at a segment boundary -- a leading
+// `**/`, a trailing `/**`, or `/**/` in the middle. Anywhere else "other consecutive asterisks are
+// considered regular asterisks", so `a**b` is `a*b` and stays inside one segment. Reading every
+// pair as directory-crossing let `!a**b/keep.env` re-include `a/x/b/keep.env` after `*.env` had
+// withheld it: the upload carried a file the rules excluded.
+//
+// docker (moby/patternmatcher): `**` crosses wherever it stands. `**foo` is a suffix match and
+// `foo**` a prefix match on the literal, so `.*` is what docker does, not an approximation of it.
+function translate(p: string, flavour: Flavour): string {
   let out = ''
   let i = 0
   while (i < p.length) {
-    if (p.startsWith('**/', i)) {
-      out += '(?:.*/)?' // any number of directories, including none
-      i += 3
-    } else if (p.startsWith('/**', i) && i + 3 === p.length) {
-      // git: `abc/**` matches everything INSIDE abc, NOT abc itself. Making the suffix optional
-      // matched the directory too, and a git-mode canPrune is unconditional, so the walker then
-      // pruned abc outright and `!abc/keep.txt` beneath it could never be reached -- a rule that
-      // reads as "keep this one file" silently dropped it from the upload.
-      out += '/.+'
-      i += 3
-    } else if (p.startsWith('**', i)) {
-      out += '.*'
-      i += 2
+    if (p.startsWith('**', i)) {
+      const atBoundary = i === 0 || p.charAt(i - 1) === '/'
+      if (atBoundary && p.charAt(i + 2) === '/') {
+        out += '(?:.*/)?' // any number of directories, including none
+        i += 3
+      } else if (atBoundary && i + 2 === p.length) {
+        // Bare `**` is everything. `abc/**` is everything INSIDE abc and NOT abc itself: making
+        // the suffix optional matched the directory too, and a git-mode canPrune is unconditional,
+        // so the walker then pruned abc outright and `!abc/keep.txt` beneath it could never be
+        // reached -- a rule that reads as "keep this one file" silently dropped it from the upload.
+        out += i === 0 ? '.*' : '.+'
+        i += 2
+      } else {
+        out += flavour === 'docker' ? '.*' : '[^/]*'
+        i += 2
+      }
     } else if (p.charAt(i) === '*') {
       out += '[^/]*'
       i += 1
@@ -42,14 +54,13 @@ function translate(p: string): string {
       out += '[^/]'
       i += 1
     } else if (p.charAt(i) === '[') {
-      const end = p.indexOf(']', i + 1)
-      if (end === -1) {
+      const cls = bracket(p, i, flavour)
+      if (cls) {
+        out += cls.re
+        i = cls.end
+      } else {
         out += '\\['
         i += 1
-      } else {
-        const cls = p.slice(i + 1, end)
-        out += '[' + (cls.startsWith('!') ? '^' + cls.slice(1) : cls) + ']'
-        i = end + 1
       }
     } else if (p.charAt(i) === '\\' && i + 1 < p.length) {
       // Escape: the next character is data, not a wildcard. Git documents this, and docker's
@@ -62,6 +73,39 @@ function translate(p: string): string {
     }
   }
   return out
+}
+
+// Inside a class only these carry regex meaning; `-` is left alone so a range stays a range.
+const escapeInClass = (c: string): string => (/[\\\]\[^-]/.test(c) ? '\\' + c : c)
+
+// A bracket expression starting at p[start], or null when no `]` closes it and the `[` is a
+// literal. A `]` right after the opening `[` (or after the negation) is a MEMBER, not the close:
+// `[]]` names a file called `]`, and ending the class at the first `]` made that rule match
+// nothing at all. `\` quotes the next character. git negates on `!` or `^`; docker hands the class
+// to Go's regexp, where only `^` does and a `!` is an ordinary member. A negated class never
+// matches a separator in either, the rule `*` and `?` already follow.
+function bracket(p: string, start: number, flavour: Flavour): { re: string; end: number } | null {
+  let j = start + 1
+  let negated = false
+  if (p.charAt(j) === '^' || (flavour === 'git' && p.charAt(j) === '!')) {
+    negated = true
+    j += 1
+  }
+  let body = ''
+  let first = true
+  while (j < p.length) {
+    const c = p.charAt(j)
+    if (c === ']' && !first) return { re: `[${negated ? '^/' : ''}${body}]`, end: j + 1 }
+    first = false
+    if (c === '\\' && j + 1 < p.length) {
+      body += escapeInClass(p.charAt(j + 1))
+      j += 2
+      continue
+    }
+    body += c === '-' ? c : escapeInClass(c)
+    j += 1
+  }
+  return null
 }
 
 // Wildcard-free head of a pattern; empty means it could match anywhere. Escape-aware for the same
@@ -167,7 +211,7 @@ export function compileIgnore(files: IgnoreFile[], flavour: Flavour): Ignore {
       // head the same way, since that head is compared against real path text.
       const prefix = f.base ? escapeLiteral(f.base) + '/' : ''
       const head = f.base ? `${f.base}/${literalHead(body)}` : literalHead(body)
-      rules.push({ re: new RegExp('^' + prefix + translate(body) + '$'), negated, dirOnly, literal: head })
+      rules.push({ re: new RegExp('^' + prefix + translate(body, flavour) + '$'), negated, dirOnly, literal: head })
     }
   }
 

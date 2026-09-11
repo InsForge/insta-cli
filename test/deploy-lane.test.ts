@@ -16,7 +16,9 @@ function srcDir(withDockerfile = true): string {
 const noRun: BuildRunner = async () => ({ code: 0, output: '' })
 
 // A platform that answers `lane` on discovery and records every path and body it was asked for.
-function fakeApi(lane: unknown, extra: Record<string, unknown> = {}) {
+// `objectStates` scripts the archive status reads in order; the default says the object is
+// already there, so a test that is not about the upload never needs an uploader.
+function fakeApi(lane: unknown, extra: Record<string, unknown> = {}, objectStates: string[] = ['valid']) {
   const paths: string[] = []
   const bodies: Record<string, any> = {}
   const api = {
@@ -32,7 +34,8 @@ function fakeApi(lane: unknown, extra: Record<string, unknown> = {}) {
         if (lane === '404') throw new ApiError(404, 'Route not found')
         return { status: 200, body: lane }
       }
-      if (path.includes('/build-uploads/')) return { status: 200, body: { state: 'valid' } }
+      if (path.includes('/build-uploads/')) return { status: 200, body: { state: objectStates.length > 1 ? objectStates.shift() : objectStates[0] } }
+      if (key === 'POST /projects/p1/build-uploads') return { status: 200, body: { uploadUrl: 'https://bucket.example/o?put=1', expiresAt: '2026-09-09T00:15:00Z' } }
       // The deploy is accepted as an operation; the poll answers a finished one, so the loop runs once.
       if (key === 'POST /projects/p1/archive-deploys') return { status: 202, body: { status: 'accepted', operationId: 'op_1', state: 'queued' } }
       if (path.includes('/archive-deploys/')) return { status: 200, body: { state: 'live', imageRef: 'ecr.example/app@sha256:aa', url: 'https://app.example', branch: 'main', group: 'api' } }
@@ -68,15 +71,22 @@ describe('prepareSource — lane dispatch', () => {
   // by the time it returns the deploy has happened and it hands back the outcome, not an image
   // for a `/deploy` call that no longer exists on this path.
   it('packs, uploads, and resolves to a finished deploy, minting no deploy token', async () => {
-    const { api, paths, bodies } = fakeApi({ lane: 'archive', limits: { maxArchiveBytes: 1024 * 1024, maxExtractedBytes: 1024 * 1024, maxFiles: 100 } })
+    // The object is missing on the first read, so this run really mints and really uploads; a
+    // fake that said "valid" up front let the title claim an upload that never happened.
+    const { api, paths, bodies } = fakeApi({ lane: 'archive', limits: { maxArchiveBytes: 1024 * 1024, maxExtractedBytes: 1024 * 1024, maxFiles: 100 } }, {}, ['missing', 'valid'])
+    const puts: Array<{ url: string; bytes: number }> = []
 
-    const out = await prepareSource(api, 'p1', srcDir(false), 'main', { group: 'api' }, noRun)
+    const out = await prepareSource(api, 'p1', srcDir(false), 'main', { group: 'api' }, noRun, async (url, body) => { puts.push({ url, bytes: body.length }) })
 
     expect(out).toEqual({ deployed: { image: 'ecr.example/app@sha256:aa', url: 'https://app.example', branch: 'main', group: 'api', machineId: undefined } })
     expect(bodies['POST /projects/p1/archive-deploys'].archive.build).toEqual({ type: 'nixpacks' })
     expect(paths).not.toContain('POST /projects/p1/deploy-token')
     expect(paths).not.toContain('POST /projects/p1/deploy')
+    // One PUT, of the bytes the mint was told about, and the deploy names the same digest.
+    expect(puts).toEqual([{ url: 'https://bucket.example/o?put=1', bytes: bodies['POST /projects/p1/build-uploads'].size }])
+    expect(bodies['POST /projects/p1/archive-deploys'].archive.archiveSha256).toBe(bodies['POST /projects/p1/build-uploads'].sha256)
     // Order matters: the object has to exist before a deploy is asked for it.
+    expect(paths.indexOf('POST /projects/p1/build-uploads')).toBeGreaterThan(-1)
     expect(paths.indexOf('POST /projects/p1/build-uploads')).toBeLessThan(paths.indexOf('POST /projects/p1/archive-deploys'))
   })
 

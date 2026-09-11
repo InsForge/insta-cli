@@ -156,11 +156,13 @@ describe('compileIgnore — git escaping', () => {
   })
 
   it('does not let an escaped wildcard cut the prune head short', () => {
-    // literalHead must read the escape the way translate does, or it stops at the `*` and prunes
-    // on the head "build/" instead of the real directory name.
-    const ig = git('build\\*dir/\n')
-    expect(ig.excludes('build*dir', true)).toBe(true)
-    expect(ig.canPrune('build*dir')).toBe(true)
+    // literalHead is consulted for docker negations only: the walker may not prune a directory a
+    // re-include reaches into. It must read the escape the way translate does, or the head stops
+    // at the `*` as "build\" and the directory holding keep.txt is pruned with the file inside it.
+    const ig = docker('*\n!build\\*dir/keep.txt\n')
+    expect(ig.excludes('build*dir/keep.txt', false)).toBe(false)
+    expect(ig.canPrune('build*dir')).toBe(false)
+    expect(ig.canPrune('other')).toBe(true)
   })
 
   it('still honours a CRLF file, where \\r is the line ending and not pattern text', () => {
@@ -173,6 +175,70 @@ describe('compileIgnore — git escaping', () => {
     expect(docker('\\*.log\n').excludes('*.log', false)).toBe(true)
     expect(docker('\\*.log\n').excludes('debug.log', false)).toBe(false)
     expect(docker('#comment\n').excludes('#comment', false)).toBe(false)
+  })
+})
+
+// The `**` grammar and bracket expressions, against git's wildmatch and docker's patternmatcher.
+// Every case here is a rule a real ignore file can carry, and each one either shipped a withheld
+// file or dropped a kept one before.
+describe('compileIgnore — ** placement', () => {
+  it('git: crosses directories only as a leading **/, a trailing /**, or /**/ in the middle', () => {
+    expect(git('**/gen.js\n').excludes('a/b/gen.js', false)).toBe(true)
+    expect(git('src/**/gen.js\n').excludes('src/gen.js', false)).toBe(true)
+    expect(git('src/**/gen.js\n').excludes('src/a/b/gen.js', false)).toBe(true)
+    expect(git('src/**\n').excludes('src/a/b', false)).toBe(true)
+    expect(git('src/**\n').excludes('src', true)).toBe(false)
+  })
+
+  it('git: reads any other ** as a plain *, so it stays inside one segment', () => {
+    const ig = git('*.env\n!a**b/keep.env\n')
+    expect(ig.excludes('a/x/b/keep.env', false)).toBe(true) // still excluded: the negation does not reach
+    expect(ig.excludes('axb/keep.env', false)).toBe(false)
+    expect(ig.excludes('ab/keep.env', false)).toBe(false)
+    expect(git('foo**bar\n').excludes('foo/bar', false)).toBe(false)
+    expect(git('foo**bar\n').excludes('fooXbar', false)).toBe(true)
+  })
+
+  it('docker: crosses directories wherever ** stands, as patternmatcher does', () => {
+    expect(docker('a**b/keep.env\n').excludes('a/x/b/keep.env', false)).toBe(true)
+    expect(docker('**.log\n').excludes('sub/debug.log', false)).toBe(true)
+    expect(docker('src/**\n').excludes('src', true)).toBe(false)
+  })
+})
+
+describe('compileIgnore — bracket expressions', () => {
+  it('treats a ] right after the opening [ as a member, so []] names a file called ]', () => {
+    const ig = git('[]]\n')
+    expect(ig.excludes(']', false)).toBe(true)
+    expect(ig.excludes('a', false)).toBe(false)
+    expect(git('[!]a]\n').excludes(']', false)).toBe(false)
+    expect(git('[!]a]\n').excludes('a', false)).toBe(false)
+    expect(git('[!]a]\n').excludes('b', false)).toBe(true)
+  })
+
+  it('keeps ranges and escapes inside a class', () => {
+    expect(git('[a-c].txt\n').excludes('b.txt', false)).toBe(true)
+    expect(git('[a-c].txt\n').excludes('d.txt', false)).toBe(false)
+    expect(git('[\\]].txt\n').excludes('].txt', false)).toBe(true)
+    expect(git('[\\\\].txt\n').excludes('\\.txt', false)).toBe(true)
+  })
+
+  it('reads an unclosed [ as a literal', () => {
+    expect(git('[abc\n').excludes('[abc', false)).toBe(true)
+    expect(git('[abc\n').excludes('a', false)).toBe(false)
+  })
+
+  it('never lets a negated class stand in for a separator', () => {
+    expect(git('a[!x]b\n').excludes('a/b', false)).toBe(false)
+    expect(git('a[!x]b\n').excludes('ayb', false)).toBe(true)
+  })
+
+  it('docker: negates on ^ only, a ! is an ordinary member', () => {
+    expect(docker('[^a].txt\n').excludes('b.txt', false)).toBe(true)
+    expect(docker('[^a].txt\n').excludes('a.txt', false)).toBe(false)
+    expect(docker('[!a].txt\n').excludes('!.txt', false)).toBe(true)
+    expect(docker('[!a].txt\n').excludes('a.txt', false)).toBe(true)
+    expect(docker('[!a].txt\n').excludes('b.txt', false)).toBe(false)
   })
 })
 

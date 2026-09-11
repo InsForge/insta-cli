@@ -5,6 +5,7 @@ import { info, die, printJson, handleApproval, renderNextActions, CliExit } from
 import { flyctlBuildAndPush, ensureFlyctl, defaultBuildRunner, stderrBuildRunner, type BuildRunner } from '../flyctl-build.js'
 import { packDirectory, windowsModeCaveat, type ArchiveLimits } from '../pack.js'
 import { deployArchive, uploadArchive, type DeployOutcome, type Uploader } from '../deploy-archive.js'
+import { parsePort } from './services.js'
 
 type DeployOpts = { image?: string; branch?: string; group?: string; port?: string; websocket?: boolean; replaceSource?: boolean; json?: boolean }
 
@@ -65,7 +66,8 @@ async function discoverLane(api: Pick<ApiClient, 'rawRequest'>, projectId: strin
         die('this platform offered the archive lane without usable size limits — upgrade with `insta upgrade`')
       }
     }
-    if (tag === 'none' && typeof (lane as { reason?: unknown }).reason !== 'string') {
+    const reason = (lane as { reason?: unknown }).reason
+    if (tag === 'none' && (typeof reason !== 'string' || !reason.trim())) {
       die('this platform refused a source build without saying why — upgrade with `insta upgrade`')
     }
     return lane
@@ -154,7 +156,15 @@ export async function deploy(dir: string | undefined, opts: DeployOpts): Promise
   const branch = opts.branch ?? p.branch
   const log = note(opts)
 
-  let port = opts.port ? Number(opts.port) : undefined
+  // Junk fails here, before a directory is packed and uploaded for a body the platform would only
+  // refuse: the same parser every other --port in this CLI runs. `Number()` alone sent NaN as
+  // `null` and let 0 or 70000 travel to the server.
+  let port: number | undefined
+  try {
+    port = opts.port === undefined ? undefined : parsePort(opts.port)
+  } catch (e) {
+    die(`--${(e as Error).message}`)
+  }
   if (dir && port === undefined) {
     const dockerfile = join(resolve(process.cwd(), dir), 'Dockerfile')
     const exposed = existsSync(dockerfile) ? dockerfileExposedPort(readFileSync(dockerfile, 'utf8')) : undefined

@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, utimesSync, symlinkSync, linkSync, lstatSync, unlinkSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, utimesSync, symlinkSync, linkSync, lstatSync, unlinkSync, renameSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
@@ -114,8 +114,8 @@ describe('packDirectory — determinism', () => {
   // The digest of these bytes is the archive's IDENTITY: the storage id, the dedup key, and part
   // of the approval-bound deploy body. Pinning it is what makes "one tree, one identity, every
   // machine" a property the suite defends rather than a sentence in a PR. Verified out-of-band as
-  // well: this fixture packs to the same 315 bytes and the same digest under node:25 and
-  // oven/bun, which node:zlib did not (360 vs 353 bytes, different digests).
+  // well: this fixture packs to the same bytes and the same digest under node:25 and oven/bun,
+  // which node:zlib did not (different lengths, different digests).
   itModes('produces a byte-identical .tar.gz, not just a byte-identical tar', () => {
     const dir = mk()
     writeFileSync(join(dir, 'Dockerfile'), 'FROM alpine\n')
@@ -279,6 +279,35 @@ describe('packDirectory — ignore files', () => {
     const names = packedNames(dir)
     expect(names).not.toContain('sub/x.txt')
     expect(names).toContain('x.txt')
+  })
+
+  // The rules an author relies on decide the packed list, not a matcher's approximation of them.
+  // Both of these shipped a withheld file: `**` read as directory-crossing wherever it stood, and
+  // a class ended at its first `]`.
+  it('keeps a git ** inside one segment unless it stands alone between separators', () => {
+    const dir = mk()
+    writeFileSync(join(dir, '.gitignore'), '*.env\n!a**b/keep.env\n')
+    mkdirSync(join(dir, 'a'))
+    mkdirSync(join(dir, 'a', 'x'))
+    mkdirSync(join(dir, 'a', 'x', 'b'))
+    writeFileSync(join(dir, 'a', 'x', 'b', 'keep.env'), 'k\n')
+    mkdirSync(join(dir, 'axb'))
+    writeFileSync(join(dir, 'axb', 'keep.env'), 'k\n')
+
+    const names = packedNames(dir)
+    expect(names).not.toContain('a/x/b/keep.env') // `a**b` is `a*b`: one segment
+    expect(names).toContain('axb/keep.env') // ...which this one is
+  })
+
+  it('excludes a file named ] for a []] rule', () => {
+    const dir = mk()
+    writeFileSync(join(dir, '.gitignore'), '[]]\n')
+    writeFileSync(join(dir, ']'), 'x\n')
+    writeFileSync(join(dir, 'a'), 'x\n')
+
+    const names = packedNames(dir)
+    expect(names).not.toContain(']')
+    expect(names).toContain('a')
   })
 
   it('does not consult a nested .dockerignore', () => {
@@ -468,7 +497,25 @@ describe('readEntry — the file read cannot be swapped out from under the walk'
     expect(() => readEntry(abs, found('a.txt', st))).toThrow(/changed while packing/)
   })
 
-  // NOT tested: a same-size delete+recreate. Measured on linux, the inode is reused and
-  // mtimeNs/ctimeNs are identical inside one timestamp tick, so no stat-based check can see it.
-  // Asserting either way would encode a guess -- the limitation is documented at readEntry.
+  it('refuses a same-size file swapped in by rename after the walk', () => {
+    const dir = mk()
+    const abs = join(dir, 'a.txt')
+    writeFileSync(abs, 'hello\n')
+    const st = lstatSync(abs)
+    const other = join(dir, 'b.txt')
+    writeFileSync(other, 'WORLD\n') // the same length, so only the identity check can tell
+    // Both files exist at once, so they cannot share an inode, and a rename keeps b's. Stated as
+    // a precondition so a failure here names the fixture and not readEntry.
+    expect(lstatSync(other).ino).not.toBe(st.ino)
+    renameSync(other, abs)
+
+    let out = ''
+    try { out = readEntry(abs, found('a.txt', st)).toString() } catch (e) { out = `threw: ${(e as Error).message}` }
+    expect(out).not.toContain('WORLD')
+    expect(out).toMatch(/changed while packing/)
+  })
+
+  // NOT tested: a same-size DELETE and recreate at the same path. Measured on linux, the inode is
+  // reused and mtimeNs/ctimeNs are identical inside one timestamp tick, so no stat-based check can
+  // see it. Asserting either way would encode a guess -- the limitation is documented at readEntry.
 })
