@@ -151,11 +151,72 @@ export function canAuthorizeHere(opts: { json?: boolean } = {}): boolean {
   return !!agentMode() || !!process.stderr.isTTY
 }
 
-export async function findCallerRepo(api: ApiClient, orgId: string, ref: RepoRef, authorize: typeof authorizeTerminal = authorizeTerminal, canAuthorize = canAuthorizeHere()): Promise<{ installationId: number; repoId: number }> {
+const NO_READER = 'this GitHub account is not authorized for InstaCloud yet, and nothing here can read the code GitHub shows — run `insta compute connect-repo` from a terminal, connect the repository from the console, or pass --public for a public repository'
+
+// The platform answers a claim with exactly one of these: the installation it granted the org, the
+// accounts it could have claimed when none was named, or where to install the App when there is nothing.
+type ClaimAnswer = {
+  installation?: { installation_id?: number | string; account_login?: string }
+  installations?: Array<{ installationId: number; accountLogin: string; accountType: string }>
+  installUrl?: string
+}
+
+// Ten minutes of waiting, counted in the waits themselves so a test's instant wait still ends it.
+const INSTALL_WAIT_SECONDS = 600
+
+// GitHub has no API that installs an App: the person does that in a browser, and the platform then
+// claims what they installed with the identity the device flow linked — so nothing here needs a redirect.
+// Answers whether an installation on the repo's account is granted to the org now; `null` means the
+// platform predates the claim route, and the caller falls back to sending the person to the console.
+export async function claimInstallation(api: ApiClient, orgId: string, ref: RepoRef, authorize: typeof authorizeTerminal = authorizeTerminal, canAuthorize = canAuthorizeHere(), wait: (s: number) => Promise<void> = sleepSeconds): Promise<boolean | null> {
+  const claim = () => api.request<ClaimAnswer>('POST', `/orgs/${encodeURIComponent(orgId)}/github/installations/claim`, { accountLogin: ref.owner })
+  let answer: ClaimAnswer
+  try {
+    answer = await claim()
+  } catch (e) {
+    // The route itself is missing on a backend from before it; any other 404 would have failed the listing first.
+    if (e instanceof ApiError && e.status === 404) return null
+    if (!needsAuthorization(e)) throw e
+    if (!canAuthorize) throw new Error(NO_READER)
+    await authorize(api, orgId)
+    answer = await claim()
+  }
+  if (answer.installation) return true
+  if (answer.installations?.length) {
+    throw new Error(`the InstaCloud GitHub App is installed on ${answer.installations.map((i) => i.accountLogin).join(', ')} but not on ${ref.owner} — install it there (the account that owns ${ref.owner}/${ref.repo}), or pass --public for a public repository`)
+  }
+  if (!answer.installUrl) throw new Error('the GitHub App claim answered with nothing to act on — is the platform up to date?')
+  if (!canAuthorize) {
+    throw new Error(`the InstaCloud GitHub App is not installed on ${ref.owner} — install it at ${answer.installUrl} (pick the account ${ref.owner} and include ${ref.repo}), then run this command again, or pass --public for a public repository`)
+  }
+  // stderr, not stdout: --json must stay one parseable document.
+  const say = (line: string) => process.stderr.write(line + '\n')
+  say(`the InstaCloud GitHub App is not installed on ${ref.owner} — install it once:`)
+  say(`  open ${answer.installUrl}`)
+  say(`  (pick the account ${ref.owner} and include ${ref.repo} in the repositories it can reach)`)
+  say('waiting for the installation… (ctrl-c to abort)')
+  let interval = pollDelay(5)
+  for (let waited = 0; waited < INSTALL_WAIT_SECONDS; waited += interval) {
+    await wait(interval)
+    try {
+      answer = await claim()
+    } catch (e) {
+      // A dropped link, or the per-IP limiter, must not end an installation the person may be one click from finishing.
+      if (e instanceof ApiError && e.status !== 429) throw e
+      interval = pollDelay(interval + 5)
+      continue
+    }
+    if (answer.installation) return true
+  }
+  throw new Error('the GitHub App installation was not completed in time — run the command again')
+}
+
+export async function findCallerRepo(api: ApiClient, orgId: string, ref: RepoRef, authorize: typeof authorizeTerminal = authorizeTerminal, canAuthorize = canAuthorizeHere(), wait: (s: number) => Promise<void> = sleepSeconds): Promise<{ installationId: number; repoId: number }> {
   if (!orgId) throw new Error('this directory is linked without an org — set INSTA_ORG_ID alongside INSTA_PROJECT_ID, or link it with `insta project link`')
+  const list = async () => (await api.request<{ repos?: RepoRow[] }>('POST', `/orgs/${encodeURIComponent(orgId)}/github/repos`, {})).repos ?? []
   let repos: RepoRow[]
   try {
-    repos = (await api.request<{ repos?: RepoRow[] }>('POST', `/orgs/${encodeURIComponent(orgId)}/github/repos`, {})).repos ?? []
+    repos = await list()
   } catch (e) {
     // Two 403s carry an action; a third kind would be guessed at, so it is rethrown as the platform put it.
     if (e instanceof ApiError && e.status === 403 && /unclassified_agent_action/.test(e.message)) {
@@ -165,17 +226,28 @@ export async function findCallerRepo(api: ApiClient, orgId: string, ref: RepoRef
       throw new Error('connecting a repository needs the org admin role — ask an admin to connect it, or pass --public for a public repository')
     }
     if (!needsAuthorization(e)) throw e
-    if (!canAuthorize) {
-      throw new Error('this GitHub account is not authorized for InstaCloud yet, and nothing here can read the code GitHub shows — run `insta compute connect-repo` from a terminal, connect the repository from the console, or pass --public for a public repository')
-    }
+    if (!canAuthorize) throw new Error(NO_READER)
     repos = await authorize(api, orgId)
   }
   const whole = (n: unknown) => n !== null && n !== '' && Number.isInteger(Number(n)) && Number(n) > 0
-  const hit = repos.find((r) => r.owner.toLowerCase() === ref.owner.toLowerCase() && r.repo.toLowerCase() === ref.repo.toLowerCase())
-  if (hit && whole(hit.installationId) && whole(hit.id)) return { installationId: Number(hit.installationId), repoId: Number(hit.id) }
-  if (hit) throw new Error(`${ref.owner}/${ref.repo} came back without an installation to build it through — reconnect GitHub in the console, or pass --public for a public repository`)
-  if (repos.length === 0) throw new Error('the InstaCloud GitHub App reaches none of your repositories — install it on the account that owns this one (console → Add Service → GitHub Repo → Connect GitHub), or pass --public for a public repository')
-  throw new Error(`${ref.owner}/${ref.repo} is not one your GitHub account can reach through the App — grant the App access to it on GitHub, or pass --public for a public repository`)
+  const pick = (rows: RepoRow[]) => {
+    const hit = rows.find((r) => r.owner.toLowerCase() === ref.owner.toLowerCase() && r.repo.toLowerCase() === ref.repo.toLowerCase())
+    if (hit && whole(hit.installationId) && whole(hit.id)) return { installationId: Number(hit.installationId), repoId: Number(hit.id) }
+    if (hit) throw new Error(`${ref.owner}/${ref.repo} came back without an installation to build it through — reconnect GitHub in the console, or pass --public for a public repository`)
+    return null
+  }
+  const found = pick(repos)
+  if (found) return found
+  // Unreachable means the App is not installed on the repo's account, or is installed without this repo.
+  // The claim tells the two apart: it grants an installation the caller administers, or says where to install one.
+  const claimed = await claimInstallation(api, orgId, ref, authorize, canAuthorize, wait)
+  if (claimed === null) {
+    if (repos.length === 0) throw new Error('the InstaCloud GitHub App reaches none of your repositories — install it on the account that owns this one (console → Add Service → GitHub Repo → Connect GitHub), or pass --public for a public repository')
+    throw new Error(`${ref.owner}/${ref.repo} is not one your GitHub account can reach through the App — grant the App access to it on GitHub, or pass --public for a public repository`)
+  }
+  const again = pick(await list())
+  if (again) return again
+  throw new Error(`${ref.owner}/${ref.repo} is not one the App's installation on ${ref.owner} can reach — grant the App access to it on GitHub (Settings → Applications → InstaCloud → Repository access), or pass --public for a public repository`)
 }
 
 async function targetService(api: ApiClient, projectId: string, branch: string | undefined, serviceName: string | undefined) {
