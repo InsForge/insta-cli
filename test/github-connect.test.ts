@@ -1,7 +1,7 @@
 // `insta compute connect-repo` / `repo` / `watch-paths`: the parts that decide, without a network.
-import { describe, it, expect } from 'vitest'
-import type { ApiClient } from '../src/api.js'
-import { parseRepoRef, pickCandidate, sourceBody, repoLine, findInstalledRepo, parseWatchPaths, computeWatchPaths, watchPathsClause, type Candidate } from '../src/commands/github.js'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { ApiError, type ApiClient } from '../src/api.js'
+import { parseRepoRef, pickCandidate, sourceBody, repoLine, findCallerRepo, authorizeTerminal, canAuthorizeHere, parseWatchPaths, computeWatchPaths, watchPathsClause, type Candidate } from '../src/commands/github.js'
 
 const cand = (o: Partial<Candidate> = {}): Candidate => ({ rootDir: null, builder: 'nixpacks', buildCommand: 'npm run build', startCommand: 'npm start', port: 3000, ...o })
 
@@ -61,22 +61,136 @@ describe('sourceBody', () => {
   })
 })
 
-describe('findInstalledRepo', () => {
-  const fake = (answers: Record<string, unknown>) => ({ request: async (_m: string, path: string) => answers[path.split('?')[0]!] }) as unknown as ApiClient
+describe('authorizeTerminal', () => {
+  // A failed assertion would otherwise leave the stderr spy installed and cascade into the next test.
+  afterEach(() => vi.restoreAllMocks())
+  const start = { state: 's1', verificationUri: 'https://github.com/login/device', userCode: 'WDJB-MJHT', interval: 1, expiresAt: new Date(Date.now() + 900_000).toISOString() }
+  const drive = (answers: unknown[], startOverride: Record<string, unknown> = {}) => {
+    const polls: unknown[] = []; const waits: number[] = []; const said: string[] = []
+    const api = { request: async (method: string, path: string, body?: unknown) => {
+      if (path === '/orgs/org_1/github/device') { expect(method).toBe('POST'); return { ...start, ...startOverride } }
+      if (path !== '/orgs/org_1/github/device/poll') throw new Error(`unexpected path ${path}`)
+      expect(method).toBe('POST')
+      polls.push(body)
+      const a = answers.shift()
+      if (a instanceof Error) throw a
+      return a
+    } } as unknown as ApiClient
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((l: any) => { said.push(String(l)); return true })
+    return { api, polls, waits, said, spy, wait: async (s: number) => { waits.push(s) } }
+  }
+  it('prints the URL and the code, then polls with its own state until the person confirms', async () => {
+    const d = drive([{ pending: true, slowDownBy: 0 }, { pending: false, repos: [{ id: 42, owner: 'acme', repo: 'app', installationId: 7 }] }])
+    await expect(authorizeTerminal(d.api, 'org_1', d.wait)).resolves.toEqual([{ id: 42, owner: 'acme', repo: 'app', installationId: 7 }])
+    expect(d.polls).toEqual([{ state: 's1' }, { state: 's1' }])
+    // The URL and the code ARE the flow: without them on screen there is nothing for the person to do.
+    expect(d.said.join('')).toContain('https://github.com/login/device')
+    expect(d.said.join('')).toContain('WDJB-MJHT')
+  })
+  it('honours slow_down and refuses a negative one: either way the wait must not collapse', async () => {
+    const d = drive([{ pending: true, slowDownBy: 5 }, { pending: true, slowDownBy: -30 }, { pending: false, repos: [] }])
+    await authorizeTerminal(d.api, 'org_1', d.wait)
+    expect(d.waits).toEqual([1, 6, 6])
+  })
+  it('clamps an interval Node would fire instantly', async () => {
+    for (const [given, expected] of [[0, 5], [1e12, 60], [-4, 5]] as const) {
+      const d = drive([{ pending: false, repos: [] }], { interval: given })
+      await authorizeTerminal(d.api, 'org_1', d.wait)
+      expect(d.waits).toEqual([expected])
+    }
+  })
+  it('a missing expiry is refused, not turned into an endless loop', async () => {
+    const d = drive([{ pending: true }], { expiresAt: undefined })
+    await expect(authorizeTerminal(d.api, 'org_1', d.wait)).rejects.toThrow(/missing expiresAt/)
+    expect(d.polls).toEqual([])
+  })
+  it('stops at the deadline instead of polling forever', async () => {
+    const d = drive([{ pending: true }], { expiresAt: new Date(Date.now() - 1).toISOString() })
+    await expect(authorizeTerminal(d.api, 'org_1', d.wait)).rejects.toThrow(/expired before it was confirmed/)
+    expect(d.polls).toEqual([])
+  })
+  it('a rate-limited or dropped poll backs off instead of ending the authorization', async () => {
+    const d = drive([new ApiError(429, 'HTTP 429', {}), new TypeError('socket hang up'), { pending: false, repos: [] }])
+    await expect(authorizeTerminal(d.api, 'org_1', d.wait)).resolves.toEqual([])
+    expect(d.waits).toEqual([1, 6, 11])
+  })
+  it('a confirmed authorization that carries no repositories fails loudly', async () => {
+    const d = drive([{ pending: false }])
+    await expect(authorizeTerminal(d.api, 'org_1', d.wait)).rejects.toThrow(/returned no repositories/)
+  })
+})
+
+describe('findCallerRepo', () => {
+  const fake = (answers: Record<string, unknown>) => ({ request: async (_m: string, path: string) => {
+    const a = answers[path.split('?')[0]!]
+    if (a instanceof Error) throw a
+    if (a === undefined) throw new Error(`unexpected path ${path}`)
+    return a
+  } }) as unknown as ApiClient
   const ref = { owner: 'acme', repo: 'app' }
-  it('names the installation that sees the repo, as numbers, matching case-insensitively', async () => {
-    const api = fake({ '/github/installations': { installations: [{ installation_id: '7', account_login: 'Acme' }] }, '/github/installations/7/repos': { repos: [{ id: 42, owner: 'Acme', repo: 'App' }] } })
-    await expect(findInstalledRepo(api, 'org_1', ref)).resolves.toEqual({ installationId: 7, repoId: 42 })
+  const never = async () => { throw new Error('must not authorize') }
+  const listed = (repos: unknown[]) => fake({ '/orgs/org_1/github/repos': { repos } })
+  it('answers the installation the repo came from, as numbers, matching case-insensitively', async () => {
+    await expect(findCallerRepo(listed([{ id: 42, owner: 'Acme', repo: 'App', installationId: 7 }]), 'org_1', ref, never)).resolves.toEqual({ installationId: 7, repoId: 42 })
   })
-  it('a repo in no installation names the accounts and the --public way out', async () => {
-    const api = fake({ '/github/installations': { installations: [{ installation_id: '7', account_login: 'Acme' }] }, '/github/installations/7/repos': { repos: [] } })
-    await expect(findInstalledRepo(api, 'org_1', ref)).rejects.toThrow(/installed on: Acme.*--public/)
+  it('a repo this caller cannot reach says so, with the --public way out', async () => {
+    await expect(findCallerRepo(listed([{ id: 9, owner: 'acme', repo: 'other', installationId: 7 }]), 'org_1', ref, never)).rejects.toThrow(/not one your GitHub account can reach[\s\S]*--public/)
   })
-  it('no installation at all points at the console', async () => {
-    await expect(findInstalledRepo(fake({ '/github/installations': { installations: [] } }), 'org_1', ref)).rejects.toThrow(/connect GitHub in the console first/)
+  it('reaching nothing at all points at installing the App', async () => {
+    await expect(findCallerRepo(listed([]), 'org_1', ref, never)).rejects.toThrow(/install it on the account/)
+  })
+  it('a listed repo with no usable installation id is named as that, not as unreachable', async () => {
+    for (const bad of [null, 0, '', undefined]) {
+      await expect(findCallerRepo(listed([{ id: 42, owner: 'acme', repo: 'app', installationId: bad }]), 'org_1', ref, never)).rejects.toThrow(/without an installation to build it through/)
+    }
+  })
+  it('with nothing that can read the code, it fails with something to act on instead of waiting', async () => {
+    const api = fake({ '/orgs/org_1/github/repos': new ApiError(400, 'your github account is not linked — authorize github, then list again', {}) })
+    await expect(findCallerRepo(api, 'org_1', ref, never, false)).rejects.toThrow(/nothing here can read the code[\s\S]*--public/)
+  })
+  it('an unlinked terminal authorizes once, and the repos that come back are used', async () => {
+    const api = fake({ '/orgs/org_1/github/repos': new ApiError(400, 'your github account is not linked — authorize github, then list again', {}) })
+    await expect(findCallerRepo(api, 'org_1', ref, async () => [{ id: 42, owner: 'acme', repo: 'app', installationId: 7 }], true)).resolves.toEqual({ installationId: 7, repoId: 42 })
+  })
+  it('a dead authorization also authorizes again', async () => {
+    const api = fake({ '/orgs/org_1/github/repos': new ApiError(400, 'your github authorization is no longer accepted — authorize github again', {}) })
+    await expect(findCallerRepo(api, 'org_1', ref, async () => [{ id: 42, owner: 'acme', repo: 'app', installationId: 7 }], true)).resolves.toEqual({ installationId: 7, repoId: 42 })
+  })
+  it('the same words at another status are a real failure, not a reason to visit GitHub', async () => {
+    const api = fake({ '/orgs/org_1/github/repos': new ApiError(502, 'your github account is not linked', {}) })
+    await expect(findCallerRepo(api, 'org_1', ref, never)).rejects.toThrow(/not linked/)
+  })
+  it('an agent refused by policy is not told to go find an admin', async () => {
+    const api = fake({ '/orgs/org_1/github/repos': new ApiError(403, 'unclassified_agent_action', {}) })
+    await expect(findCallerRepo(api, 'org_1', ref, never)).rejects.toThrow(/does not let an agent authorize GitHub/)
+  })
+  it('a 403 we cannot name is rethrown as the platform put it, not guessed at', async () => {
+    const api = fake({ '/orgs/org_1/github/repos': new ApiError(403, 'forbidden', {}) })
+    await expect(findCallerRepo(api, 'org_1', ref, never)).rejects.toThrow(/^forbidden$/)
+  })
+  it('a member is told what role connecting needs', async () => {
+    const api = fake({ '/orgs/org_1/github/repos': new ApiError(403, 'requires admin role', {}) })
+    await expect(findCallerRepo(api, 'org_1', ref, never)).rejects.toThrow(/needs the org admin role/)
   })
   it('an org-less link is refused before any request', async () => {
-    await expect(findInstalledRepo(fake({}), '', ref)).rejects.toThrow(/INSTA_ORG_ID/)
+    await expect(findCallerRepo(fake({}), '', ref, never)).rejects.toThrow(/INSTA_ORG_ID/)
+  })
+})
+
+describe('canAuthorizeHere', () => {
+  it('--json has no reader, whatever the terminal is', () => {
+    expect(canAuthorizeHere({ json: true })).toBe(false)
+  })
+  it('a plain pipe has none either — the old fast failure is the right answer there', () => {
+    const tty = process.stderr.isTTY
+    try {
+      Object.defineProperty(process.stderr, 'isTTY', { value: false, configurable: true })
+      expect(canAuthorizeHere({})).toBe(false)
+      Object.defineProperty(process.stderr, 'isTTY', { value: true, configurable: true })
+      expect(canAuthorizeHere({})).toBe(true)
+    } finally {
+      Object.defineProperty(process.stderr, 'isTTY', { value: tty, configurable: true })
+    }
   })
 })
 
@@ -126,7 +240,6 @@ describe('computeWatchPaths validation (throws before any network/config access)
     await expect(computeWatchPaths('api', { set: ' , ' })).rejects.toThrow(/at least one pattern/)
   })
 })
-
 describe('parseWatchPaths', () => {
   it('splits the quoted list a shell hands over, and drops what is not a pattern', () => {
     expect(parseWatchPaths('apps/web/**,packages/ui/**')).toEqual(['apps/web/**', 'packages/ui/**'])
