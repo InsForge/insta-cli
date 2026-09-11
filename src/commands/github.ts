@@ -1,4 +1,4 @@
-import { ApiClient, requireProject } from '../api.js'
+import { ApiClient, ApiError, requireProject } from '../api.js'
 import { info, printJson } from '../util.js'
 import { resolveSoleService, parsePort, q } from './services.js'
 
@@ -89,22 +89,75 @@ export function repoLine(serviceName: string, s: SourceView): string {
   return `compute ${serviceName}: deploys from ${s.owner}/${s.repo}@${s.branch}${where} — ${how}${only}`
 }
 
-type InstallationRow = { installation_id: string; account_login?: string }
-type RepoRow = { id: number; owner: string; repo: string }
+type RepoRow = { id: number; owner: string; repo: string; installationId?: number }
+type GitHubDeviceStart = { state: string; verificationUri: string; userCode: string; interval?: number; expiresAt: string }
+type GitHubDevicePoll = { pending: boolean; slowDownBy?: number; repos?: RepoRow[] }
 
-export async function findInstalledRepo(api: ApiClient, orgId: string, ref: RepoRef): Promise<{ installationId: number; repoId: number }> {
+const sleepSeconds = (s: number) => new Promise<void>((r) => setTimeout(r, s * 1000))
+// Node fires a timer of ~1ms for anything it cannot represent — a huge delay overflows, a negative one
+// is clamped — so both ends are pinned or the wait becomes a hot poll of GitHub through us.
+const pollDelay = (s: number) => Math.min(Math.max(s, 1), 60)
+
+// GitHub shows the person a code to type; the platform holds the device code and finishes the exchange,
+// so nothing secret passes through the CLI.
+export async function authorizeTerminal(api: ApiClient, orgId: string, wait: (s: number) => Promise<void> = sleepSeconds): Promise<RepoRow[]> {
+  const start = await api.request<GitHubDeviceStart>('POST', `/orgs/${encodeURIComponent(orgId)}/github/device`, {})
+  const deadline = Date.parse(start.expiresAt)
+  // A NaN deadline makes every comparison false, which reads as an instant expiry — or, inverted, as a
+  // loop with no way out. Fail on it rather than guess which.
+  if (!Number.isFinite(deadline)) throw new Error('malformed device authorization response (missing expiresAt) — is the platform up to date?')
+  // stderr, not stdout: --json must stay one parseable document.
+  const say = (line: string) => process.stderr.write(line + '\n')
+  say('this terminal is not authorized with GitHub yet — authorize it once:')
+  say(`  open ${start.verificationUri} and enter the code ${start.userCode}`)
+  say('waiting for you to confirm… (ctrl-c to abort)')
+  const stopAt = Math.min(deadline, Date.now() + 3600_000) // no device code sensibly outlives an hour
+  const asked = Number(start.interval)
+  let interval = pollDelay(Number.isFinite(asked) && asked > 0 ? asked : 5)
+  while (Date.now() < stopAt) {
+    await wait(interval)
+    let answer: GitHubDevicePoll
+    try {
+      answer = await api.request<GitHubDevicePoll>('POST', `/orgs/${encodeURIComponent(orgId)}/github/device/poll`, { state: start.state })
+    } catch (e) {
+      // A dropped link, or the per-IP limiter this cadence already tripped on the login flow, must not
+      // end an authorization the person may be one click from finishing.
+      if (e instanceof ApiError && e.status !== 429) throw e
+      interval = pollDelay(interval + 5)
+      continue
+    }
+    if (!answer.pending) {
+      if (!answer.repos) throw new Error('the GitHub authorization completed but returned no repositories — is the platform up to date?')
+      return answer.repos
+    }
+    // GitHub asking for more room between polls, relayed by the platform; ignoring it gets us limited.
+    interval = pollDelay(interval + Math.max(Number(answer.slowDownBy) || 0, 0))
+  }
+  throw new Error('the GitHub authorization expired before it was confirmed — run the command again')
+}
+
+// Only the platform's own "you have no usable authorization" may send the person to GitHub: any other
+// failure is real, and a device flow cannot fix it.
+const needsAuthorization = (e: unknown): boolean => e instanceof ApiError && e.status === 400 && /not linked|no longer accepted/i.test(e.message)
+
+// The repositories THIS caller's GitHub account can reach — the same question the platform asks again
+// when the connect lands, so a repo missing here would be refused there anyway.
+export async function findCallerRepo(api: ApiClient, orgId: string, ref: RepoRef, authorize: typeof authorizeTerminal = authorizeTerminal): Promise<{ installationId: number; repoId: number }> {
   if (!orgId) throw new Error('this directory is linked without an org — set INSTA_ORG_ID alongside INSTA_PROJECT_ID, or link it with `insta project link`')
-  const { installations = [] } = await api.request<{ installations?: InstallationRow[] }>('GET', `/github/installations?orgId=${encodeURIComponent(orgId)}`)
-  if (installations.length === 0) {
-    throw new Error('no GitHub App installation for this org — connect GitHub in the console first (Add Service → GitHub Repo → Connect GitHub), or pass --public for a public repository')
+  let repos: RepoRow[]
+  try {
+    repos = (await api.request<{ repos?: RepoRow[] }>('POST', `/orgs/${encodeURIComponent(orgId)}/github/repos`, {})).repos ?? []
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 403) throw new Error('connecting a repository needs the org admin role — ask an admin to connect it, or pass --public for a public repository')
+    if (!needsAuthorization(e)) throw e
+    repos = await authorize(api, orgId)
   }
-  for (const inst of installations) {
-    const { repos = [] } = await api.request<{ repos?: RepoRow[] }>('GET', `/github/installations/${encodeURIComponent(inst.installation_id)}/repos?orgId=${encodeURIComponent(orgId)}`)
-    const hit = repos.find((r) => r.owner.toLowerCase() === ref.owner.toLowerCase() && r.repo.toLowerCase() === ref.repo.toLowerCase())
-    if (hit) return { installationId: Number(inst.installation_id), repoId: hit.id }
-  }
-  const accounts = installations.map((i) => i.account_login ?? i.installation_id).join(', ')
-  throw new Error(`${ref.owner}/${ref.repo} is not visible to the org's GitHub App installation (installed on: ${accounts}) — grant the App access to it in the console (Configure GitHub app), or pass --public for a public repository`)
+  const whole = (n: unknown) => n !== null && n !== '' && Number.isInteger(Number(n)) && Number(n) > 0
+  const hit = repos.find((r) => r.owner.toLowerCase() === ref.owner.toLowerCase() && r.repo.toLowerCase() === ref.repo.toLowerCase())
+  if (hit && whole(hit.installationId) && whole(hit.id)) return { installationId: Number(hit.installationId), repoId: Number(hit.id) }
+  if (hit) throw new Error(`${ref.owner}/${ref.repo} came back without an installation to build it through — reconnect GitHub in the console, or pass --public for a public repository`)
+  if (repos.length === 0) throw new Error('the InstaCloud GitHub App reaches none of your repositories — install it on the account that owns this one (console → Add Service → GitHub Repo → Connect GitHub), or pass --public for a public repository')
+  throw new Error(`${ref.owner}/${ref.repo} is not one your GitHub account can reach through the App — grant the App access to it on GitHub, or pass --public for a public repository`)
 }
 
 async function targetService(api: ApiClient, projectId: string, branch: string | undefined, serviceName: string | undefined) {
@@ -130,7 +183,7 @@ export async function computeConnectRepo(rawRef: string, serviceName: string | u
   const svc = await targetService(api, p.projectId, opts.branch ?? p.branch, serviceName)
   const src: ConnectSource = opts.public
     ? { source: 'public', ...ref }
-    : { source: 'app', ...(await findInstalledRepo(api, p.orgId, ref)), ...ref }
+    : { source: 'app', ...(await findCallerRepo(api, p.orgId, ref)), ...ref }
   // Detection must scan the branch that will be built: the build refuses commands that differ from what it detects there.
   const detected = await api.request<{ services: Candidate[] }>('POST', `/projects/${p.projectId}/github/detect`, { ...src, ...(opts.repoBranch ? { ref: opts.repoBranch } : {}) })
   const candidate = pickCandidate(detected.services, opts.rootDir)
