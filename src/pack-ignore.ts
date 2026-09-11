@@ -162,8 +162,9 @@ function posixClass(name: string, negated: boolean): string {
 // A bracket expression starting at p[start], or null when no `]` closes it and the `[` is a
 // literal. docker hands the class to Go's regexp: a `]` right after the opening `[` (or after
 // the `^`) is a MEMBER, not the close, `\` quotes the next character, and only `^` negates, so a
-// `!` is an ordinary member. A negated class never matches a separator, the rule `*` and `?`
-// already follow.
+// `!` is an ordinary member. Unlike `*` and `?`, these Go regexp classes CAN match a separator.
+// Verified against moby/patternmatcher compile() on 2026-09-11: it preserves bracket expressions
+// without adding a separator exclusion (private[^x]token matches private/token).
 function bracket(p: string, start: number): { re: string; end: number } | null {
   let j = start + 1
   let negated = false
@@ -175,7 +176,7 @@ function bracket(p: string, start: number): { re: string; end: number } | null {
   let first = true
   while (j < p.length) {
     const c = p.charAt(j)
-    if (c === ']' && !first) return { re: `[${negated ? '^/' : ''}${body}]`, end: j + 1 }
+    if (c === ']' && !first) return { re: `[${negated ? '^' : ''}${body}]`, end: j + 1 }
     first = false
     if (p.startsWith('[:', j)) {
       const named = /^\[:(\^?)([a-z]+):\]/.exec(p.slice(j))

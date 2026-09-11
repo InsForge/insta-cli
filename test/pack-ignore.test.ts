@@ -321,6 +321,22 @@ describe('compileIgnore — bracket expressions', () => {
     expect(git('a[!x]b\n').excludes('ayb', false)).toBe(true)
   })
 
+  it.each(['private[^x]token', 'private[^[:digit:]]token'])('docker: %s can match a separator', (pattern) => {
+    const ig = docker(pattern + '\n')
+    expect(ig.excludes('private/token', false)).toBe(true)
+    expect(ig.excludes('private/token/child', false)).toBe(true)
+    expect(ig.excludes('privateytoken', false)).toBe(true)
+    expect(ig.excludes('private5token', false)).toBe(pattern.includes('[^x]'))
+    expect(ig.excludes('private/other', false)).toBe(false)
+  })
+
+  it('docker: a negated class also matches a separator in re-inclusion rules', () => {
+    const ig = docker('private\n!private[^x]token\n')
+    expect(ig.excludes('private/token', false)).toBe(false)
+    expect(ig.excludes('private/other', false)).toBe(true)
+    expect(ig.canPrune('private')).toBe(false)
+  })
+
   it('docker: keeps a range a range, so [a-c] takes b', () => {
     expect(docker('[a-c].env\n').excludes('b.env', false)).toBe(true)
     expect(docker('[a-c].env\n').excludes('d.env', false)).toBe(false)

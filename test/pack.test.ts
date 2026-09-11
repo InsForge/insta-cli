@@ -55,6 +55,17 @@ function writeTreeB(dir: string): void {
 }
 
 describe('packDirectory — determinism', () => {
+  it('withholds files excluded by a Docker negated class matching a directory separator', () => {
+    const dir = mk()
+    mkdirSync(join(dir, 'private'))
+    writeFileSync(join(dir, '.dockerignore'), 'private[^x]token\n')
+    writeFileSync(join(dir, 'private', 'token'), 'test-secret')
+    writeFileSync(join(dir, 'private', 'keep.txt'), 'keep')
+    const names = readTar(packDirectory(dir).archive).map((entry) => entry.name)
+    expect(names).not.toContain('private/token')
+    expect(names).toContain('private/keep.txt')
+  })
+
   it('gives identical trees the same digest despite different mtimes and creation order', () => {
     const a = mk()
     const b = mk()
