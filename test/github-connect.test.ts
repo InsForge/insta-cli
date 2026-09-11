@@ -1,5 +1,5 @@
 // `insta compute connect-repo` / `repo` / `watch-paths`: the parts that decide, without a network.
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { ApiError, type ApiClient } from '../src/api.js'
 import { parseRepoRef, pickCandidate, sourceBody, repoLine, findCallerRepo, authorizeTerminal, parseWatchPaths, computeWatchPaths, watchPathsClause, type Candidate } from '../src/commands/github.js'
 
@@ -62,6 +62,8 @@ describe('sourceBody', () => {
 })
 
 describe('authorizeTerminal', () => {
+  // A failed assertion would otherwise leave the stderr spy installed and cascade into the next test.
+  afterEach(() => vi.restoreAllMocks())
   const start = { state: 's1', verificationUri: 'https://github.com/login/device', userCode: 'WDJB-MJHT', interval: 1, expiresAt: new Date(Date.now() + 900_000).toISOString() }
   const drive = (answers: unknown[], startOverride: Record<string, unknown> = {}) => {
     const polls: unknown[] = []; const waits: number[] = []; const said: string[] = []
@@ -84,38 +86,37 @@ describe('authorizeTerminal', () => {
     // The URL and the code ARE the flow: without them on screen there is nothing for the person to do.
     expect(d.said.join('')).toContain('https://github.com/login/device')
     expect(d.said.join('')).toContain('WDJB-MJHT')
-    d.spy.mockRestore()
   })
   it('honours slow_down and refuses a negative one: either way the wait must not collapse', async () => {
     const d = drive([{ pending: true, slowDownBy: 5 }, { pending: true, slowDownBy: -30 }, { pending: false, repos: [] }])
-    await authorizeTerminal(d.api, 'org_1', d.wait); d.spy.mockRestore()
+    await authorizeTerminal(d.api, 'org_1', d.wait)
     expect(d.waits).toEqual([1, 6, 6])
   })
   it('clamps an interval Node would fire instantly', async () => {
     for (const [given, expected] of [[0, 5], [1e12, 60], [-4, 5]] as const) {
       const d = drive([{ pending: false, repos: [] }], { interval: given })
-      await authorizeTerminal(d.api, 'org_1', d.wait); d.spy.mockRestore()
+      await authorizeTerminal(d.api, 'org_1', d.wait)
       expect(d.waits).toEqual([expected])
     }
   })
   it('a missing expiry is refused, not turned into an endless loop', async () => {
     const d = drive([{ pending: true }], { expiresAt: undefined })
     await expect(authorizeTerminal(d.api, 'org_1', d.wait)).rejects.toThrow(/missing expiresAt/)
-    expect(d.polls).toEqual([]); d.spy.mockRestore()
+    expect(d.polls).toEqual([])
   })
   it('stops at the deadline instead of polling forever', async () => {
     const d = drive([{ pending: true }], { expiresAt: new Date(Date.now() - 1).toISOString() })
     await expect(authorizeTerminal(d.api, 'org_1', d.wait)).rejects.toThrow(/expired before it was confirmed/)
-    expect(d.polls).toEqual([]); d.spy.mockRestore()
+    expect(d.polls).toEqual([])
   })
   it('a rate-limited or dropped poll backs off instead of ending the authorization', async () => {
     const d = drive([new ApiError(429, 'HTTP 429', {}), new TypeError('socket hang up'), { pending: false, repos: [] }])
-    await expect(authorizeTerminal(d.api, 'org_1', d.wait)).resolves.toEqual([]); d.spy.mockRestore()
+    await expect(authorizeTerminal(d.api, 'org_1', d.wait)).resolves.toEqual([])
     expect(d.waits).toEqual([1, 6, 11])
   })
   it('a confirmed authorization that carries no repositories fails loudly', async () => {
     const d = drive([{ pending: false }])
-    await expect(authorizeTerminal(d.api, 'org_1', d.wait)).rejects.toThrow(/returned no repositories/); d.spy.mockRestore()
+    await expect(authorizeTerminal(d.api, 'org_1', d.wait)).rejects.toThrow(/returned no repositories/)
   })
 })
 
@@ -158,6 +159,10 @@ describe('findCallerRepo', () => {
   it('an agent refused by policy is not told to go find an admin', async () => {
     const api = fake({ '/orgs/org_1/github/repos': new ApiError(403, 'unclassified_agent_action', {}) })
     await expect(findCallerRepo(api, 'org_1', ref, never)).rejects.toThrow(/does not let an agent authorize GitHub/)
+  })
+  it('a 403 we cannot name is rethrown as the platform put it, not guessed at', async () => {
+    const api = fake({ '/orgs/org_1/github/repos': new ApiError(403, 'forbidden', {}) })
+    await expect(findCallerRepo(api, 'org_1', ref, never)).rejects.toThrow(/^forbidden$/)
   })
   it('a member is told what role connecting needs', async () => {
     const api = fake({ '/orgs/org_1/github/repos': new ApiError(403, 'requires admin role', {}) })
