@@ -148,7 +148,12 @@ export async function findCallerRepo(api: ApiClient, orgId: string, ref: RepoRef
   try {
     repos = (await api.request<{ repos?: RepoRow[] }>('POST', `/orgs/${encodeURIComponent(orgId)}/github/repos`, {})).repos ?? []
   } catch (e) {
-    if (e instanceof ApiError && e.status === 403) throw new Error('connecting a repository needs the org admin role — ask an admin to connect it, or pass --public for a public repository')
+    // Two different 403s: the org role, and agent mode meeting a route its policy does not classify.
+    if (e instanceof ApiError && e.status === 403) {
+      throw new Error(/unclassified_agent_action/.test(e.message)
+        ? 'this backend does not let an agent authorize GitHub yet — connect the repository from the console, or pass --public for a public repository'
+        : 'connecting a repository needs the org admin role — ask an admin to connect it, or pass --public for a public repository')
+    }
     if (!needsAuthorization(e)) throw e
     repos = await authorize(api, orgId)
   }

@@ -155,6 +155,10 @@ describe('findCallerRepo', () => {
     const api = fake({ '/orgs/org_1/github/repos': new ApiError(502, 'your github account is not linked', {}) })
     await expect(findCallerRepo(api, 'org_1', ref, never)).rejects.toThrow(/not linked/)
   })
+  it('an agent refused by policy is not told to go find an admin', async () => {
+    const api = fake({ '/orgs/org_1/github/repos': new ApiError(403, 'unclassified_agent_action', {}) })
+    await expect(findCallerRepo(api, 'org_1', ref, never)).rejects.toThrow(/does not let an agent authorize GitHub/)
+  })
   it('a member is told what role connecting needs', async () => {
     const api = fake({ '/orgs/org_1/github/repos': new ApiError(403, 'requires admin role', {}) })
     await expect(findCallerRepo(api, 'org_1', ref, never)).rejects.toThrow(/needs the org admin role/)
@@ -164,6 +168,52 @@ describe('findCallerRepo', () => {
   })
 })
 
+describe('repo line', () => {
+  const gh = { type: 'github' as const, owner: 'acme', repo: 'app', branch: 'main', root_dir: null, auto_deploy: true, public: false }
+  it('says how it redeploys, or how to connect one', () => {
+    expect(repoLine('api', gh)).toBe('compute api: deploys from acme/app@main — every push to main redeploys it')
+    expect(repoLine('api', { ...gh, root_dir: 'apps/api', auto_deploy: false })).toBe('compute api: deploys from acme/app@main (apps/api/) — auto-deploy off (pushes do not redeploy)')
+    expect(repoLine('api', { ...gh, public: true, auto_deploy: false })).toMatch(/public repo, deploys are manual/)
+    expect(repoLine('api', { type: 'image', image: 'nginx:1.27' })).toMatch(/no repository connected \(runs image nginx:1.27\) — connect one with `insta compute connect-repo <owner\/repo> api`/)
+    expect(repoLine('api', { type: 'image', image: null })).toMatch(/^compute api: no repository connected — connect one/)
+  })
+
+  it('names the watch paths as repo-root paths, since the same line carries root_dir', () => {
+    expect(repoLine('api', { ...gh, watch_paths: ['apps/api/**', 'packages/**'] }))
+      .toBe('compute api: deploys from acme/app@main — every push to main redeploys it, but only when a push changes these repo-root paths: apps/api/**, packages/**')
+    // root_dir is apps/api, the pattern is repo-root src/**: the line must not let those read as one root.
+    expect(repoLine('api', { ...gh, root_dir: 'apps/api', watch_paths: ['src/**'] }))
+      .toBe('compute api: deploys from acme/app@main (apps/api/) — every push to main redeploys it, but only when a push changes these repo-root paths: src/**')
+    expect(repoLine('api', { ...gh, watch_paths: [] })).toBe('compute api: deploys from acme/app@main — every push to main redeploys it')
+    expect(repoLine('api', { ...gh, watch_paths: null })).toBe('compute api: deploys from acme/app@main — every push to main redeploys it')
+    // A push cannot redeploy these at all, so the line must not promise that it would on a match.
+    expect(repoLine('api', { ...gh, public: true, auto_deploy: false, watch_paths: ['apps/api/**'] }))
+      .toBe('compute api: deploys from acme/app@main — public repo, deploys are manual (pushes do not redeploy); watch paths apps/api/** are stored but cannot apply')
+    expect(repoLine('api', { ...gh, auto_deploy: false, watch_paths: ['apps/api/**'] })).toMatch(/auto-deploy off .*; watch paths apps\/api\/\*\* are stored but cannot apply/)
+  })
+})
+
+// The clause `insta compute repo` prints and the one `connect-repo` confirms with are the same string:
+// a connect that stores a filter must not answer "every push redeploys it".
+describe('watchPathsClause', () => {
+  it('names the root the patterns are against, since every line carrying it also carries root_dir', () => {
+    expect(watchPathsClause(['apps/web/**', 'packages/**'])).toBe(', but only when a push changes these repo-root paths: apps/web/**, packages/**')
+  })
+  it('is what repoLine appends, so the two lines cannot drift', () => {
+    const gh = { type: 'github' as const, owner: 'acme', repo: 'app', branch: 'main', root_dir: null, auto_deploy: true, public: false, watch_paths: ['apps/web/**'] }
+    expect(repoLine('api', gh)).toContain(watchPathsClause(['apps/web/**']))
+  })
+})
+
+describe('computeWatchPaths validation (throws before any network/config access)', () => {
+  it('refuses --set together with --clear', async () => {
+    await expect(computeWatchPaths('api', { set: 'apps/web/**', clear: true })).rejects.toThrow(/--set or --clear, not both/)
+  })
+  it('refuses an empty --set before it can be read as a clear', async () => {
+    // The server coerces a list that normalizes to nothing into null, i.e. into a clear.
+    await expect(computeWatchPaths('api', { set: ' , ' })).rejects.toThrow(/at least one pattern/)
+  })
+})
 describe('parseWatchPaths', () => {
   it('splits the quoted list a shell hands over, and drops what is not a pattern', () => {
     expect(parseWatchPaths('apps/web/**,packages/ui/**')).toEqual(['apps/web/**', 'packages/ui/**'])
