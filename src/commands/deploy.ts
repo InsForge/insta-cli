@@ -74,7 +74,8 @@ async function discoverLane(api: Pick<ApiClient, 'rawRequest'>, projectId: strin
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) {
       // The route answered and the TARGET is what is missing: say so, or flyctl turns it into "no Dockerfile".
-      if (/compute group not found|branch not found/.test(e.message)) die(`${e.message} — a directory deploys onto a compute service; add one first: \`insta services add compute <name>\``)
+      // Both ways out: the project has several groups and none is named, or it has none at all.
+      if (/compute group not found|branch not found/.test(e.message)) die(`${e.message} — name it with \`--group <name>\` (see \`insta services list\`), or add one: \`insta services add compute <name>\``)
       return { lane: 'legacy' }
     }
     throw e

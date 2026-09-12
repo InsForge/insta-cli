@@ -59,14 +59,14 @@ describe('prepareSource — lane dispatch', () => {
     expect(paths).toContain('POST /projects/p1/deploy-token')
   })
 
-  // The same 404 from a platform that HAS the route: the branch has no compute service yet. Not an
-  // old server, and the flyctl fallback would only report a missing Dockerfile.
-  it('names the missing compute service when discovery 404s for the target, not the route', async () => {
+  // The same 404 from a platform that HAS the route: the branch has no compute service, or has several and
+  // none was named. Not an old server, and the flyctl fallback would only report a missing Dockerfile.
+  it('names both ways out when discovery 404s for the target, not the route', async () => {
     const { api, paths } = fakeApi('404-target')
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
     try {
       await expect(prepareSource(api, 'p1', srcDir(false), 'main', {}, noRun)).rejects.toThrow()
-      expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toMatch(/compute group not found: default.*insta services add compute/)
+      expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toMatch(/compute group not found: default.*--group <name>.*insta services add compute/)
       expect(paths).not.toContain('POST /projects/p1/deploy-token')
     } finally { stderr.mockRestore() }
   })
