@@ -25,7 +25,9 @@ export function storeApiKeyCredential(cfg: GlobalConfig, token: string, user?: G
 type RawResult = { status: number; body: any }
 // projectId: the project this request acts on when the path does not carry /projects/:id, so agent
 // mode signs with that project's session instead of a projectless bootstrap one (see agentHeaders).
-type RequestOpts = { auth?: boolean } & AgentScope
+// `signal` bounds one request: a poll loop hands in the time it has left, so a stalled endpoint
+// cannot hold the CLI past the caller's own deadline.
+type RequestOpts = { auth?: boolean; signal?: AbortSignal } & AgentScope
 
 export class ApiClient {
   constructor(private cfg: GlobalConfig, private readonly fetchImpl: typeof fetch = fetch) {}
@@ -71,15 +73,15 @@ export class ApiClient {
     return res
   }
 
-  private async raw(method: string, path: string, body: unknown, auth: boolean, scope: AgentScope = {}): Promise<RawResult> {
+  private async raw(method: string, path: string, body: unknown, auth: boolean, scope: RequestOpts = {}): Promise<RawResult> {
     let r = await this.fetch(method, path, body, auth, scope)
     if (r.status === 401 && auth && this.cfg.refreshToken) {
-      if (await this.refresh()) r = await this.fetch(method, path, body, auth, scope)
+      if (await this.refresh(scope.signal)) r = await this.fetch(method, path, body, auth, scope)
     }
     return r
   }
 
-  private async fetch(method: string, path: string, body: unknown, auth: boolean, scope: AgentScope = {}): Promise<RawResult> {
+  private async fetch(method: string, path: string, body: unknown, auth: boolean, scope: RequestOpts = {}): Promise<RawResult> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Insta-Hints': '1', 'User-Agent': USER_AGENT }
     if (auth && this.cfg.accessToken) headers.Authorization = `Bearer ${this.cfg.accessToken}`
     if (auth) Object.assign(headers, await agentHeaders(this, method, path, body === undefined ? '' : JSON.stringify(body), scope))
@@ -87,6 +89,7 @@ export class ApiClient {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: scope.signal,
     })
     const text = await res.text()
     let parsed: any = null
@@ -94,15 +97,19 @@ export class ApiClient {
     return { status: res.status, body: parsed }
   }
 
-  private async refresh(): Promise<boolean> {
+  private async refresh(signal?: AbortSignal): Promise<boolean> {
     try {
-      const res = await this.fetch('POST', '/auth/refresh', { refreshToken: this.cfg.refreshToken }, false)
+      const res = await this.fetch('POST', '/auth/refresh', { refreshToken: this.cfg.refreshToken }, false, { signal })
       if (res.status >= 400) return false
       this.cfg.accessToken = res.body.accessToken
       this.cfg.refreshToken = res.body.refreshToken
       await this.persist()
       return true
-    } catch {
+    } catch (e) {
+      // Refresh belongs to the original request's time budget. Do not turn its cancellation
+      // into the earlier 401: the caller needs the abort to report a timeout or cancellation.
+      signal?.throwIfAborted()
+      if (e instanceof Error && (e.name === 'AbortError' || e.name === 'TimeoutError')) throw e
       return false
     }
   }
